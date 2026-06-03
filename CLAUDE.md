@@ -47,6 +47,13 @@ async def run(session: AsyncSession) -> None: ...
 
 Sessions are created per-job run (not shared across jobs). Use `async with session_factory() as session` inside each `run()` function.
 
+## Git Workflow
+
+- Always develop on a feature branch, never directly on `main`.
+- Branch naming: `feature/<short-description>` (e.g., `feature/cmf-fondos-downloader`).
+- Commit when a feature or meaningful unit of work is complete — not mid-implementation.
+- Push the branch and open a PR into `main` when the feature is ready.
+
 ## Common Commands
 
 ```bash
