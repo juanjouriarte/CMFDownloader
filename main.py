@@ -9,7 +9,22 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 
-from src.scheduler import start
+from contextlib import asynccontextmanager
 
-if __name__ == "__main__":
-    start()
+from fastapi import FastAPI
+
+from src.scheduler import start as start_scheduler
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    start_scheduler()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}

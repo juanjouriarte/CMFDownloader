@@ -12,26 +12,33 @@ from src.db.models.mutual_funds import FondoMutuo
 logger = logging.getLogger(__name__)
 
 COLUMN_MAP = {
-    "RUN_FONDO": "run_fondo",
-    "NOMBRE_FONDO": "nombre_fondo",
-    "RUN_SOCIEDAD": "run_sociedad",
-    "NOMBRE_SOCIEDAD": "nombre_sociedad",
-    "TIPO_FONDO": "tipo_fondo",
-    "MONEDA": "moneda",
-    "FECHA_INICIO": "fecha_inicio",
+    "RUT Administradora": "rut_administradora",
+    "Raz. Social Administradora": "razon_social_administradora",
+    "RUN Fondo": "run_fondo",
+    "Nombre Fondo": "nombre_fondo",
+    "Nombre Corto": "nombre_corto",
+    "Tipo de Fondo Mutuo": "tipo_fondo",
+    "Moneda": "moneda",
+    "Fecha Inicio Operaciones": "fecha_inicio_operaciones",
+    "Fecha Término Operaciones": "fecha_termino_operaciones",
+    "Fecha Res. Aprobación del RI": "fecha_res_aprobacion",
+    "Nro. Res. Aprobación del RI": "nro_res_aprobacion",
 }
+
+DATE_COLS = ["fecha_inicio_operaciones", "fecha_termino_operaciones", "fecha_res_aprobacion"]
 
 
 def load_identidad(path: Path) -> int:
-    df = pd.read_csv(path, sep="|", dtype=str, encoding="latin-1")
+    df = pd.read_csv(path, sep=";", dtype=str, encoding="utf-8")
     df.columns = df.columns.str.strip()
-
-    df = df.rename(columns={k: v for k, v in COLUMN_MAP.items() if k in df.columns})
+    df = df.rename(columns=COLUMN_MAP)
     df = df[[c for c in COLUMN_MAP.values() if c in df.columns]]
+    df = df.drop_duplicates(subset=["run_fondo"])
     df = df.where(pd.notna(df), None)
 
-    if "fecha_inicio" in df.columns:
-        df["fecha_inicio"] = pd.to_datetime(df["fecha_inicio"], errors="coerce").dt.date
+    for col in DATE_COLS:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], format="%d/%m/%Y", errors="coerce").dt.date
 
     records = df.to_dict(orient="records")
 
