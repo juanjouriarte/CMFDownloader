@@ -1,0 +1,7 @@
+sqlalchemy>=2.0
+psycopg2-binary
+alembic
+pandas
+requests
+apscheduler>=3.10
+python-dotenv
