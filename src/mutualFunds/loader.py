@@ -39,6 +39,7 @@ def load_identidad(path: Path) -> int:
     for col in DATE_COLS:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], format="%d/%m/%Y", errors="coerce").dt.date
+            df[col] = df[col].where(df[col].notna(), None)
 
     records = df.to_dict(orient="records")
 
