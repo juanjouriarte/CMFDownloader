@@ -4,12 +4,22 @@ import logging
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
+from src.mutualFunds.bondsNemotecnicos import BonosNemotecnicosDownloader
+from src.mutualFunds.carterasDownloader import CarterasDownloader
 from src.mutualFunds.cartolaDownloader import CartolaDownloader
 from src.mutualFunds.identificationDownloader import FMIdentidadDownloader
+from src.mutualFunds.nemotecnicosDownloader import NemotecnicosDownloader
 
 logger = logging.getLogger(__name__)
 
 scheduler = BackgroundScheduler(timezone="America/Santiago")
+
+
+@scheduler.scheduled_job("cron", hour=8, minute=0, id="bonos_nemotecnicos")
+def job_bonos_nemotecnicos() -> None:
+    logger.info("Iniciando descarga: Bonos Nemotécnicos")
+    result = BonosNemotecnicosDownloader(force=True).run()
+    logger.info("Bonos Nemotécnicos finalizada: %s", result)
 
 
 @scheduler.scheduled_job("cron", hour=8, minute=0, id="fm_identidad")
@@ -17,6 +27,20 @@ def job_fm_identidad() -> None:
     logger.info("Iniciando descarga: FM Identidad")
     result = FMIdentidadDownloader(force=True).run()
     logger.info("FM Identidad finalizada: %s", result)
+
+
+@scheduler.scheduled_job("cron", day=5, hour=9, minute=0, id="carteras")
+def job_carteras() -> None:
+    logger.info("Iniciando descarga: Carteras FM")
+    result = CarterasDownloader().run()
+    logger.info("Carteras FM finalizada: %s", result)
+
+
+@scheduler.scheduled_job("cron", hour=8, minute=15, id="nemotecnicos")
+def job_nemotecnicos() -> None:
+    logger.info("Iniciando descarga: Nemotécnicos FM")
+    result = NemotecnicosDownloader(force=True).run()
+    logger.info("Nemotécnicos FM finalizada: %s", result)
 
 
 @scheduler.scheduled_job("cron", hour=8, minute=30, id="cartola_diaria")

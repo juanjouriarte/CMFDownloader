@@ -46,6 +46,17 @@ NUMERIC_COLS = [
     "comision_rescate", "factor_ajuste", "factor_reparto",
 ]
 INT_COLS = ["num_participes", "num_participes_inst"]
+BATCH_SIZE = 10_000
+
+
+def _upsert_batch(session, records: list[dict]) -> None:
+    stmt = insert(CartolaDiaria).values(records)
+    stmt = stmt.on_conflict_do_update(
+        constraint="uq_cartola_fecha_fondo_serie",
+        set_={c: stmt.excluded[c] for c in records[0] if c not in ("fecha", "run_fondo", "serie")},
+    )
+    session.execute(stmt)
+    session.commit()
 
 
 def load_cartola(path: Path) -> int:
@@ -70,20 +81,18 @@ def load_cartola(path: Path) -> int:
             df[col] = df[col].where(df[col].notna(), None)
 
     df = df.dropna(subset=["fecha", "run_fondo"])
-    records = df.to_dict(orient="records")
 
-    if not records:
+    if df.empty:
         logger.warning("No records to upsert from %s", path.name)
         return 0
 
+    total = len(df)
+    upserted = 0
     with SessionLocal() as session:
-        stmt = insert(CartolaDiaria).values(records)
-        stmt = stmt.on_conflict_do_update(
-            constraint="uq_cartola_fecha_fondo_serie",
-            set_={c: stmt.excluded[c] for c in records[0] if c not in ("fecha", "run_fondo", "serie")},
-        )
-        session.execute(stmt)
-        session.commit()
+        for start in range(0, total, BATCH_SIZE):
+            batch = df.iloc[start : start + BATCH_SIZE].to_dict(orient="records")
+            _upsert_batch(session, batch)
+            upserted += len(batch)
+            logger.info("Cartola %s: %d/%d filas upserted", path.name, upserted, total)
 
-    logger.info("Cartola %s: %d filas upserted", path.name, len(records))
-    return len(records)
+    return upserted

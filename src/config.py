@@ -18,7 +18,11 @@ BASE = "https://www.cmfchile.cl"
 
 
 class CMFUrl(StrEnum):
-    FM_IDENTIDAD   = f"{BASE}/institucional/estadisticas/fm_ident2.php"
-    CARTOLA_PAGE   = f"{BASE}/institucional/estadisticas/fondos_cartola_diaria.php?tpl=alt"
-    CARTOLA_POST   = f"{BASE}/institucional/estadisticas/cfm_download.php"
+    FM_IDENTIDAD    = f"{BASE}/institucional/estadisticas/fm_ident2.php"
+    CARTOLA_PAGE    = f"{BASE}/institucional/estadisticas/fondos_cartola_diaria.php?tpl=alt"
+    CARTOLA_POST    = f"{BASE}/institucional/estadisticas/cfm_download.php"
     CARTOLA_CAPTCHA = f"{BASE}/sitio/biblioteca/captcha2/captcha.php"
+    NEMOTECNICOS    = f"{BASE}/institucional/seil/certificacion_cir1835_fmutuos.php"
+    CARTERAS_PAGE      = f"{BASE}/institucional/estadisticas/ffm_cartera.php"
+    CARTERAS_POST      = f"{BASE}/institucional/estadisticas/ffm_download.php"
+    BONOS_NEMOTECNICOS = f"{BASE}/institucional/estadisticas/listado_tasa_fiscal.php"

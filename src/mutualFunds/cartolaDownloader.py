@@ -13,7 +13,7 @@ from src.config import CMFUrl, DOWNLOADS_DIR
 from src.db.engine import SessionLocal
 from src.db.models.cartola import CartolaDiaria
 from src.http import make_session
-from src.mutualFunds.cartolaLoader import load_cartola
+from src.mutualFunds.loaders.cartola import load_cartola
 
 MAX_RETRIES = 7
 MIN_FILE_BYTES = 200

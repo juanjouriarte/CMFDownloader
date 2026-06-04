@@ -11,6 +11,9 @@ from src.db.engine import Base
 # Import all models so Alembic can detect them
 import src.db.models.mutual_funds  # noqa: F401
 import src.db.models.cartola  # noqa: F401
+import src.db.models.nemotecnicos  # noqa: F401
+import src.db.models.carteras  # noqa: F401
+import src.db.models.bonos  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", DATABASE_URL)
