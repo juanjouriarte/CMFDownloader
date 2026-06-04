@@ -52,6 +52,13 @@ Sessions are created per-job run (not shared across jobs). Use `async with sessi
 - Always develop on a feature branch, never directly on `main`.
 - Branch naming: `feature/<short-description>` (e.g., `feature/cmf-fondos-downloader`).
 - Commit when a feature or meaningful unit of work is complete — not mid-implementation.
+- Use **conventional commits** for all commit messages and PR titles:
+  - `feat:` new feature
+  - `fix:` bug fix
+  - `refactor:` restructure with no behavior change
+  - `chore:` maintenance (deps, config, tooling)
+  - `docs:` documentation only
+  - `test:` adding or fixing tests
 - Push the branch and open a PR into `main` when the feature is ready.
 
 ## Common Commands
