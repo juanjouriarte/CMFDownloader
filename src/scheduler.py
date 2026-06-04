@@ -4,11 +4,11 @@ import logging
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from src.mutualFunds.bondsNemotecnicos import BonosNemotecnicosDownloader
-from src.mutualFunds.carterasDownloader import CarterasDownloader
-from src.mutualFunds.cartolaDownloader import CartolaDownloader
-from src.mutualFunds.identificationDownloader import FMIdentidadDownloader
-from src.mutualFunds.nemotecnicosDownloader import NemotecnicosDownloader
+from src.mutualFunds.downloaders.bondsNemotecnicos import BonosNemotecnicosDownloader
+from src.mutualFunds.downloaders.carterasDownloader import CarterasDownloader
+from src.mutualFunds.downloaders.cartolaDownloader import CartolaDownloader
+from src.mutualFunds.downloaders.identificationDownloader import FMIdentidadDownloader
+from src.mutualFunds.downloaders.nemotecnicosDownloader import NemotecnicosDownloader
 
 logger = logging.getLogger(__name__)
 
