@@ -12,8 +12,6 @@ from src.db.models.cartola import CartolaDiaria
 logger = logging.getLogger(__name__)
 
 COLUMN_MAP = {
-    "RUN_ADM": "run_adm",
-    "NOM_ADM": "nom_adm",
     "RUN_FM": "run_fondo",
     "FECHA_INF": "fecha",
     "ACTIVO_TOT": "activo_tot",
@@ -33,8 +31,6 @@ COLUMN_MAP = {
     "REM_VARIABLE": "rem_variable",
     "GASTOS_AFECTOS": "gastos_afectos",
     "GASTOS_NO_AFECTOS": "gastos_no_afectos",
-    "COMISION_INVERSION": "comision_inversion",
-    "COMISION_RESCATE": "comision_rescate",
     "FACTOR DE AJUSTE": "factor_ajuste",
     "FACTOR DE REPARTO": "factor_reparto",
 }
@@ -42,8 +38,7 @@ COLUMN_MAP = {
 NUMERIC_COLS = [
     "activo_tot", "inversion_en_fondos", "cuotas_aportadas", "cuotas_rescatadas",
     "cuotas_en_circulacion", "valor_cuota", "patrimonio_neto", "rem_fija",
-    "rem_variable", "gastos_afectos", "gastos_no_afectos", "comision_inversion",
-    "comision_rescate", "factor_ajuste", "factor_reparto",
+    "rem_variable", "gastos_afectos", "gastos_no_afectos", "factor_ajuste", "factor_reparto",
 ]
 INT_COLS = ["num_participes", "num_participes_inst"]
 BATCH_SIZE = 10_000
