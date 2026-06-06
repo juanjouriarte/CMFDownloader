@@ -15,6 +15,7 @@ class Nemotecnico(Base):
     razon_social: Mapped[str | None] = mapped_column(String(255), nullable=True)
     nombre_fondo: Mapped[str | None] = mapped_column(String(255), nullable=True)
     serie: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    tipo_serie: Mapped[str | None] = mapped_column(String(30), nullable=True)
     admin_rut: Mapped[str | None] = mapped_column(String(20), nullable=True)
     admin_dv: Mapped[str | None] = mapped_column(String(5), nullable=True)
     admin_nombre: Mapped[str | None] = mapped_column(String(255), nullable=True)

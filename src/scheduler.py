@@ -5,6 +5,7 @@ import logging
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from src.mutualFunds.downloaders.bondsNemotecnicos import BonosNemotecnicosDownloader
+from src.mutualFunds.downloaders.tacDownloader import TacDownloader
 from src.mutualFunds.downloaders.carterasDownloader import CarterasDownloader
 from src.mutualFunds.downloaders.cartolaDownloader import CartolaDownloader
 from src.mutualFunds.downloaders.identificationDownloader import FMIdentidadDownloader
@@ -27,6 +28,13 @@ def job_fm_identidad() -> None:
     logger.info("Iniciando descarga: FM Identidad")
     result = FMIdentidadDownloader(force=True).run()
     logger.info("FM Identidad finalizada: %s", result)
+
+
+@scheduler.scheduled_job("cron", day=5, hour=9, minute=30, id="tac")
+def job_tac() -> None:
+    logger.info("Iniciando descarga: TAC")
+    result = TacDownloader().run()
+    logger.info("TAC finalizada: %s", result)
 
 
 @scheduler.scheduled_job("cron", day=5, hour=9, minute=0, id="carteras")
