@@ -11,7 +11,7 @@ from src.config import CMFUrl, DOWNLOADS_DIR
 from src.db.engine import SessionLocal
 from src.db.models.financial_statements import FinancialStatement
 from src.http import make_session
-from src.loaders.financial_statements import load_financial_statements
+from src.financialStatements.loaders.financial_statements import load_financial_statements
 
 # Download ranges following CMF availability pattern:
 #   - Single months for recent incomplete years (2026-03, 2025-03 to 2025-12)

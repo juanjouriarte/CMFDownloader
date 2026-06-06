@@ -21,10 +21,12 @@ Daily ETL pipeline that downloads public datasets from the Chilean CMF (Comisió
 
 ```
 src/
-├── downloaders/              # Cross-domain CMF datasets (not fund-specific)
-│   └── financialStatementsDownloader.py  # IFRS statements for all CMF companies
-├── loaders/                  # Loaders for cross-domain datasets
-│   └── financial_statements.py
+├── financialStatements/      # IFRS statements for all CMF-supervised companies
+│   ├── downloaders/
+│   │   └── financialStatementsDownloader.py
+│   ├── loaders/
+│   │   └── financial_statements.py
+│   └── api.py                # FastAPI router — on-demand download trigger
 ├── mutualFunds/
 │   ├── downloaders/          # One class per CMF mutual-fund dataset, all extend BaseDownloader
 │   │   ├── cartolaDownloader.py
@@ -64,9 +66,10 @@ Dockerfile
 .dockerignore
 ```
 
-> **Note on layout**: fund-specific datasets live under `src/mutualFunds/`. Cross-domain
-> datasets that cover all CMF-supervised companies (e.g. financial statements) live in the
-> top-level `src/downloaders/` and `src/loaders/`.
+> **Note on layout**: each dataset domain is a self-contained package with its own
+> `downloaders/` and `loaders/` (e.g. `src/mutualFunds/`, `src/financialStatements/`).
+> Financial statements cover all CMF-supervised companies (not just funds) and are
+> triggered on demand via `src/financialStatements/api.py`, not by the scheduler.
 
 ### Downloader interface
 

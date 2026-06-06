@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from src.api.financial_statements import router as financial_statements_router
+from src.financialStatements.api import router as financial_statements_router
 from src.scheduler import start as start_scheduler
 
 

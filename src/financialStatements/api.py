@@ -6,7 +6,9 @@ from dataclasses import asdict
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 
-from src.downloaders.financialStatementsDownloader import FinancialStatementsDownloader
+from src.financialStatements.downloaders.financialStatementsDownloader import (
+    FinancialStatementsDownloader,
+)
 
 logger = logging.getLogger(__name__)
 
