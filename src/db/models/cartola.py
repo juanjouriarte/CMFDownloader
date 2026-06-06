@@ -21,8 +21,6 @@ class CartolaDiaria(Base):
     fecha: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     run_fondo: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     serie: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    run_adm: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    nom_adm: Mapped[str | None] = mapped_column(String(255), nullable=True)
     moneda: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     # Cuotas
@@ -44,9 +42,6 @@ class CartolaDiaria(Base):
     rem_variable: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
     gastos_afectos: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
     gastos_no_afectos: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
-    comision_inversion: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
-    comision_rescate: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
-
     # Factores
     factor_ajuste: Mapped[Decimal | None] = mapped_column(Numeric(20, 10), nullable=True)
     factor_reparto: Mapped[Decimal | None] = mapped_column(Numeric(20, 10), nullable=True)
