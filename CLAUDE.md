@@ -21,8 +21,14 @@ Daily ETL pipeline that downloads public datasets from the Chilean CMF (Comisió
 
 ```
 src/
+├── financialStatements/      # IFRS statements for all CMF-supervised companies
+│   ├── downloaders/
+│   │   └── financialStatementsDownloader.py
+│   ├── loaders/
+│   │   └── financial_statements.py
+│   └── api.py                # FastAPI router — on-demand download trigger
 ├── mutualFunds/
-│   ├── downloaders/          # One class per CMF dataset, all extend BaseDownloader
+│   ├── downloaders/          # One class per CMF mutual-fund dataset, all extend BaseDownloader
 │   │   ├── cartolaDownloader.py
 │   │   ├── carterasDownloader.py
 │   │   ├── identificationDownloader.py
@@ -45,7 +51,8 @@ src/
 │       ├── carteras.py       # cartera_naci/extr/opci/futu/opla
 │       ├── nemotecnicos.py   # nemotecnicos
 │       ├── bonos.py          # bonos_nemotecnicos
-│       └── tac.py            # tac
+│       ├── tac.py            # tac
+│       └── financial_statements.py  # financial_statements
 ├── base.py                   # BaseDownloader + DownloadResult
 ├── categories.py             # Circular No. 7 category definitions + country tables
 ├── config.py                 # CMFUrl enum + env vars
@@ -53,10 +60,16 @@ src/
 └── scheduler.py              # APScheduler wiring
 
 alembic/                      # Migration scripts
+tests/                        # pytest unit tests for loaders + classifiers
 main.py                       # Entrypoint: starts FastAPI + scheduler
 Dockerfile
 .dockerignore
 ```
+
+> **Note on layout**: each dataset domain is a self-contained package with its own
+> `downloaders/` and `loaders/` (e.g. `src/mutualFunds/`, `src/financialStatements/`).
+> Financial statements cover all CMF-supervised companies (not just funds) and are
+> triggered on demand via `src/financialStatements/api.py`, not by the scheduler.
 
 ### Downloader interface
 
@@ -78,6 +91,20 @@ def backfill(self, from_date) -> DownloadResult: ...  # historical population
 | `carteras` | Day 5 of month 09:00 | Monthly investment portfolios (5 types) |
 | `tac` | Day 5 of month 09:30 | Monthly TAC costs |
 
+### API endpoints
+
+Financial statements are **not** on a schedule — they are triggered on demand via the API
+(you pass the period range to update):
+
+| Endpoint | Description |
+|---|---|
+| `GET /health` | Health check |
+| `POST /financial-statements/download?inicio=YYYYMM&termino=YYYYMM` | Download + load a period range. Add `&background=true` to run async and return immediately. |
+
+CMF returns all quarters between `inicio` and `termino` in one file. Full-year ranges
+(e.g. `202003`→`202012`) work for complete years; for the current year query one quarter
+at a time (e.g. `202603`→`202603`).
+
 ### DB tables
 
 | Table | Rows (approx) | Notes |
@@ -92,6 +119,7 @@ def backfill(self, from_date) -> DownloadResult: ...  # historical population
 | `nemotecnicos` | 2,432 | Series with tipo_serie classification |
 | `bonos_nemotecnicos` | 1,254 | Bonds with fiscal interest rate |
 | `tac` | 230K+ | Monthly TAC costs 2020–2026 |
+| `financial_statements` | 1M+ | IFRS statements (quarterly) for all CMF companies 2009–2026 |
 
 ## Git Workflow
 

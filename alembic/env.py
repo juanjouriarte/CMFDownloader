@@ -15,6 +15,7 @@ import src.db.models.nemotecnicos  # noqa: F401
 import src.db.models.carteras  # noqa: F401
 import src.db.models.bonos  # noqa: F401
 import src.db.models.tac  # noqa: F401
+import src.db.models.financial_statements  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", DATABASE_URL)
