@@ -5,7 +5,7 @@ from pathlib import Path
 from src.base import BaseDownloader, DownloadResult
 from src.config import CMFUrl, DOWNLOADS_DIR
 from src.http import make_session
-from src.mutualFunds.loader import load_identidad
+from src.mutualFunds.loaders.identidad import load_identidad
 
 OUTPUT_FILE = "fm_identidad.txt"
 
