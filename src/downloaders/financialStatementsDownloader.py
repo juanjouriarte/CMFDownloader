@@ -44,6 +44,11 @@ class FinancialStatementsDownloader(BaseDownloader):
         self.logger.info("Backfill financial statements — %d ranges", len(DOWNLOAD_RANGES))
         return self._download_ranges(DOWNLOAD_RANGES)
 
+    def download_period(self, inicio: str, termino: str) -> DownloadResult:
+        """Download a single period range (YYYYMM → YYYYMM). Used by the API."""
+        self.logger.info("Downloading financial statements %s → %s", inicio, termino)
+        return self._fetch_and_load(inicio, termino)
+
     def _download_ranges(self, ranges: list[tuple[str, str]]) -> DownloadResult:
         total = DownloadResult()
         for i, (inicio, termino) in enumerate(ranges, 1):

@@ -88,6 +88,20 @@ def backfill(self, from_date) -> DownloadResult: ...  # historical population
 | `carteras` | Day 5 of month 09:00 | Monthly investment portfolios (5 types) |
 | `tac` | Day 5 of month 09:30 | Monthly TAC costs |
 
+### API endpoints
+
+Financial statements are **not** on a schedule — they are triggered on demand via the API
+(you pass the period range to update):
+
+| Endpoint | Description |
+|---|---|
+| `GET /health` | Health check |
+| `POST /financial-statements/download?inicio=YYYYMM&termino=YYYYMM` | Download + load a period range. Add `&background=true` to run async and return immediately. |
+
+CMF returns all quarters between `inicio` and `termino` in one file. Full-year ranges
+(e.g. `202003`→`202012`) work for complete years; for the current year query one quarter
+at a time (e.g. `202603`→`202603`).
+
 ### DB tables
 
 | Table | Rows (approx) | Notes |

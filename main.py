@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from src.api.financial_statements import router as financial_statements_router
 from src.scheduler import start as start_scheduler
 
 
@@ -22,7 +23,9 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(title="CMF Downloader", lifespan=lifespan)
+
+app.include_router(financial_statements_router)
 
 
 @app.get("/health")
