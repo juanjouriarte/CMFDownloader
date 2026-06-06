@@ -26,5 +26,6 @@ class CMFUrl(StrEnum):
     CARTERAS_PAGE      = f"{BASE}/institucional/estadisticas/ffm_cartera.php"
     CARTERAS_POST      = f"{BASE}/institucional/estadisticas/ffm_download.php"
     BONOS_NEMOTECNICOS = f"{BASE}/institucional/estadisticas/listado_tasa_fiscal.php"
-    TAC_PAGE           = f"{BASE}/institucional/estadisticas/fmdfm_consulta1.php"
-    TAC_POST           = f"{BASE}/institucional/estadisticas/fmdfm_excel2.php?lang=es"
+    TAC_PAGE             = f"{BASE}/institucional/estadisticas/fmdfm_consulta1.php"
+    TAC_POST             = f"{BASE}/institucional/estadisticas/fmdfm_excel2.php?lang=es"
+    FINANCIAL_STATEMENTS = f"{BASE}/institucional/estadisticas/ver_archivo.php"

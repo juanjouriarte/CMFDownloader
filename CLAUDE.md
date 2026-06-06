@@ -21,8 +21,12 @@ Daily ETL pipeline that downloads public datasets from the Chilean CMF (Comisió
 
 ```
 src/
+├── downloaders/              # Cross-domain CMF datasets (not fund-specific)
+│   └── financialStatementsDownloader.py  # IFRS statements for all CMF companies
+├── loaders/                  # Loaders for cross-domain datasets
+│   └── financial_statements.py
 ├── mutualFunds/
-│   ├── downloaders/          # One class per CMF dataset, all extend BaseDownloader
+│   ├── downloaders/          # One class per CMF mutual-fund dataset, all extend BaseDownloader
 │   │   ├── cartolaDownloader.py
 │   │   ├── carterasDownloader.py
 │   │   ├── identificationDownloader.py
@@ -45,7 +49,8 @@ src/
 │       ├── carteras.py       # cartera_naci/extr/opci/futu/opla
 │       ├── nemotecnicos.py   # nemotecnicos
 │       ├── bonos.py          # bonos_nemotecnicos
-│       └── tac.py            # tac
+│       ├── tac.py            # tac
+│       └── financial_statements.py  # financial_statements
 ├── base.py                   # BaseDownloader + DownloadResult
 ├── categories.py             # Circular No. 7 category definitions + country tables
 ├── config.py                 # CMFUrl enum + env vars
@@ -53,10 +58,15 @@ src/
 └── scheduler.py              # APScheduler wiring
 
 alembic/                      # Migration scripts
+tests/                        # pytest unit tests for loaders + classifiers
 main.py                       # Entrypoint: starts FastAPI + scheduler
 Dockerfile
 .dockerignore
 ```
+
+> **Note on layout**: fund-specific datasets live under `src/mutualFunds/`. Cross-domain
+> datasets that cover all CMF-supervised companies (e.g. financial statements) live in the
+> top-level `src/downloaders/` and `src/loaders/`.
 
 ### Downloader interface
 
@@ -92,6 +102,7 @@ def backfill(self, from_date) -> DownloadResult: ...  # historical population
 | `nemotecnicos` | 2,432 | Series with tipo_serie classification |
 | `bonos_nemotecnicos` | 1,254 | Bonds with fiscal interest rate |
 | `tac` | 230K+ | Monthly TAC costs 2020–2026 |
+| `financial_statements` | 1M+ | IFRS statements (quarterly) for all CMF companies 2009–2026 |
 
 ## Git Workflow
 
