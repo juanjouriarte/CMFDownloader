@@ -68,7 +68,16 @@ def classify_serie(serie: str, caracteristicas: str | None) -> str | None:
     if "APV" in serie_upper:
         return "APV"
 
+    # Explicitly non-APV text — skip APV rule even if "APV" appears in the string
+    is_non_apv = any(p in text_upper for p in (
+        "DISTINTOS DE APV", "DISTINTOS DEL AHORRO PREVISIONAL",
+        "DISTINTOS DE AHORRO PREVISIONAL", "NO REQUIEREN SUSCRIBIR",
+        "FINES DISTINTOS",
+    ))
+
     for tipo, keywords in _RULES:
+        if tipo == "APV" and is_non_apv:
+            continue
         if any(kw in text_upper for kw in keywords):
             return tipo
 

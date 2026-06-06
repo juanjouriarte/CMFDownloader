@@ -147,7 +147,7 @@ def _classify_debt(pct_naci: float, pct_extr: float, pct_uf: float,
     """Classify a debt fund."""
     if pct_naci >= 1.0:
         # 100% national
-        dur = wam_dias or 999
+        dur = wam_dias if wam_dias is not None else 9999
         if dur <= 90:
             if pct_uf >= 0.60:
                 return "RF<90NAC"
@@ -170,7 +170,7 @@ def _classify_debt(pct_naci: float, pct_extr: float, pct_uf: float,
         return "RF>365OF"
 
     if pct_extr >= 0.60:
-        dur = wam_dias or 999
+        dur = wam_dias if wam_dias is not None else 9999
         if dur <= 90:
             return "RF<90INTUSD"
         if dur <= 365:
