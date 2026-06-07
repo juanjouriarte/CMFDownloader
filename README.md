@@ -48,6 +48,18 @@ ETL pipeline that downloads public fund datasets from the Chilean CMF (Comisión
 - [x] **Rentability (FM)** — `mv_rentabilidad_fm` materialized view: total return 1D/1W/1M/1Y/5Y/YTD via `valor_cuota` × cumulative `factor_reparto`. Refreshed daily
 - [x] **Rentability (FI rescatables)** — `mv_rentabilidad_fi` materialized view: NAV + dividends (CLP & USD currency-matched via `nemotecnicos_fi` → `dividendos`). Refreshed daily
 
+### Public API (`src/api/`)
+- [x] **CORS + caching** — all endpoints open (`allow_origins=["*"]`), `Cache-Control: public, max-age=3600` for Cloudflare edge caching
+- [x] **Fund endpoints** — `GET /funds` (list + filter), `/funds/{run}` (detail), `/funds/{run}/nav` (chart data), `/funds/{run}/portfolio` (holdings)
+- [x] **Investment fund endpoints** — `GET /investment-funds`, `/investment-funds/{run}`, `/investment-funds/{run}/nav`
+- [x] **Rentability rankings** — `GET /rentability/fm` + `/rentability/fi` from materialized views, sortable by 1D/1W/1M/1Y/5Y/YTD
+- [x] **FI categories** — `GET /categories/fi` with latest period per fund
+- [x] **Shareholder endpoints**:
+  - `GET /shareholders/fund/{run}` — evolution of holders in a fund across quarters
+  - `GET /shareholders/entity/{rut}` — track one holder across all funds and time
+  - `GET /shareholders/admin` — top holders aggregated across an admin's funds
+  - `GET /shareholders/compare` — side-by-side admin comparison: shared holders, exclusives, merge AUM summary
+
 ### Deployment readiness
 - [x] **Scheduler decoupled** — `web` + `worker` as separate processes
 - [x] **Retry logic** on all downloaders

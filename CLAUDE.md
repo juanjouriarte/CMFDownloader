@@ -21,12 +21,20 @@ Daily ETL pipeline that downloads public datasets from the Chilean CMF (Comisió
 
 ```
 src/
+├── api/                      # Public read API — CORS-open, cached (max-age=3600)
+│   ├── deps.py               # Shared: Pagination (limit/offset) + CacheHook (Cache-Control header)
+│   ├── funds.py              # /funds — FM list, detail, NAV history, portfolio
+│   ├── investment_funds.py   # /investment-funds — FI list, detail, NAV history
+│   ├── rentability.py        # /rentability/fm + /rentability/fi — rankings from MVs
+│   ├── categories.py         # /categories/fi — FI classifications
+│   ├── shareholders.py       # /shareholders — fund/entity/admin/compare endpoints
+│   └── router.py             # Assembles all sub-routers
 ├── financialStatements/      # IFRS statements for all CMF-supervised companies
 │   ├── downloaders/
 │   │   └── financialStatementsDownloader.py
 │   ├── loaders/
 │   │   └── financial_statements.py
-│   └── api.py                # FastAPI router — on-demand download trigger
+│   └── api.py                # FastAPI router — on-demand download trigger (auth-protected)
 ├── mutualFunds/
 │   ├── downloaders/          # One class per CMF mutual-fund dataset, all extend BaseDownloader
 │   │   ├── cartolaDownloader.py
@@ -98,8 +106,8 @@ Dockerfile
 ```
 
 > **Note on layout**: each dataset domain is a self-contained package with its own
-> `downloaders/` and `loaders/`. Financial statements are triggered on demand via
-> `src/financialStatements/api.py`, not by the scheduler.
+> `downloaders/` and `loaders/`. The public read API lives in `src/api/` (cross-domain reads).
+> Financial statements are triggered on demand via `src/financialStatements/api.py` (auth-protected, not public).
 
 ### Process architecture
 
@@ -192,10 +200,35 @@ Both pick the **most-populated date within the last 7 days** as reference, so CM
 
 ### API endpoints
 
+All public endpoints return `Cache-Control: public, max-age=3600` and allow all CORS origins. Pagination via `?limit=50&offset=0` (max limit 500).
+
+#### Public read API (`src/api/`)
+
+| Endpoint | Description |
+|---|---|
+| `GET /funds` | List FM funds. Filters: `admin`, `tipo_fondo`, `vigente` |
+| `GET /funds/{run}` | FM fund detail: identity + latest NAV per serie + rentability from MV |
+| `GET /funds/{run}/nav` | FM NAV history for charts. Filters: `serie`, `from_date`, `to_date` |
+| `GET /funds/{run}/portfolio` | FM latest quarter portfolio (naci + extr positions) |
+| `GET /investment-funds` | List FI funds. Filters: `admin`, `rescatable`, `vigente` |
+| `GET /investment-funds/{run}` | FI fund detail: identity + latest NAV + rentability |
+| `GET /investment-funds/{run}/nav` | FI NAV history |
+| `GET /rentability/fm` | FM return rankings from `mv_rentabilidad_fm`. Sort: `r_1d/r_1w/r_1m/r_1y/r_5y/r_ytd` |
+| `GET /rentability/fi` | FI return rankings from `mv_rentabilidad_fi`. Same sort options |
+| `GET /categories/fi` | FI fund classifications. Filters: `categoria`, `tipo`, `admin` |
+| `GET /shareholders/fund/{run}` | Shareholder evolution for a fund across quarters |
+| `GET /shareholders/entity/{rut}` | All fund positions held by a shareholder across time |
+| `GET /shareholders/admin` | Top shareholders aggregated across an admin's funds. Required: `admin` |
+| `GET /shareholders/compare` | Side-by-side admin comparison: shared holders, exclusives, merge summary. Required: `admin_a`, `admin_b` |
+
+**Shareholder AUM formula**: `pct_propiedad / 100 × fund_aum`. Fund AUM is estimated as the median of `valorizacion_cierre × 100 / pct_activo_fondo` across all `cartera_fi_nac` + `cartera_fi_ext` positions for that fund/quarter.
+
+#### Internal / authenticated
+
 | Endpoint | Description |
 |---|---|
 | `GET /health` | Health check |
-| `POST /financial-statements/download?inicio=YYYYMM&termino=YYYYMM` | Download + load IFRS statements. Add `&background=true` for async. |
+| `POST /financial-statements/download?inicio=YYYYMM&termino=YYYYMM` | Download + load IFRS statements. Add `&background=true` for async. Requires `API_TOKEN`. |
 
 ### DB tables
 
