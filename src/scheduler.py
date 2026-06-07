@@ -14,6 +14,7 @@ from src.investmentFunds.downloaders.nemotecnicosDownloader import FINemotecnico
 from src.investmentFunds.downloaders.identidadDownloader import FIIdentidadDownloader
 from src.investmentFunds.downloaders.valoresCuotaDownloader import ValoresCuotaFIDownloader
 from src.investmentFunds.downloaders.aportantesDownloader import AportantesDownloader
+from src.investmentFunds.downloaders.carterasDownloader import CarterasFIDownloader
 from src.bolsaSantiago.downloaders.dividendosDownloader import DividendosDownloader
 
 logger = logging.getLogger(__name__)
@@ -96,6 +97,13 @@ def job_fi_shareholders() -> None:
     logger.info("Starting download: FI Shareholders & Shares")
     result = AportantesDownloader().run()
     logger.info("FI Shareholders done: %s", result)
+
+
+@scheduler.scheduled_job("cron", day=5, hour=10, minute=30, id="fi_portfolios")
+def job_fi_portfolios() -> None:
+    logger.info("Starting download: FI Portfolios")
+    result = CarterasFIDownloader().run()
+    logger.info("FI Portfolios done: %s", result)
 
 
 def start() -> None:

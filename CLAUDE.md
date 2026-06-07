@@ -48,12 +48,15 @@ src/
 │   │   ├── nemotecnicosDownloader.py   # FI series tickers
 │   │   ├── identidadDownloader.py      # Fund registry (FIRES + FINRE, VI + NV)
 │   │   ├── valoresCuotaDownloader.py   # Daily NAV per fund (pestania=7)
-│   │   └── aportantesDownloader.py     # Quarterly shareholders + cuotas (pestania=27)
+│   │   ├── aportantesDownloader.py     # Quarterly shareholders + cuotas (pestania=27)
+│   │   └── carterasDownloader.py       # Quarterly IFRS portfolio positions (NACI/EXT/MET_PART/FUT_FW)
 │   └── loaders/
 │       ├── nemotecnicos.py
 │       ├── identidad.py
 │       ├── valores_cuota.py
 │       ├── aportantes.py
+│       ├── carteras.py
+│       ├── entidades.py      # refresh_entidades() — canonical names from aportantes_fi
 │       └── utils.py          # mark_has_data() helper
 ├── bolsaSantiago/            # Bolsa de Santiago data sources
 │   ├── downloaders/
@@ -63,7 +66,7 @@ src/
 ├── db/
 │   ├── engine.py             # SQLAlchemy engine + SessionLocal + Base
 │   └── models/
-│       ├─��� mutual_funds.py         # fondo_mutuo
+│       ├── mutual_funds.py         # fondo_mutuo
 │       ├── cartola.py              # cartola_diaria
 │       ├── carteras.py             # cartera_naci/extr/opci/futu/opla
 │       ├── nemotecnicos.py         # nemotecnicos (FM)
@@ -73,6 +76,8 @@ src/
 │       ├── fondos_inversion.py     # fondos_inversion + nemotecnicos_fi
 │       ├── valores_cuota_fi.py     # valores_cuota_fi
 │       ├── aportantes_fi.py        # aportantes_fi + cuotas_fi
+│       ├── carteras_fi.py          # cartera_fi_nac/ext/met_part/fut_fw
+│       ├── entidades.py            # entidades (canonical names)
 │       └── dividendos.py           # dividendos
 ├── base.py                   # BaseDownloader + DownloadResult
 ├── categories.py             # Circular No. 7 category definitions + country tables
@@ -128,6 +133,7 @@ This eliminates wasted requests for the ~750 non-vigente funds with no CMF porta
 | `dividends` | Daily 09:00 | Dividends + capital changes (Bolsa de Santiago) |
 | `fi_daily_nav` | Daily 09:30 | FI daily NAV/AUM (vigente funds only) |
 | `fi_shareholders` | Day 5 of month 10:00 | FI quarterly shareholders + cuotas (vigente only) |
+| `fi_portfolios` | Day 5 of month 10:30 | FI quarterly IFRS portfolio positions (vigente only) |
 
 ### API endpoints
 
@@ -153,9 +159,14 @@ This eliminates wasted requests for the ~750 non-vigente funds with no CMF porta
 | `financial_statements` | 2M+ | IFRS statements (quarterly) for all CMF companies 2009–2026 |
 | `fondos_inversion` | 1,641 | FI registry: run_fondo, administrador, rescatable, vigente, has_data |
 | `nemotecnicos_fi` | 2,370 | FI cuota tickers |
-| `valores_cuota_fi` | 2.8M+ | FI daily NAV/AUM 2020–2026, 531 MB |
-| `aportantes_fi` | growing | FI quarterly top-12 shareholders with ownership % |
-| `cuotas_fi` | growing | FI quarterly: cuotas emitidas/pagadas, valor libro |
+| `valores_cuota_fi` | 2.9M+ | FI daily NAV/AUM 2020–2026, 531 MB |
+| `aportantes_fi` | 176K+ | FI quarterly top-12 shareholders with ownership % (periodo = quarter-end) |
+| `cuotas_fi` | 35K+ | FI quarterly: cuotas emitidas/pagadas, valor libro (periodo = quarter-end) |
+| `cartera_fi_nac` | growing | FI quarterly domestic positions (IFRS), ~2.5 GB est. at full load |
+| `cartera_fi_ext` | growing | FI quarterly foreign positions (IFRS) |
+| `cartera_fi_met_part` | small | FI equity method investments |
+| `cartera_fi_fut_fw` | growing | FI futures + forwards positions |
+| `entidades` | 4,521 | Canonical entity names by RUT (normalized from aportantes_fi) |
 | `dividendos` | 75,469 | Dividends + capital changes 1973–2026 (Bolsa de Santiago) |
 
 ## Git Workflow

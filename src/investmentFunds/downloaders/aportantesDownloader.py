@@ -4,6 +4,7 @@ import random
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import calendar
 from datetime import date
 
 from sqlalchemy import select
@@ -21,6 +22,10 @@ from src.investmentFunds.loaders.utils import mark_has_data
 BASE_URL       = "https://www.cmfchile.cl/institucional/mercados/entidad.php"
 BACKFILL_START = date(2020, 3, 1)
 QUARTER_MONTHS = (3, 6, 9, 12)
+
+
+def _quarter_end(year: int, month: int) -> date:
+    return date(year, month, calendar.monthrange(year, month)[1])
 
 
 def _iter_quarters(start: date, end: date):
@@ -71,7 +76,7 @@ def _fetch_fund(fund: FondoInversion, months: list[tuple[int, int]],
     result = DownloadResult()
 
     for year, month in months:
-        periodo = date(year, month, 1)
+        periodo = _quarter_end(year, month)
 
         if not force and _already_loaded(run_fondo, periodo):
             result += DownloadResult(skipped=1)
