@@ -69,6 +69,7 @@ class CartolaDownloader(BaseDownloader):
                 total += DownloadResult(errors=1)
                 continue
             rows = load_cartola(path)
+            path.unlink(missing_ok=True)
             total += DownloadResult(downloaded=1, rows_upserted=rows)
             if i < len(ranges):
                 time.sleep(2)

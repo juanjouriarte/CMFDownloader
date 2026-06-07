@@ -47,4 +47,5 @@ class FMIdentidadDownloader(BaseDownloader):
         self.logger.info("Identidad FM: %.0f KB → %s", len(resp.content) / 1024, path)
 
         rows = load_identidad(path)
+        path.unlink(missing_ok=True)
         return DownloadResult(downloaded=1, rows_upserted=rows)

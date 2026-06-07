@@ -77,6 +77,7 @@ class TacDownloader(BaseDownloader):
         self.logger.info("TAC %d-%02d: %.0f KB descargados", year, month, len(resp.content) / 1024)
 
         rows = load_tac(dest, year, month)
+        dest.unlink(missing_ok=True)
         return DownloadResult(downloaded=1, rows_upserted=rows)
 
     def _last_period_in_db(self) -> date | None:
