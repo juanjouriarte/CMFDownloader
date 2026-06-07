@@ -66,6 +66,10 @@ def _refresh_rentabilidad_fm():
     return _refresh_view("mv_rentabilidad_fm")
 
 
+def _refresh_administradores():
+    return _refresh_view("mv_administradores")
+
+
 def register_jobs(scheduler: BaseScheduler) -> None:
     """Register all cron jobs on the given scheduler instance."""
 
@@ -119,6 +123,10 @@ def register_jobs(scheduler: BaseScheduler) -> None:
     scheduler.add_job(
         _job("mf_rentabilidad", _refresh_rentabilidad_fm),
         "cron", hour=9, minute=15, id="mf_rentabilidad",
+    )
+    scheduler.add_job(
+        _job("administradores", _refresh_administradores),
+        "cron", hour=9, minute=20, id="administradores",
     )
     scheduler.add_job(
         _job("mf_portfolios", lambda: CarterasDownloader().run()),
