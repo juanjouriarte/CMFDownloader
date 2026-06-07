@@ -1,7 +1,12 @@
-app = "cmf-downloader"
+app            = "cmf-downloader"
 primary_region = "scl"
 
 [build]
+
+# Runs alembic upgrade head before traffic switches to the new version.
+# If migrations fail the deploy is aborted — old version keeps serving.
+[deploy]
+  release_command = "alembic upgrade head"
 
 [processes]
   web    = "uvicorn main:app --host 0.0.0.0 --port 8080"
@@ -15,5 +20,21 @@ primary_region = "scl"
   min_machines_running = 1
   processes            = ["web"]
 
+  [http_service.concurrency]
+    type       = "requests"
+    hard_limit = 50
+    soft_limit = 40
+
 [[vm]]
-  size = "shared-cpu-1x"
+  size   = "shared-cpu-1x"
+  memory = "512mb"
+
+[checks]
+  [checks.health]
+    grace_period = "10s"
+    interval     = "30s"
+    method       = "GET"
+    path         = "/health"
+    port         = 8080
+    timeout      = "5s"
+    type         = "http"

@@ -295,6 +295,7 @@ pg_restore -h localhost -p 5433 -U postgres -d <db-name> cmf_backup.dump
 | Variable | Description |
 |---|---|
 | `DATABASE_URL` | SQLAlchemy sync DSN e.g. `postgresql+psycopg2://user:pass@host/db` |
+| `API_TOKEN` | Bearer token for `POST /financial-statements/download`. If unset, auth is skipped (dev mode) |
 | `GEMINI_API_KEY` | Google Gemini key — used for CAPTCHA solving in cartola downloader |
 | `DOWNLOADS_DIR` | Local path for downloaded raw files (default: `./downloads`) |
 | `BOLSA_COOKIES` | Session cookies for Bolsa de Santiago API (expires periodically) |

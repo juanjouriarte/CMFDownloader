@@ -4,8 +4,9 @@ import logging
 import re
 from dataclasses import asdict
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
+from src.auth import require_token
 from src.financialStatements.downloaders.financialStatementsDownloader import (
     FinancialStatementsDownloader,
 )
@@ -31,7 +32,7 @@ def _run_download(inicio: str, termino: str) -> dict:
     return asdict(result)
 
 
-@router.post("/download")
+@router.post("/download", dependencies=[Depends(require_token)])
 def download_financial_statements(
     background_tasks: BackgroundTasks,
     inicio: str = Query(..., description="Start period YYYYMM, e.g. 202003"),
