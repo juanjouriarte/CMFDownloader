@@ -14,7 +14,7 @@ from src.config import DOWNLOADS_DIR
 from src.db.engine import SessionLocal
 from src.db.models.carteras_fi import CarteraFINac
 from src.db.models.fondos_inversion import FondoInversion
-from src.http import make_session
+from src.http import fetch, make_session
 from src.investmentFunds.loaders.carteras import (
     load_carteras, parse_ext, parse_fut_fw, parse_met_part, parse_nac,
 )
@@ -79,15 +79,8 @@ def _fetch_fund(fund: FondoInversion, quarters: list[tuple[int, int]],
             responses = {}
             for tipo, endpoint in ENDPOINTS.items():
                 url = f"{BASE_URL}/{endpoint}?rut={run_fondo}&periodo={periodo_str}"
-                for attempt in range(1, 4):
-                    try:
-                        resp = session.get(url, timeout=30)
-                        resp.raise_for_status()
-                        responses[tipo] = resp.text
-                        break
-                    except Exception:
-                        if attempt < 3:
-                            time.sleep(2 ** attempt)
+                resp = fetch(session, url, timeout=30)
+                responses[tipo] = resp.text
 
             nac      = parse_nac(responses.get("nac", ""), run_fondo, periodo)
             ext      = parse_ext(responses.get("ext", ""), run_fondo, periodo)
