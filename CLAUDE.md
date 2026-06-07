@@ -152,6 +152,24 @@ Classifies all FI funds based on IFRS quarterly cartera positions using `pct_act
 
 Large/Small Cap detection uses `rut_emisor` overlap with IPSA ETF (run_fondo `10748`) — dynamic, no hardcoded tickers. Results persisted to `categoria_fi` table and refreshed on day 5 of each month.
 
+### Rentability materialized views
+
+Two materialized views compute returns for 1D/1W/1M/1Y/5Y/YTD periods, refreshed daily via the scheduler with `REFRESH MATERIALIZED VIEW CONCURRENTLY`.
+
+**`mv_rentabilidad_fm`** (Mutual Funds) — total return:
+```
+r = (VC_end × PRODUCT(factor_reparto in period)) / VC_start - 1
+```
+- `factor_reparto` is the daily reinvestment multiplier for distributions; cumulative product via `EXP(SUM(LN(factor)))` over valid factors only (NaN/NULL/0 → neutral 1.0).
+
+**`mv_rentabilidad_fi`** (rescatable Investment Funds only) — NAV + dividends:
+```
+r = (VL_end - VL_start + SUM(dividends in period)) / VL_start × 100
+```
+- `VL` = `valores_cuota_fi.valor_libro`. Dividends matched via `nemotecnicos_fi` → `dividendos` using `fec_lim` (ex-date), currency-matched: `$$`/CLP → `$`, `PROM`/USD → `US$` (no FX needed). Hyphen formats normalized (`CFICOF4A-E` = `CFI-COF4AE`).
+
+Both pick the **most-populated date within the last 7 days** as reference, so CMF publish lag (typically 1-2 days) never reduces fund coverage. Note: raw CMF data occasionally has corrupt `valor_cuota` jumps for individual fund/series — the views reflect source data faithfully and do not mask these.
+
 ### Scheduler jobs (America/Santiago)
 
 | Job ID | Schedule | Description |

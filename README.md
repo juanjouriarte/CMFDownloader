@@ -45,31 +45,39 @@ ETL pipeline that downloads public fund datasets from the Chilean CMF (Comisión
 - [x] **FI Fund classifier** (`investmentFundsCategories.py`) — 20 subcategories across Capital Privado, Inmobiliario, Infraestructura, Accionario (Large/Small Cap), Deuda, and Fondo de Fondos. Uses `pct_activo_fondo` portfolio weights + IPSA ETF for size detection. Results in `categoria_fi` table, refreshed quarterly
 - [x] **Series classification** — `tipo_serie` derived from TAC `caracteristicas`
 - [x] **Canonical entity names** — `entidades` table maps RUT → canonical name
+- [x] **Rentability (FM)** — `mv_rentabilidad_fm` materialized view: total return 1D/1W/1M/1Y/5Y/YTD via `valor_cuota` × cumulative `factor_reparto`. Refreshed daily
+- [x] **Rentability (FI rescatables)** — `mv_rentabilidad_fi` materialized view: NAV + dividends (CLP & USD currency-matched via `nemotecnicos_fi` → `dividendos`). Refreshed daily
+
+### Deployment readiness
+- [x] **Scheduler decoupled** — `web` + `worker` as separate processes
+- [x] **Retry logic** on all downloaders
+- [x] **API authentication** — bearer token (`API_TOKEN`) on `POST /financial-statements/download`
+- [x] **Job tracking** — `job_runs` table
+- [x] **Composite indexes** + generated flow columns (`monto_aportado`/`monto_rescatado`)
+- [x] **`fly.toml`** (release_command, health check) + **`docker-compose.yml`** for Coolify/Oracle
 
 ---
 
 ## TODO
 
 ### Deploy
-- [ ] **API authentication** — bearer token on `POST /financial-statements/download`
-- [ ] **Deploy to Fly.io**
+- [ ] **Deploy to Oracle Cloud (Always Free) + Coolify** — ARM VM (4 OCPU / 24 GB / 200 GB), self-hosted Postgres + Coolify for git-push deploys
   ```bash
-  fly launch
-  fly pg create --region scl && fly pg attach
-  fly secrets set GEMINI_API_KEY=... BOLSA_COOKIES=... BOLSA_CSRF=...
+  # On the Oracle VM
+  curl -fsSL https://cdn.coollabs.io/coolify/install.sh | bash
+  # In Coolify UI: connect repo, set env vars, pre-deploy = alembic upgrade head, add Postgres service
 
   # Migrate local DB (~3.3 GB, ~20 min at 300 Mbps)
   pg_dump $DATABASE_URL -Fc -f cmf_backup.dump
-  fly proxy 5433:5432 -a <pg-app-name>
-  pg_restore -h localhost -p 5433 -U postgres -d <db-name> cmf_backup.dump
-
-  fly deploy
+  pg_restore -h <oracle-ip> -p <coolify-pg-port> -U postgres -d cmf cmf_backup.dump
   ```
+  (`fly.toml` also kept as an alternative — managed but ~$15/mo vs $0)
 
 ### DB Improvements
 - [ ] **Alerting** — Slack/email webhook when `job_runs.status = 'error'`
 - [ ] **Table partitioning** — partition `cartola_diaria`, `valores_cuota_fi`, `financial_statements` by year (requires data reload)
-- [ ] **Materialized views** — latest NAV per fund, AUM by administrator (refresh daily)
+- [ ] **Fix `factor_reparto` NaN → NULL** in cartola loader (data quality; views already filter NaN)
+- [ ] **Data-quality checks** — flag corrupt `valor_cuota` jumps in CMF source feed
 - [ ] `VACUUM FULL` on cartera tables after backfill
 
 ### New Data Sources
