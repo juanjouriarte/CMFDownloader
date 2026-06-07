@@ -14,6 +14,7 @@ class AportanteFI(Base):
         UniqueConstraint("run_fondo", "periodo", "rank", name="uq_aportante_fi"),
         Index("ix_aportantes_fi_run_fondo", "run_fondo"),
         Index("ix_aportantes_fi_periodo", "periodo"),
+        Index("ix_aportantes_fi_rut", "rut"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, autoincrement=True, primary_key=True)
@@ -25,6 +26,7 @@ class AportanteFI(Base):
     rut: Mapped[str | None] = mapped_column(String(20), nullable=True)
     dv_rut: Mapped[str | None] = mapped_column(String(5), nullable=True)
     pct_propiedad: Mapped[float | None] = mapped_column(Numeric(10, 4), nullable=True)
+    nombre_canonical: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class CuotasFI(Base):

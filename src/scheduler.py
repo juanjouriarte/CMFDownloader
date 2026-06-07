@@ -1,113 +1,138 @@
 from __future__ import annotations
 
 import logging
+import traceback
+from datetime import datetime, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.schedulers.base import BaseScheduler
 
-from src.mutualFunds.downloaders.bondsNemotecnicos import BonosNemotecnicosDownloader
-from src.mutualFunds.downloaders.tacDownloader import TacDownloader
-from src.mutualFunds.downloaders.carterasDownloader import CarterasDownloader
-from src.mutualFunds.downloaders.cartolaDownloader import CartolaDownloader
-from src.mutualFunds.downloaders.identificationDownloader import FMIdentidadDownloader
-from src.mutualFunds.downloaders.nemotecnicosDownloader import NemotecnicosDownloader
-from src.investmentFunds.downloaders.nemotecnicosDownloader import FINemotecnicosDownloader
-from src.investmentFunds.downloaders.identidadDownloader import FIIdentidadDownloader
-from src.investmentFunds.downloaders.valoresCuotaDownloader import ValoresCuotaFIDownloader
-from src.investmentFunds.downloaders.aportantesDownloader import AportantesDownloader
-from src.investmentFunds.downloaders.carterasDownloader import CarterasFIDownloader
-from src.bolsaSantiago.downloaders.dividendosDownloader import DividendosDownloader
+from src.db.engine import SessionLocal
+from src.db.models.job_runs import JobRun
 
 logger = logging.getLogger(__name__)
 
-scheduler = BackgroundScheduler(timezone="America/Santiago")
+
+def _run_tracked(job_id: str, fn):
+    started_at = datetime.now(timezone.utc)
+    run_id: int | None = None
+    try:
+        with SessionLocal() as s:
+            run = JobRun(job_id=job_id, started_at=started_at, status="running")
+            s.add(run)
+            s.commit()
+            s.refresh(run)
+            run_id = run.id
+        result = fn()
+        _finish(run_id, "success",
+                rows_upserted=getattr(result, "rows_upserted", None),
+                errors=getattr(result, "errors", None))
+        return result
+    except Exception:
+        _finish(run_id, "error", error_detail=traceback.format_exc())
+        raise
 
 
-@scheduler.scheduled_job("cron", hour=8, minute=0, id="bonds_tickers")
-def job_bonds_tickers() -> None:
-    logger.info("Starting download: Bond Tickers")
-    result = BonosNemotecnicosDownloader(force=True).run()
-    logger.info("Bond Tickers done: %s", result)
+def _finish(run_id: int | None, status: str, **kwargs) -> None:
+    if run_id is None:
+        return
+    try:
+        with SessionLocal() as s:
+            run = s.get(JobRun, run_id)
+            if run:
+                run.finished_at = datetime.now(timezone.utc)
+                run.status = status
+                for k, v in kwargs.items():
+                    setattr(run, k, v)
+                s.commit()
+    except Exception:
+        logger.exception("Failed to persist job_run id=%s", run_id)
 
 
-@scheduler.scheduled_job("cron", hour=8, minute=0, id="fm_identity")
-def job_fm_identity() -> None:
-    logger.info("Starting download: MF Identity")
-    result = FMIdentidadDownloader(force=True).run()
-    logger.info("MF Identity done: %s", result)
+def register_jobs(scheduler: BaseScheduler) -> None:
+    """Register all cron jobs on the given scheduler instance."""
+
+    from src.mutualFunds.downloaders.bondsNemotecnicos import BonosNemotecnicosDownloader
+    from src.mutualFunds.downloaders.tacDownloader import TacDownloader
+    from src.mutualFunds.downloaders.carterasDownloader import CarterasDownloader
+    from src.mutualFunds.downloaders.cartolaDownloader import CartolaDownloader
+    from src.mutualFunds.downloaders.identificationDownloader import FMIdentidadDownloader
+    from src.mutualFunds.downloaders.nemotecnicosDownloader import NemotecnicosDownloader
+    from src.investmentFunds.downloaders.nemotecnicosDownloader import FINemotecnicosDownloader
+    from src.investmentFunds.downloaders.identidadDownloader import FIIdentidadDownloader
+    from src.investmentFunds.downloaders.valoresCuotaDownloader import ValoresCuotaFIDownloader
+    from src.investmentFunds.downloaders.aportantesDownloader import AportantesDownloader
+    from src.investmentFunds.downloaders.carterasDownloader import CarterasFIDownloader
+    from src.bolsaSantiago.downloaders.dividendosDownloader import DividendosDownloader
+    from src.investmentFunds.investmentFundsCategories import run_and_save as fi_categorize
 
 
-@scheduler.scheduled_job("cron", hour=8, minute=15, id="mf_tickers")
-def job_mf_tickers() -> None:
-    logger.info("Starting download: MF Tickers")
-    result = NemotecnicosDownloader(force=True).run()
-    logger.info("MF Tickers done: %s", result)
+    def _job(job_id: str, fn):
+        def wrapper():
+            logger.info("Starting: %s", job_id)
+            result = _run_tracked(job_id, fn)
+            logger.info("Done: %s — %s", job_id, result)
+        wrapper.__name__ = job_id
+        return wrapper
+
+    scheduler.add_job(
+        _job("bonds_tickers", lambda: BonosNemotecnicosDownloader(force=True).run()),
+        "cron", hour=8, minute=0, id="bonds_tickers",
+    )
+    scheduler.add_job(
+        _job("fm_identity", lambda: FMIdentidadDownloader(force=True).run()),
+        "cron", hour=8, minute=0, id="fm_identity",
+    )
+    scheduler.add_job(
+        _job("mf_tickers", lambda: NemotecnicosDownloader(force=True).run()),
+        "cron", hour=8, minute=15, id="mf_tickers",
+    )
+    scheduler.add_job(
+        _job("fi_tickers", lambda: FINemotecnicosDownloader(force=True).run()),
+        "cron", hour=8, minute=15, id="fi_tickers",
+    )
+    scheduler.add_job(
+        _job("fi_identity", lambda: FIIdentidadDownloader(force=True).run()),
+        "cron", hour=8, minute=20, id="fi_identity",
+    )
+    scheduler.add_job(
+        _job("mf_daily_nav", lambda: CartolaDownloader().run()),
+        "cron", hour=8, minute=30, id="mf_daily_nav",
+    )
+    scheduler.add_job(
+        _job("mf_portfolios", lambda: CarterasDownloader().run()),
+        "cron", day=5, hour=9, minute=0, id="mf_portfolios",
+    )
+    scheduler.add_job(
+        _job("mf_costs", lambda: TacDownloader().run()),
+        "cron", day=5, hour=9, minute=30, id="mf_costs",
+    )
+    scheduler.add_job(
+        _job("dividends", lambda: DividendosDownloader().run()),
+        "cron", hour=9, minute=0, id="dividends",
+    )
+    scheduler.add_job(
+        _job("fi_daily_nav", lambda: ValoresCuotaFIDownloader().run()),
+        "cron", hour=9, minute=30, id="fi_daily_nav",
+    )
+    scheduler.add_job(
+        _job("fi_shareholders", lambda: AportantesDownloader().run()),
+        "cron", day=5, hour=10, minute=0, id="fi_shareholders",
+    )
+    scheduler.add_job(
+        _job("fi_portfolios", lambda: CarterasFIDownloader().run()),
+        "cron", day=5, hour=10, minute=30, id="fi_portfolios",
+    )
+    scheduler.add_job(
+        _job("fi_categories", fi_categorize),
+        "cron", day=5, hour=11, minute=0, id="fi_categories",
+    )
 
 
-@scheduler.scheduled_job("cron", hour=8, minute=15, id="fi_tickers")
-def job_fi_tickers() -> None:
-    logger.info("Starting download: FI Tickers")
-    result = FINemotecnicosDownloader(force=True).run()
-    logger.info("FI Tickers done: %s", result)
-
-
-@scheduler.scheduled_job("cron", hour=8, minute=20, id="fi_identity")
-def job_fi_identity() -> None:
-    logger.info("Starting download: FI Identity")
-    result = FIIdentidadDownloader(force=True).run()
-    logger.info("FI Identity done: %s", result)
-
-
-@scheduler.scheduled_job("cron", hour=8, minute=30, id="mf_daily_nav")
-def job_mf_daily_nav() -> None:
-    logger.info("Starting download: MF Daily NAV")
-    result = CartolaDownloader().run()
-    logger.info("MF Daily NAV done: %s", result)
-
-
-@scheduler.scheduled_job("cron", day=5, hour=9, minute=0, id="mf_portfolios")
-def job_mf_portfolios() -> None:
-    logger.info("Starting download: MF Portfolios")
-    result = CarterasDownloader().run()
-    logger.info("MF Portfolios done: %s", result)
-
-
-@scheduler.scheduled_job("cron", day=5, hour=9, minute=30, id="mf_costs")
-def job_mf_costs() -> None:
-    logger.info("Starting download: MF Costs (TAC)")
-    result = TacDownloader().run()
-    logger.info("MF Costs done: %s", result)
-
-
-@scheduler.scheduled_job("cron", hour=9, minute=0, id="dividends")
-def job_dividends() -> None:
-    logger.info("Starting download: Dividends")
-    result = DividendosDownloader().run()
-    logger.info("Dividends done: %s", result)
-
-
-@scheduler.scheduled_job("cron", hour=9, minute=30, id="fi_daily_nav")
-def job_fi_daily_nav() -> None:
-    logger.info("Starting download: FI Daily NAV")
-    result = ValoresCuotaFIDownloader().run()
-    logger.info("FI Daily NAV done: %s", result)
-
-
-@scheduler.scheduled_job("cron", day=5, hour=10, minute=0, id="fi_shareholders")
-def job_fi_shareholders() -> None:
-    logger.info("Starting download: FI Shareholders & Shares")
-    result = AportantesDownloader().run()
-    logger.info("FI Shareholders done: %s", result)
-
-
-@scheduler.scheduled_job("cron", day=5, hour=10, minute=30, id="fi_portfolios")
-def job_fi_portfolios() -> None:
-    logger.info("Starting download: FI Portfolios")
-    result = CarterasFIDownloader().run()
-    logger.info("FI Portfolios done: %s", result)
-
-
-def start() -> None:
-    logger.info("Scheduler started — timezone: America/Santiago")
+def start() -> BackgroundScheduler:
+    """Start a background scheduler — used only for local development via main.py."""
+    scheduler = BackgroundScheduler(timezone="America/Santiago")
+    register_jobs(scheduler)
     scheduler.start()
-    # BackgroundScheduler runs in a daemon thread — caller is responsible
-    # for keeping the process alive (e.g. uvicorn serving FastAPI)
+    logger.info("Scheduler started (background) — timezone: America/Santiago")
+    return scheduler

@@ -130,7 +130,7 @@ class CarterasFIDownloader(BaseDownloader):
     def backfill(self, from_date: date = BACKFILL_START) -> DownloadResult:
         self.logger.info("Backfill carteras FI desde %s", from_date)
         return self._download_all(from_date, date.today(),
-                                  only_vigentes=False, workers=5, fast=True)
+                                  only_vigentes=False, workers=10, fast=True)
 
     def _download_all(self, from_date: date, to_date: date,
                       only_vigentes: bool, workers: int, fast: bool) -> DownloadResult:
