@@ -18,7 +18,7 @@ class CarteraFINac(_CarteraFIBase, Base):
     __tablename__ = "cartera_fi_nac"
     __table_args__ = (
         Index("ix_cartera_fi_nac_periodo", "periodo"),
-        Index("ix_cartera_fi_nac_run_fondo", "run_fondo"),
+        Index("ix_cartera_fi_nac_run_fondo_periodo", "run_fondo", "periodo"),
     )
     clasif_esf: Mapped[str | None] = mapped_column(String(10), nullable=True)
     nemotecnico: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -47,7 +47,7 @@ class CarteraFIExt(_CarteraFIBase, Base):
     __tablename__ = "cartera_fi_ext"
     __table_args__ = (
         Index("ix_cartera_fi_ext_periodo", "periodo"),
-        Index("ix_cartera_fi_ext_run_fondo", "run_fondo"),
+        Index("ix_cartera_fi_ext_run_fondo_periodo", "run_fondo", "periodo"),
     )
     clasif_esf: Mapped[str | None] = mapped_column(String(10), nullable=True)
     nemo_isin: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -76,7 +76,7 @@ class CarteraFIMetPart(_CarteraFIBase, Base):
     __tablename__ = "cartera_fi_met_part"
     __table_args__ = (
         Index("ix_cartera_fi_met_part_periodo", "periodo"),
-        Index("ix_cartera_fi_met_part_run_fondo", "run_fondo"),
+        Index("ix_cartera_fi_met_part_run_fondo_periodo", "run_fondo", "periodo"),
     )
     clasif_esf: Mapped[str | None] = mapped_column(String(10), nullable=True)
     nemotecnico: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -99,7 +99,7 @@ class CarteraFIFutFw(_CarteraFIBase, Base):
     __tablename__ = "cartera_fi_fut_fw"
     __table_args__ = (
         Index("ix_cartera_fi_fut_fw_periodo", "periodo"),
-        Index("ix_cartera_fi_fut_fw_run_fondo", "run_fondo"),
+        Index("ix_cartera_fi_fut_fw_run_fondo_periodo", "run_fondo", "periodo"),
     )
     activo_subyacente: Mapped[str | None] = mapped_column(Text, nullable=True)
     tipo_contrato: Mapped[str | None] = mapped_column(String(20), nullable=True)

@@ -18,7 +18,7 @@ class CarteraNaci(_CarteraBase, Base):
     __tablename__ = "cartera_naci"
     __table_args__ = (
         Index("ix_cartera_naci_periodo", "periodo"),
-        Index("ix_cartera_naci_run_fondo", "run_fondo"),
+        Index("ix_cartera_naci_run_fondo_periodo", "run_fondo", "periodo"),
     )
 
     nemotecnico: Mapped[str | None] = mapped_column(Text)
@@ -50,7 +50,7 @@ class CarteraExtr(_CarteraBase, Base):
     __tablename__ = "cartera_extr"
     __table_args__ = (
         Index("ix_cartera_extr_periodo", "periodo"),
-        Index("ix_cartera_extr_run_fondo", "run_fondo"),
+        Index("ix_cartera_extr_run_fondo_periodo", "run_fondo", "periodo"),
     )
 
     nemotecnico: Mapped[str | None] = mapped_column(Text)
@@ -81,7 +81,7 @@ class CarteraOpci(_CarteraBase, Base):
     __tablename__ = "cartera_opci"
     __table_args__ = (
         Index("ix_cartera_opci_periodo", "periodo"),
-        Index("ix_cartera_opci_run_fondo", "run_fondo"),
+        Index("ix_cartera_opci_run_fondo_periodo", "run_fondo", "periodo"),
     )
 
     activo_objeto: Mapped[str | None] = mapped_column(Text)
@@ -106,7 +106,7 @@ class CarteraFutu(_CarteraBase, Base):
     __tablename__ = "cartera_futu"
     __table_args__ = (
         Index("ix_cartera_futu_periodo", "periodo"),
-        Index("ix_cartera_futu_run_fondo", "run_fondo"),
+        Index("ix_cartera_futu_run_fondo_periodo", "run_fondo", "periodo"),
     )
 
     activo_objeto: Mapped[str | None] = mapped_column(Text)
@@ -126,7 +126,7 @@ class CarteraOpla(_CarteraBase, Base):
     __tablename__ = "cartera_opla"
     __table_args__ = (
         Index("ix_cartera_opla_periodo", "periodo"),
-        Index("ix_cartera_opla_run_fondo", "run_fondo"),
+        Index("ix_cartera_opla_run_fondo_periodo", "run_fondo", "periodo"),
     )
 
     activo_objeto: Mapped[str | None] = mapped_column(Text)
