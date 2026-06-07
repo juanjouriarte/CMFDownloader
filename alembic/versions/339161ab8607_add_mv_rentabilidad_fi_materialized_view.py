@@ -12,7 +12,10 @@ Formula per period:
 - VL = valores_cuota_fi.valor_libro (daily NAV, published every calendar day)
 - Uses the most-populated recent date (within last 7 days) — maximises fund coverage
   regardless of CMF publish lag. Falls back to absolute MAX if only one date has data.
-- Dividends: dividendos table via nemotecnicos_fi, CLP only (moneda = '$')
+- Dividends: dividendos table via nemotecnicos_fi, currency-matched to the fund:
+    '$$' (CLP fund)   → dividendos.moneda = '$'
+    'PROM' (USD fund) → dividendos.moneda = 'US$'  (PROM = USD in CMF notation)
+  No FX conversion needed — dividend and NAV are always in the same currency.
 - fec_lim = ex-dividend date; included in the period that ends on or after that date
 - Only rescatable = TRUE funds included
 """
@@ -56,7 +59,17 @@ current_nav AS (
       AND v.valor_libro > 0
 ),
 
--- CLP dividends per fund/serie via nemotecnicos_fi
+-- Fund/serie reporting currency from the most recent valores_cuota_fi row.
+-- '$$'   = CLP  → match dividendos.moneda = '$'
+-- 'PROM' = USD  → match dividendos.moneda = 'US$'
+fund_currency AS (
+    SELECT DISTINCT ON (run_fondo, serie) run_fondo, serie, moneda
+    FROM valores_cuota_fi
+    WHERE moneda IS NOT NULL
+    ORDER BY run_fondo, serie, fecha DESC
+),
+
+-- Dividends matched to the fund's reporting currency (no FX needed)
 divs AS (
     SELECT
         n.run_fondo,
@@ -65,9 +78,14 @@ divs AS (
         d.val_acc
     FROM dividendos d
     JOIN nemotecnicos_fi n ON n.nemotecnico = d.nemo
+    JOIN fund_currency fc ON fc.run_fondo = n.run_fondo AND fc.serie = n.serie
     WHERE d.val_acc > 0
-      AND d.moneda = '$'
       AND d.fec_lim IS NOT NULL
+      AND (
+          (d.moneda = '$'   AND fc.moneda = '$$')     -- CLP fund, CLP dividend
+          OR
+          (d.moneda = 'US$' AND fc.moneda = 'PROM')   -- USD fund, USD dividend
+      )
 ),
 
 -- Pre-aggregate dividends per fund/serie relative to the global ref date
