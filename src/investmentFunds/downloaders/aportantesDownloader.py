@@ -14,7 +14,7 @@ from src.config import DOWNLOADS_DIR
 from src.db.engine import SessionLocal
 from src.db.models.aportantes_fi import CuotasFI
 from src.db.models.fondos_inversion import FondoInversion
-from src.http import make_session
+from src.http import fetch, make_session
 from src.investmentFunds.loaders.aportantes import load_aportantes, parse_html
 from src.investmentFunds.loaders.entidades import refresh_entidades
 from src.investmentFunds.loaders.utils import mark_has_data
@@ -82,27 +82,19 @@ def _fetch_fund(fund: FondoInversion, months: list[tuple[int, int]],
             result += DownloadResult(skipped=1)
             continue
 
-        for attempt in range(1, 4):
-            try:
-                resp = session.post(
-                    url,
-                    data=f"mm={month:02d}&aa={year}&rut={run_fondo}",
-                    timeout=30,
-                )
-                resp.raise_for_status()
-                aportantes, cuotas = parse_html(resp.text, run_fondo, periodo)
-                rows = load_aportantes(aportantes, cuotas)
-                if rows:
-                    mark_has_data(run_fondo, True)
-                elif not vigente:
-                    mark_has_data(run_fondo, False)
-                result += DownloadResult(downloaded=1, rows_upserted=rows)
-                break
-            except Exception as exc:
-                if attempt == 3:
-                    result += DownloadResult(errors=1)
-                else:
-                    time.sleep(2 ** attempt)
+        try:
+            resp = fetch(session, url, method="POST",
+                         data=f"mm={month:02d}&aa={year}&rut={run_fondo}",
+                         timeout=30)
+            aportantes, cuotas = parse_html(resp.text, run_fondo, periodo)
+            rows = load_aportantes(aportantes, cuotas)
+            if rows:
+                mark_has_data(run_fondo, True)
+            elif not vigente:
+                mark_has_data(run_fondo, False)
+            result += DownloadResult(downloaded=1, rows_upserted=rows)
+        except Exception:
+            result += DownloadResult(errors=1)
 
         time.sleep(random.uniform(0.05, 0.15) if fast else random.uniform(0.3, 0.8))
 

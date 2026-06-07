@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Boolean, String, Text
+from sqlalchemy import Boolean, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.db.engine import Base
@@ -8,6 +8,10 @@ from src.db.engine import Base
 
 class FondoInversion(Base):
     __tablename__ = "fondos_inversion"
+    __table_args__ = (
+        Index("ix_fondos_inversion_administrador", "administrador"),
+        Index("ix_fondos_inversion_vigente_rescatable", "vigente", "rescatable"),
+    )
 
     run_fondo: Mapped[str] = mapped_column(String(20), primary_key=True)
     dv_fondo: Mapped[str | None] = mapped_column(String(5), nullable=True)

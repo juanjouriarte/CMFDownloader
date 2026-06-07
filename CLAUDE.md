@@ -10,12 +10,12 @@ Daily ETL pipeline that downloads public datasets from the Chilean CMF (Comisió
 
 - **Language**: Python 3.11
 - **Database**: PostgreSQL (Fly.io managed `fly pg` cluster)
-- **HTTP**: `requests` (sync downloads)
+- **HTTP**: `requests` (sync downloads) + `urllib3.util.retry.Retry` transport adapter
 - **Data parsing**: `pandas`, `beautifulsoup4`, `xlrd`
 - **ORM / migrations**: `SQLAlchemy` (sync engine) + `Alembic`
-- **Scheduling**: `APScheduler` (runs inside the process)
+- **Scheduling**: `APScheduler` — `web` (FastAPI) and `worker` (BlockingScheduler) run as separate processes via Fly `[processes]`
 - **API**: FastAPI
-- **Deployment**: Fly.io (`fly.toml` — not yet created)
+- **Deployment**: Fly.io (`fly.toml` defined)
 
 ## Architecture
 
@@ -50,14 +50,15 @@ src/
 │   │   ├── valoresCuotaDownloader.py   # Daily NAV per fund (pestania=7)
 │   │   ├── aportantesDownloader.py     # Quarterly shareholders + cuotas (pestania=27)
 │   │   └── carterasDownloader.py       # Quarterly IFRS portfolio positions (NACI/EXT/MET_PART/FUT_FW)
-│   └── loaders/
-│       ├── nemotecnicos.py
-│       ├── identidad.py
-│       ├── valores_cuota.py
-│       ├── aportantes.py
-│       ├── carteras.py
-│       ├── entidades.py      # refresh_entidades() — canonical names from aportantes_fi
-│       └── utils.py          # mark_has_data() helper
+│   ├── loaders/
+│   │   ├── nemotecnicos.py
+│   │   ├── identidad.py
+│   │   ├── valores_cuota.py
+│   │   ├── aportantes.py
+│   │   ├── carteras.py
+│   │   ├── entidades.py      # refresh_entidades() — canonical names from aportantes_fi
+│   │   └── utils.py          # mark_has_data() helper
+│   └── investmentFundsCategories.py  # FI classifier — 20 subcategories, IPSA-based size detection
 ├── bolsaSantiago/            # Bolsa de Santiago data sources
 │   ├── downloaders/
 │   │   └── dividendosDownloader.py   # Dividends + capital changes 1973→today
@@ -67,7 +68,7 @@ src/
 │   ├── engine.py             # SQLAlchemy engine + SessionLocal + Base
 │   └── models/
 │       ├── mutual_funds.py         # fondo_mutuo
-│       ├── cartola.py              # cartola_diaria
+│       ├── cartola.py              # cartola_diaria (+ monto_aportado/monto_rescatado generated columns)
 │       ├── carteras.py             # cartera_naci/extr/opci/futu/opla
 │       ├── nemotecnicos.py         # nemotecnicos (FM)
 │       ├── bonos.py                # bonos_nemotecnicos
@@ -78,16 +79,20 @@ src/
 │       ├── aportantes_fi.py        # aportantes_fi + cuotas_fi
 │       ├── carteras_fi.py          # cartera_fi_nac/ext/met_part/fut_fw
 │       ├── entidades.py            # entidades (canonical names)
-│       └── dividendos.py           # dividendos
+│       ├── dividendos.py           # dividendos
+│       ├── job_runs.py             # job_runs (scheduler execution history)
+│       └── categoria_fi.py         # categoria_fi (FI fund classifications)
 ├── base.py                   # BaseDownloader + DownloadResult
 ├── categories.py             # Circular No. 7 category definitions + country tables
 ├── config.py                 # CMFUrl enum + env vars
-├── http.py                   # make_session() factory
-└── scheduler.py              # APScheduler wiring
+├── http.py                   # make_session() with Retry adapter + fetch() helper
+└── scheduler.py              # register_jobs() + _run_tracked() job wrapper
 
 alembic/                      # Migration scripts
 tests/                        # pytest unit tests for loaders + classifiers
-main.py                       # Entrypoint: starts FastAPI + scheduler
+main.py                       # Web entrypoint: FastAPI only (no scheduler)
+worker.py                     # Worker entrypoint: BlockingScheduler only
+fly.toml                      # Fly.io app config — web + worker process groups
 Dockerfile
 .dockerignore
 ```
@@ -95,6 +100,14 @@ Dockerfile
 > **Note on layout**: each dataset domain is a self-contained package with its own
 > `downloaders/` and `loaders/`. Financial statements are triggered on demand via
 > `src/financialStatements/api.py`, not by the scheduler.
+
+### Process architecture
+
+The app runs as **two independent OS processes** on a single Fly Machine:
+- `web` — `uvicorn main:app` — serves HTTP only, no scheduler
+- `worker` — `python worker.py` — runs `BlockingScheduler` with all 13 jobs
+
+Defined in `fly.toml [processes]`. A crash in `web` does not affect `worker` and vice versa.
 
 ### Downloader interface
 
@@ -104,6 +117,8 @@ Every downloader extends `BaseDownloader` and exposes:
 def run(self) -> DownloadResult: ...                    # incremental — picks up from last DB date
 def backfill(self, from_date) -> DownloadResult: ...    # historical population
 ```
+
+All downloaders use `make_session()` which attaches a `Retry` adapter (3 attempts, exponential backoff, retries on 429/500/502/503/504). `fetch()` in `http.py` provides application-level retry on top.
 
 Downloaded files are deleted immediately after successful load (`path.unlink(missing_ok=True)`).
 The DB is the sole source of truth — ephemeral disk is just a staging area.
@@ -117,6 +132,25 @@ The DB is the sole source of truth — ephemeral disk is just a staging area.
 
 Set automatically on first fetch result. Vigente funds are never marked `False`.
 This eliminates wasted requests for the ~750 non-vigente funds with no CMF portal data.
+
+### Job tracking
+
+Every scheduler job writes a row to `job_runs` on start and updates it on finish via `_run_tracked()` in `scheduler.py`. Fields: `job_id`, `started_at`, `finished_at`, `status` (running/success/error), `rows_upserted`, `errors`, `error_detail`.
+
+### FI Fund Classifier (`investmentFundsCategories.py`)
+
+Classifies all FI funds based on IFRS quarterly cartera positions using `pct_activo_fondo` as portfolio weight. 20 subcategories across 6 types:
+
+| Type | Subcategories |
+|---|---|
+| Alternativo — Capital Privado | PE/Buyout, Deuda Privada, Venture Capital, Secundarios |
+| Alternativo — Inmobiliario | Hipotecario, Desarrollo, Renta |
+| Alternativo — Infraestructura | Infraestructura, Energía, Forestal y Agrícola |
+| Accionario | RV Nacional (General/LC/SC), RV Internacional (General/LC/SC) |
+| Deuda | Deuda Nacional, Deuda Internacional |
+| Fondo de Fondos | Fondo de Fondos |
+
+Large/Small Cap detection uses `rut_emisor` overlap with IPSA ETF (run_fondo `10748`) — dynamic, no hardcoded tickers. Results persisted to `categoria_fi` table and refreshed on day 5 of each month.
 
 ### Scheduler jobs (America/Santiago)
 
@@ -134,6 +168,7 @@ This eliminates wasted requests for the ~750 non-vigente funds with no CMF porta
 | `fi_daily_nav` | Daily 09:30 | FI daily NAV/AUM (vigente funds only) |
 | `fi_shareholders` | Day 5 of month 10:00 | FI quarterly shareholders + cuotas (vigente only) |
 | `fi_portfolios` | Day 5 of month 10:30 | FI quarterly IFRS portfolio positions (vigente only) |
+| `fi_categories` | Day 5 of month 11:00 | FI fund classification → categoria_fi |
 
 ### API endpoints
 
@@ -147,8 +182,8 @@ This eliminates wasted requests for the ~750 non-vigente funds with no CMF porta
 | Table | Rows (approx) | Notes |
 |---|---|---|
 | `fondo_mutuo` | 1,340 | MF identity (447 vigentes, 893 terminated), 36 AGFs |
-| `cartola_diaria` | 7M+ | Daily NAV/AUM/flows 2020–2026, 1.4 GB |
-| `cartera_naci` | 2.1M+ | National portfolio positions |
+| `cartola_diaria` | 7M+ | Daily NAV/AUM/flows 2020–2026, 1.4 GB. Composite index (run_fondo, fecha). Generated columns: monto_aportado, monto_rescatado |
+| `cartera_naci` | 2.1M+ | National portfolio positions. Composite index (run_fondo, periodo) |
 | `cartera_extr` | 315K+ | Foreign portfolio positions |
 | `cartera_opci` | ~155 | Options positions |
 | `cartera_futu` | 134K+ | Futures/forwards positions |
@@ -162,12 +197,14 @@ This eliminates wasted requests for the ~750 non-vigente funds with no CMF porta
 | `valores_cuota_fi` | 2.9M+ | FI daily NAV/AUM 2020–2026, 531 MB |
 | `aportantes_fi` | 176K+ | FI quarterly top-12 shareholders with ownership % (periodo = quarter-end) |
 | `cuotas_fi` | 35K+ | FI quarterly: cuotas emitidas/pagadas, valor libro (periodo = quarter-end) |
-| `cartera_fi_nac` | growing | FI quarterly domestic positions (IFRS), ~2.5 GB est. at full load |
-| `cartera_fi_ext` | growing | FI quarterly foreign positions (IFRS) |
-| `cartera_fi_met_part` | small | FI equity method investments |
-| `cartera_fi_fut_fw` | growing | FI futures + forwards positions |
+| `cartera_fi_nac` | 888K+ | FI quarterly domestic positions (IFRS). Composite index (run_fondo, periodo) |
+| `cartera_fi_ext` | 74K+ | FI quarterly foreign positions (IFRS) |
+| `cartera_fi_met_part` | 1,600+ | FI equity method investments |
+| `cartera_fi_fut_fw` | 12K+ | FI futures + forwards positions |
 | `entidades` | 4,521 | Canonical entity names by RUT (normalized from aportantes_fi) |
 | `dividendos` | 75,469 | Dividends + capital changes 1973–2026 (Bolsa de Santiago) |
+| `job_runs` | growing | Scheduler job execution history (status, duration, rows, errors) |
+| `categoria_fi` | 851 | FI fund classifications — refreshed quarterly |
 
 ## Git Workflow
 
@@ -194,8 +231,11 @@ alembic upgrade head
 # Generate a new migration after model changes
 alembic revision --autogenerate -m "description"
 
-# Run the scheduler locally
-python main.py
+# Run the web process locally
+uvicorn main:app --reload
+
+# Run the worker (scheduler) locally
+python worker.py
 
 # Run a specific downloader manually
 python -c "
@@ -203,6 +243,20 @@ import logging, sys
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 from src.mutualFunds.downloaders.cartolaDownloader import CartolaDownloader
 print(CartolaDownloader().run())
+"
+
+# Run FI classifier and save to DB
+python -c "
+from src.investmentFunds.investmentFundsCategories import run_and_save
+print(run_and_save(), 'rows saved')
+"
+
+# Backfill FI carteras (quarterly IFRS portfolios, 2020→today)
+python -c "
+import logging, sys
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+from src.investmentFunds.downloaders.carterasDownloader import CarterasFIDownloader
+print(CarterasFIDownloader().backfill())
 "
 
 # Backfill FI daily NAV (all funds, 2020→today)
@@ -229,6 +283,11 @@ fly pg connect -a <pg-app-name>
 
 # Fly.io — tail logs
 fly logs
+
+# Fly.io — dump local DB and restore to Fly
+pg_dump $DATABASE_URL -Fc -f cmf_backup.dump
+fly proxy 5433:5432 -a <pg-app-name>
+pg_restore -h localhost -p 5433 -U postgres -d <db-name> cmf_backup.dump
 ```
 
 ## Environment Variables
@@ -236,6 +295,7 @@ fly logs
 | Variable | Description |
 |---|---|
 | `DATABASE_URL` | SQLAlchemy sync DSN e.g. `postgresql+psycopg2://user:pass@host/db` |
+| `API_TOKEN` | Bearer token for `POST /financial-statements/download`. If unset, auth is skipped (dev mode) |
 | `GEMINI_API_KEY` | Google Gemini key — used for CAPTCHA solving in cartola downloader |
 | `DOWNLOADS_DIR` | Local path for downloaded raw files (default: `./downloads`) |
 | `BOLSA_COOKIES` | Session cookies for Bolsa de Santiago API (expires periodically) |
@@ -250,9 +310,9 @@ fly secrets set BOLSA_COOKIES="..." BOLSA_CSRF="..."
 
 ## Fly.io Notes
 
-- The app runs as a single Fly Machine (always-on) with APScheduler inside.
+- Two process groups (`web` + `worker`) run on a single Fly Machine — defined in `fly.toml [processes]`.
 - PostgreSQL lives in a separate `fly pg` app; connect via the private Fly network.
 - Persistent volumes are not required — all state lives in Postgres.
 - Downloaded files are deleted immediately after loading — no disk accumulation.
-- Set `auto_stop_machines = false` in `fly.toml` to prevent the machine stopping overnight and missing scheduled jobs.
-- `fly.toml` has not been created yet — run `fly launch` to generate it.
+- `auto_stop_machines = false` in `fly.toml` — prevents the machine stopping overnight and missing scheduler jobs.
+- To update Bolsa cookies/CSRF without redeploy: `fly secrets set BOLSA_COOKIES="..." BOLSA_CSRF="..."`
