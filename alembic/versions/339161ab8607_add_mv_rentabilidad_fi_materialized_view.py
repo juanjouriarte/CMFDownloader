@@ -10,7 +10,8 @@ Formula per period:
   r = (VL_end - VL_start + SUM(dividends with fec_lim in period)) / VL_start × 100
 
 - VL = valores_cuota_fi.valor_libro (daily NAV, published every calendar day)
-- Uses global MAX(fecha) from valores_cuota_fi — only funds with data on that date appear
+- Uses the most-populated recent date (within last 7 days) — maximises fund coverage
+  regardless of CMF publish lag. Falls back to absolute MAX if only one date has data.
 - Dividends: dividendos table via nemotecnicos_fi, CLP only (moneda = '$')
 - fec_lim = ex-dividend date; included in the period that ends on or after that date
 - Only rescatable = TRUE funds included
@@ -29,12 +30,21 @@ _VIEW = "mv_rentabilidad_fi"
 _SQL = """
 CREATE MATERIALIZED VIEW mv_rentabilidad_fi AS
 WITH
--- Reference date: global latest date with any data
+-- Reference date: most-populated date within the last 7 days.
+-- Handles CMF publish lag — most funds may be 1-2 days behind the absolute max.
+-- Tie-break: prefer the more recent date.
 ref AS (
-    SELECT MAX(fecha) AS t FROM valores_cuota_fi
+    SELECT v.fecha AS t
+    FROM valores_cuota_fi v
+    JOIN fondos_inversion f ON f.run_fondo = v.run_fondo
+    WHERE f.rescatable = TRUE
+      AND v.fecha >= (SELECT MAX(fecha) FROM valores_cuota_fi) - 7
+    GROUP BY v.fecha
+    ORDER BY COUNT(DISTINCT v.run_fondo) DESC, v.fecha DESC
+    LIMIT 1
 ),
 
--- Latest NAV for rescatable funds on the global max date
+-- NAV for rescatable funds on the reference date
 current_nav AS (
     SELECT v.run_fondo, v.serie, v.fecha, v.valor_libro
     FROM valores_cuota_fi v
