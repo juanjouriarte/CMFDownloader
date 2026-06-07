@@ -77,7 +77,8 @@ divs AS (
         d.fec_lim::date AS fec_lim,
         d.val_acc
     FROM dividendos d
-    JOIN nemotecnicos_fi n ON n.nemotecnico = d.nemo
+    -- Normalize hyphens: CMF uses 'CFICOF4A-E', Bolsa uses 'CFI-COF4AE' — same fund
+    JOIN nemotecnicos_fi n ON REPLACE(n.nemotecnico, '-', '') = REPLACE(d.nemo, '-', '')
     JOIN fund_currency fc ON fc.run_fondo = n.run_fondo AND fc.serie = n.serie
     WHERE d.val_acc > 0
       AND d.fec_lim IS NOT NULL
