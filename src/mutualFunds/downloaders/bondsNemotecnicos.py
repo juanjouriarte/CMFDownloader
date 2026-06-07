@@ -40,4 +40,5 @@ class BonosNemotecnicosDownloader(BaseDownloader):
         self.logger.info("Bonos nemotecnicos: %.0f KB → %s", len(resp.content) / 1024, path)
 
         rows = load_bonos(path)
+        path.unlink(missing_ok=True)
         return DownloadResult(downloaded=1, rows_upserted=rows)

@@ -61,6 +61,7 @@ class CarterasDownloader(BaseDownloader):
         if self._should_skip(dest) and dest.exists() and dest.stat().st_size > MIN_FILE_BYTES:
             self.logger.debug("%d-%02d %s: ya existe — cargando desde archivo", year, month, tipo)
             rows = load_cartera(dest, tipo, year, month)
+            dest.unlink(missing_ok=True)
             return DownloadResult(skipped=1, rows_upserted=rows)
 
         session = make_session(headers={
@@ -83,6 +84,7 @@ class CarterasDownloader(BaseDownloader):
         self.logger.info("%d-%02d %s: %.0f KB descargados", year, month, tipo, len(resp.content) / 1024)
 
         rows = load_cartera(dest, tipo, year, month)
+        dest.unlink(missing_ok=True)
         return DownloadResult(downloaded=1, rows_upserted=rows)
 
     def _last_period_in_db(self) -> date | None:

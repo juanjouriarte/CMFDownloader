@@ -14,6 +14,9 @@ DOWNLOADS_DIR: Path = Path(os.getenv("DOWNLOADS_DIR", "./downloads"))
 
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 
+BOLSA_COOKIES: str = os.getenv("BOLSA_COOKIES", "")
+BOLSA_CSRF: str = os.getenv("BOLSA_CSRF", "")
+
 BASE = "https://www.cmfchile.cl"
 
 
@@ -23,6 +26,8 @@ class CMFUrl(StrEnum):
     CARTOLA_POST    = f"{BASE}/institucional/estadisticas/cfm_download.php"
     CARTOLA_CAPTCHA = f"{BASE}/sitio/biblioteca/captcha2/captcha.php"
     NEMOTECNICOS    = f"{BASE}/institucional/seil/certificacion_cir1835_fmutuos.php"
+    FI_NEMOTECNICOS  = f"{BASE}/institucional/seil/certificacion_cir1835_finversion.php"
+    FI_IDENTIDAD     = f"{BASE}/institucional/mercados/consulta.php?mercado=V&entidad={{tipo}}&entidadT={{tipo}}&consulta={{tipo}}&Estado={{estado}}"
     CARTERAS_PAGE      = f"{BASE}/institucional/estadisticas/ffm_cartera.php"
     CARTERAS_POST      = f"{BASE}/institucional/estadisticas/ffm_download.php"
     BONOS_NEMOTECNICOS = f"{BASE}/institucional/estadisticas/listado_tasa_fiscal.php"

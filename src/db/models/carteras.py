@@ -12,7 +12,6 @@ class _CarteraBase:
     id: Mapped[int] = mapped_column(BigInteger, autoincrement=True, primary_key=True)
     periodo: Mapped[date] = mapped_column(Date, nullable=False)
     run_fondo: Mapped[str] = mapped_column(String(20), nullable=False)
-    nombre_fondo: Mapped[str | None] = mapped_column(Text)
 
 
 class CarteraNaci(_CarteraBase, Base):
