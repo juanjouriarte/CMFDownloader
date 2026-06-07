@@ -152,6 +152,24 @@ Classifies all FI funds based on IFRS quarterly cartera positions using `pct_act
 
 Large/Small Cap detection uses `rut_emisor` overlap with IPSA ETF (run_fondo `10748`) — dynamic, no hardcoded tickers. Results persisted to `categoria_fi` table and refreshed on day 5 of each month.
 
+### Rentability materialized views
+
+Two materialized views compute returns for 1D/1W/1M/1Y/5Y/YTD periods, refreshed daily via the scheduler with `REFRESH MATERIALIZED VIEW CONCURRENTLY`.
+
+**`mv_rentabilidad_fm`** (Mutual Funds) — total return:
+```
+r = (VC_end × PRODUCT(factor_reparto in period)) / VC_start - 1
+```
+- `factor_reparto` is the daily reinvestment multiplier for distributions; cumulative product via `EXP(SUM(LN(factor)))` over valid factors only (NaN/NULL/0 → neutral 1.0).
+
+**`mv_rentabilidad_fi`** (rescatable Investment Funds only) — NAV + dividends:
+```
+r = (VL_end - VL_start + SUM(dividends in period)) / VL_start × 100
+```
+- `VL` = `valores_cuota_fi.valor_libro`. Dividends matched via `nemotecnicos_fi` → `dividendos` using `fec_lim` (ex-date), currency-matched: `$$`/CLP → `$`, `PROM`/USD → `US$` (no FX needed). Hyphen formats normalized (`CFICOF4A-E` = `CFI-COF4AE`).
+
+Both pick the **most-populated date within the last 7 days** as reference, so CMF publish lag (typically 1-2 days) never reduces fund coverage. Note: raw CMF data occasionally has corrupt `valor_cuota` jumps for individual fund/series — the views reflect source data faithfully and do not mask these.
+
 ### Scheduler jobs (America/Santiago)
 
 | Job ID | Schedule | Description |
@@ -162,10 +180,12 @@ Large/Small Cap detection uses `rut_emisor` overlap with IPSA ETF (run_fondo `10
 | `fi_tickers` | Daily 08:15 | FI cuota tickers |
 | `fi_identity` | Daily 08:20 | FI fund registry (rescatable/vigente) |
 | `mf_daily_nav` | Daily 08:30 | MF daily cartola (NAV/AUM/flows) |
+| `mf_rentabilidad` | Daily 09:15 | Refresh `mv_rentabilidad_fm` (FM returns) |
 | `mf_portfolios` | Day 5 of month 09:00 | MF monthly investment portfolios |
 | `mf_costs` | Day 5 of month 09:30 | MF monthly TAC costs |
 | `dividends` | Daily 09:00 | Dividends + capital changes (Bolsa de Santiago) |
 | `fi_daily_nav` | Daily 09:30 | FI daily NAV/AUM (vigente funds only) |
+| `fi_rentabilidad` | Daily 10:00 | Refresh `mv_rentabilidad_fi` (FI returns) |
 | `fi_shareholders` | Day 5 of month 10:00 | FI quarterly shareholders + cuotas (vigente only) |
 | `fi_portfolios` | Day 5 of month 10:30 | FI quarterly IFRS portfolio positions (vigente only) |
 | `fi_categories` | Day 5 of month 11:00 | FI fund classification → categoria_fi |
@@ -205,6 +225,8 @@ Large/Small Cap detection uses `rut_emisor` overlap with IPSA ETF (run_fondo `10
 | `dividendos` | 75,469 | Dividends + capital changes 1973–2026 (Bolsa de Santiago) |
 | `job_runs` | growing | Scheduler job execution history (status, duration, rows, errors) |
 | `categoria_fi` | 851 | FI fund classifications — refreshed quarterly |
+| `mv_rentabilidad_fm` (MV) | ~2,900 | FM returns 1D/1W/1M/1Y/5Y/YTD (total return via factor_reparto). Refreshed daily |
+| `mv_rentabilidad_fi` (MV) | ~380 | FI rescatable returns 1D/1W/1M/1Y/5Y/YTD (NAV + dividends). Refreshed daily |
 
 ## Git Workflow
 

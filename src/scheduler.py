@@ -49,6 +49,23 @@ def _finish(run_id: int | None, status: str, **kwargs) -> None:
         logger.exception("Failed to persist job_run id=%s", run_id)
 
 
+def _refresh_view(view: str):
+    from sqlalchemy import text
+    from src.base import DownloadResult
+    with SessionLocal() as s:
+        s.execute(text(f"REFRESH MATERIALIZED VIEW CONCURRENTLY {view}"))
+        s.commit()
+    return DownloadResult(downloaded=1)
+
+
+def _refresh_rentabilidad_fi():
+    return _refresh_view("mv_rentabilidad_fi")
+
+
+def _refresh_rentabilidad_fm():
+    return _refresh_view("mv_rentabilidad_fm")
+
+
 def register_jobs(scheduler: BaseScheduler) -> None:
     """Register all cron jobs on the given scheduler instance."""
 
@@ -100,6 +117,10 @@ def register_jobs(scheduler: BaseScheduler) -> None:
         "cron", hour=8, minute=30, id="mf_daily_nav",
     )
     scheduler.add_job(
+        _job("mf_rentabilidad", _refresh_rentabilidad_fm),
+        "cron", hour=9, minute=15, id="mf_rentabilidad",
+    )
+    scheduler.add_job(
         _job("mf_portfolios", lambda: CarterasDownloader().run()),
         "cron", day=5, hour=9, minute=0, id="mf_portfolios",
     )
@@ -114,6 +135,10 @@ def register_jobs(scheduler: BaseScheduler) -> None:
     scheduler.add_job(
         _job("fi_daily_nav", lambda: ValoresCuotaFIDownloader().run()),
         "cron", hour=9, minute=30, id="fi_daily_nav",
+    )
+    scheduler.add_job(
+        _job("fi_rentabilidad", _refresh_rentabilidad_fi),
+        "cron", hour=10, minute=0, id="fi_rentabilidad",
     )
     scheduler.add_job(
         _job("fi_shareholders", lambda: AportantesDownloader().run()),
