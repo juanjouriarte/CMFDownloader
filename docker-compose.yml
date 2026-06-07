@@ -1,0 +1,24 @@
+services:
+  web:
+    build: .
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - DOWNLOADS_DIR=${DOWNLOADS_DIR:-/app/downloads}
+      - BOLSA_COOKIES=${BOLSA_COOKIES}
+      - BOLSA_CSRF=${BOLSA_CSRF}
+      - API_TOKEN=${API_TOKEN}
+
+  worker:
+    build: .
+    command: python worker.py
+    restart: always
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - DOWNLOADS_DIR=${DOWNLOADS_DIR:-/app/downloads}
+      - BOLSA_COOKIES=${BOLSA_COOKIES}
+      - BOLSA_CSRF=${BOLSA_CSRF}
