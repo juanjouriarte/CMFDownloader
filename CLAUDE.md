@@ -26,7 +26,8 @@ Two Oracle Cloud Always Free VMs (VM.Standard.E2.1.Micro — 1 OCPU, 1 GB RAM ea
 | `cmf-btg-db` | — | `146.181.47.236` | `10.0.0.42` | PostgreSQL 16 (port 5433) |
 | `cmf-btg-app` | — | `146.181.34.54` | `10.0.0.10` | web + worker (Docker, port 8080) |
 
-**API base URL**: `http://146.181.34.54:8080` (temporary — move behind Cloudflare when domain is ready)
+**API base URL**: `https://financial-cmf.ddns.net` (nginx + Let's Encrypt SSL, DuckDNS-style domain via No-IP)
+**MCP endpoint**: `https://financial-cmf.ddns.net/mcp/sse` (add in Claude.ai → Settings → Integrations)
 
 ### SSH access
 ```bash
@@ -59,12 +60,17 @@ psql -h localhost -p 5433 -U cmf -d cmf
 src/
 ├── api/                      # Public read API — CORS-open, cached (max-age=3600)
 │   ├── deps.py               # Shared: Pagination (limit/offset) + CacheHook (Cache-Control header)
-│   ├── funds.py              # /funds — FM list, detail, NAV history, portfolio
-│   ├── investment_funds.py   # /investment-funds — FI list, detail, NAV history
+│   ├── funds.py              # /funds — FM list, detail, NAV history, portfolio (SII-enriched)
+│   ├── investment_funds.py   # /investment-funds — FI list, detail, NAV history, portfolio (SII-enriched)
 │   ├── rentability.py        # /rentability/fm + /rentability/fi — rankings from MVs
 │   ├── categories.py         # /categories/fi — FI classifications
 │   ├── shareholders.py       # /shareholders — fund/entity/admin/compare endpoints
+│   ├── admins.py             # /admins — administradora list + detail (from mv_administradores)
 │   └── router.py             # Assembles all sub-routers
+├── mcp_server.py             # FastMCP server — 10 tools for fund-market intelligence (see MCP section)
+├── sii/                      # SII (tax authority) company registry
+│   ├── __init__.py
+│   └── load_emisores.py      # Loads ~994k Chilean companies → emisores table
 ├── financialStatements/      # IFRS statements for all CMF-supervised companies
 │   ├── downloaders/
 │   │   └── financialStatementsDownloader.py
@@ -123,6 +129,7 @@ src/
 │       ├── aportantes_fi.py        # aportantes_fi + cuotas_fi
 │       ├── carteras_fi.py          # cartera_fi_nac/ext/met_part/fut_fw
 │       ├── entidades.py            # entidades (canonical names)
+│       ├── emisores.py            # SIIEmisor — SII company registry (rut → razon_social)
 │       ├── dividendos.py           # dividendos
 │       ├── job_runs.py             # job_runs (scheduler execution history)
 │       └── categoria_fi.py         # categoria_fi (FI fund classifications)
@@ -136,7 +143,9 @@ alembic/                      # Migration scripts
 tests/                        # pytest unit tests for loaders + classifiers
 main.py                       # Web entrypoint: FastAPI only (no scheduler)
 worker.py                     # Worker entrypoint: BlockingScheduler only
-fly.toml                      # Fly.io app config — web + worker process groups
+mcp_worker.py                 # MCP entrypoint: FastMCP SSE server on port 8081
+docker-compose.yml            # Oracle deploy — web + worker + mcp process groups
+fly.toml                      # Fly.io app config (alternative deploy target)
 Dockerfile
 .dockerignore
 ```
@@ -147,11 +156,14 @@ Dockerfile
 
 ### Process architecture
 
-The app runs as **two independent OS processes** on a single Fly Machine:
-- `web` — `uvicorn main:app` — serves HTTP only, no scheduler
-- `worker` — `python worker.py` — runs `BlockingScheduler` with all 13 jobs
+The app runs as **three independent containers** on the `cmf-btg-app` VM (`docker-compose.yml`):
+- `web` — `uvicorn main:app` (port 8080) — public read API, no scheduler
+- `worker` — `python worker.py` — `BlockingScheduler` with all 16 jobs
+- `mcp` — `python mcp_worker.py` (port 8081) — FastMCP SSE server for Claude
 
-Defined in `fly.toml [processes]`. A crash in `web` does not affect `worker` and vice versa.
+All three have `restart: always`. A crash in one does not affect the others. nginx on the
+host terminates HTTPS (`financial-cmf.ddns.net`) and reverse-proxies `/` → 8080 and
+`/mcp/` + `/messages/` → 8081.
 
 ### Downloader interface
 
@@ -214,17 +226,47 @@ r = (VL_end - VL_start + SUM(dividends in period)) / VL_start × 100
 
 Both pick the **most-populated date within the last 7 days** as reference, so CMF publish lag (typically 1-2 days) never reduces fund coverage. Note: raw CMF data occasionally has corrupt `valor_cuota` jumps for individual fund/series — the views reflect source data faithfully and do not mask these.
 
+### `mv_administradores` materialized view
+
+Unified administradora dimension derived entirely from existing tables (no new download). Joins `fondo_mutuo` (FM, has admin RUT) with `fondos_inversion` (FI, name only) via `LOWER(TRIM(nombre))` match — name matching works because both come from the same CMF source. ~50 rows, refreshed daily at 09:20. Columns: `rut`, `nombre`, `funds_fm`, `funds_fm_vigente`, `funds_fi`, `funds_fi_vigente`, `funds_total`.
+
+### SII company registry (`emisores`)
+
+The `emisores` table holds ~994k Chilean companies from the SII (tax authority) registry — `rut`, `dv`, `razon_social`. Loaded via `src/sii/load_emisores.py` from a tab-separated SII export (one-off, refreshed yearly). Used to resolve `rut_emisor` → company name in the portfolio endpoints.
+
+**Coverage**: All SII RUTs are ≥ 50M (companies). Chilean individuals have lower RUTs, so loan/mortgage funds whose "issuers" are individual debtors won't match — by design. Match rates: **96%** on `cartera_naci` (FM), **73%** on `cartera_fi_nac` (FI; remainder are individual debtors).
+
+### MCP server (`src/mcp_server.py`)
+
+FastMCP server exposing 10 tools for AI-driven fund-market analysis. Runs as the `mcp` container (`mcp_worker.py`, SSE on port 8081), reverse-proxied by nginx at `/mcp/sse`. Connected to Claude.ai via Settings → Integrations. Tools:
+
+| Tool | Purpose |
+|---|---|
+| `search_funds` | Find FM/FI funds by name or admin |
+| `compare_funds` | Side-by-side returns for 2+ funds |
+| `top_funds_by_return` | Rankings by 1D/1W/1M/1Y/5Y/YTD |
+| `net_new_money_ranking` | Aportes − rescates by AGF or fund (FM only) |
+| `get_fund_full_picture` | Identity, returns, flows, portfolio, shareholders |
+| `get_administrator_full_picture` | AUM, market share, best/worst funds, flows, shareholders |
+| `compare_administrators` | M&A view: shared shareholders, AUM, merge scenario |
+| `get_shareholder_positions` | Track an institutional investor across funds/time |
+| `potential_clients` | Market shareholders NOT in an admin's funds |
+| `market_overview` | Total market snapshot: AUM, top AGFs, flows, top performers |
+
+AUM figures are CLP. Net new money uses `cartola_diaria` generated columns. The `mcp` container only needs `DATABASE_URL`.
+
 ### Scheduler jobs (America/Santiago)
 
 | Job ID | Schedule | Description |
 |---|---|---|
 | `bonds_tickers` | Daily 08:00 | FM bond tickers with fiscal rate |
-| `fm_identity` | Daily 08:00 | MF fund identity register |
+| `fm_identity` | Daily 08:10 | MF fund identity register |
 | `mf_tickers` | Daily 08:15 | MF series nemotecnicos |
 | `fi_tickers` | Daily 08:15 | FI cuota tickers |
 | `fi_identity` | Daily 08:20 | FI fund registry (rescatable/vigente) |
 | `mf_daily_nav` | Daily 08:30 | MF daily cartola (NAV/AUM/flows) |
 | `mf_rentabilidad` | Daily 09:15 | Refresh `mv_rentabilidad_fm` (FM returns) |
+| `administradores` | Daily 09:20 | Refresh `mv_administradores` (admin fund counts) |
 | `mf_portfolios` | Day 5 of month 09:00 | MF monthly investment portfolios |
 | `mf_costs` | Day 5 of month 09:30 | MF monthly TAC costs |
 | `dividends` | Daily 09:00 | Dividends + capital changes (Bolsa de Santiago) |
@@ -245,13 +287,16 @@ All public endpoints return `Cache-Control: public, max-age=3600` and allow all 
 | `GET /funds` | List FM funds. Filters: `admin`, `tipo_fondo`, `vigente` |
 | `GET /funds/{run}` | FM fund detail: identity + latest NAV per serie + rentability from MV |
 | `GET /funds/{run}/nav` | FM NAV history for charts. Filters: `serie`, `from_date`, `to_date` |
-| `GET /funds/{run}/portfolio` | FM latest quarter portfolio (naci + extr positions) |
+| `GET /funds/{run}/portfolio` | FM latest quarter portfolio (naci + extr), SII-enriched `nombre_emisor` |
 | `GET /investment-funds` | List FI funds. Filters: `admin`, `rescatable`, `vigente` |
 | `GET /investment-funds/{run}` | FI fund detail: identity + latest NAV + rentability |
 | `GET /investment-funds/{run}/nav` | FI NAV history |
+| `GET /investment-funds/{run}/portfolio` | FI latest quarter portfolio (nac + ext), SII-enriched, sorted by weight |
 | `GET /rentability/fm` | FM return rankings from `mv_rentabilidad_fm`. Sort: `r_1d/r_1w/r_1m/r_1y/r_5y/r_ytd` |
 | `GET /rentability/fi` | FI return rankings from `mv_rentabilidad_fi`. Same sort options |
 | `GET /categories/fi` | FI fund classifications. Filters: `categoria`, `tipo`, `admin` |
+| `GET /admins` | List administradoras with FM+FI fund counts. Filter: `search` |
+| `GET /admins/{rut}` | Single administradora by RUT |
 | `GET /shareholders/fund/{run}` | Shareholder evolution for a fund across quarters |
 | `GET /shareholders/entity/{rut}` | All fund positions held by a shareholder across time |
 | `GET /shareholders/admin` | Top shareholders aggregated across an admin's funds. Required: `admin` |
@@ -291,11 +336,13 @@ All public endpoints return `Cache-Control: public, max-age=3600` and allow all 
 | `cartera_fi_met_part` | 1,600+ | FI equity method investments |
 | `cartera_fi_fut_fw` | 12K+ | FI futures + forwards positions |
 | `entidades` | 4,521 | Canonical entity names by RUT (normalized from aportantes_fi) |
+| `emisores` | 994K+ | SII company registry (rut → razon_social). Enriches portfolio endpoints |
 | `dividendos` | 75,469 | Dividends + capital changes 1973–2026 (Bolsa de Santiago) |
 | `job_runs` | growing | Scheduler job execution history (status, duration, rows, errors) |
 | `categoria_fi` | 851 | FI fund classifications — refreshed quarterly |
 | `mv_rentabilidad_fm` (MV) | ~2,900 | FM returns 1D/1W/1M/1Y/5Y/YTD (total return via factor_reparto). Refreshed daily |
 | `mv_rentabilidad_fi` (MV) | ~380 | FI rescatable returns 1D/1W/1M/1Y/5Y/YTD (NAV + dividends). Refreshed daily |
+| `mv_administradores` (MV) | ~50 | Admin dimension: FM+FI fund counts per administradora. Refreshed daily |
 
 ## Git Workflow
 

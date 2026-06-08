@@ -20,6 +20,17 @@ class FundFIItem(BaseModel):
     vigente: bool | None
 
 
+class FIPortfolioPosition(BaseModel):
+    source: str
+    nemotecnico: str | None
+    rut_emisor: str | None
+    nombre_emisor: str | None
+    tipo_instrumento: str | None
+    pct_activo_fondo: float | None
+    valorizacion_cierre: float | None
+    clasif_riesgo: str | None
+
+
 class NavFI(BaseModel):
     serie: str | None
     moneda: str | None
@@ -170,3 +181,45 @@ def get_investment_fund_nav(
     with SessionLocal() as session:
         rows = session.execute(sql, params).mappings().all()
     return [NavPointFI(**dict(r)) for r in rows]
+
+
+@router.get("/{run}/portfolio", response_model=list[FIPortfolioPosition])
+def get_investment_fund_portfolio(run: str, _: CacheHook) -> list[FIPortfolioPosition]:
+    """Latest quarter portfolio positions for an investment fund, enriched with SII company names."""
+    with SessionLocal() as session:
+        latest = session.execute(
+            text("SELECT MAX(periodo) FROM cartera_fi_nac WHERE run_fondo = :run"),
+            {"run": run},
+        ).scalar_one_or_none()
+
+        if not latest:
+            return []
+
+        naci = session.execute(
+            text("""
+                SELECT 'naci' AS source, c.nemotecnico, c.rut_emisor,
+                       e.razon_social AS nombre_emisor,
+                       c.tipo_instrumento, c.pct_activo_fondo,
+                       c.valorizacion_cierre, c.clasif_riesgo
+                FROM cartera_fi_nac c
+                LEFT JOIN emisores e ON e.rut = c.rut_emisor
+                WHERE c.run_fondo = :run AND c.periodo = :period
+                ORDER BY c.pct_activo_fondo DESC NULLS LAST
+            """),
+            {"run": run, "period": latest},
+        ).mappings().all()
+
+        extr = session.execute(
+            text("""
+                SELECT 'extr' AS source, c.nemo_isin AS nemotecnico, NULL AS rut_emisor,
+                       c.nombre_emisor,
+                       c.tipo_instrumento, c.pct_activo_fondo,
+                       c.valorizacion_cierre, c.clasif_riesgo
+                FROM cartera_fi_ext c
+                WHERE c.run_fondo = :run AND c.periodo = :period
+                ORDER BY c.pct_activo_fondo DESC NULLS LAST
+            """),
+            {"run": run, "period": latest},
+        ).mappings().all()
+
+    return [FIPortfolioPosition(**dict(r)) for r in naci] + [FIPortfolioPosition(**dict(r)) for r in extr]

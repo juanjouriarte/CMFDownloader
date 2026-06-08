@@ -65,6 +65,8 @@ class NavPoint(BaseModel):
 class PortfolioPosition(BaseModel):
     source: str
     nemotecnico: str | None
+    rut_emisor: str | None
+    nombre_emisor: str | None
     tipo_instrumento: str | None
     porcentaje_activos_fondo: str | None
     valorizacion_cierre: str | None
@@ -207,20 +209,25 @@ def get_fund_portfolio(run: str, _: CacheHook) -> list[PortfolioPosition]:
 
         naci = session.execute(
             text("""
-                SELECT 'naci' AS source, nemotecnico, tipo_instrumento,
-                       porcentaje_activos_fondo, valorizacion_cierre, clasificacion_riesgo
-                FROM cartera_naci
-                WHERE run_fondo = :run AND periodo = :period
+                SELECT 'naci' AS source, c.nemotecnico, c.rut_emisor,
+                       e.razon_social AS nombre_emisor,
+                       c.tipo_instrumento, c.porcentaje_activos_fondo,
+                       c.valorizacion_cierre, c.clasificacion_riesgo
+                FROM cartera_naci c
+                LEFT JOIN emisores e ON e.rut = c.rut_emisor
+                WHERE c.run_fondo = :run AND c.periodo = :period
             """),
             {"run": run, "period": latest},
         ).mappings().all()
 
         extr = session.execute(
             text("""
-                SELECT 'extr' AS source, nemotecnico, tipo_instrumento,
-                       porcentaje_activos_fondo, valorizacion_cierre, clasificacion_riesgo
-                FROM cartera_extr
-                WHERE run_fondo = :run AND periodo = :period
+                SELECT 'extr' AS source, c.nemotecnico, NULL AS rut_emisor,
+                       c.nombre_emisor,
+                       c.tipo_instrumento, c.porcentaje_activos_fondo,
+                       c.valorizacion_cierre, c.clasificacion_riesgo
+                FROM cartera_extr c
+                WHERE c.run_fondo = :run AND c.periodo = :period
             """),
             {"run": run, "period": latest},
         ).mappings().all()
