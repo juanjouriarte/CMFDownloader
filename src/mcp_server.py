@@ -171,12 +171,15 @@ def top_funds_by_return(
     fund_type: Literal["fm", "fi"] = "fm",
     sort_by: Literal["r_1d", "r_1w", "r_1m", "r_1y", "r_5y", "r_ytd"] = "r_1y",
     admin: str | None = None,
+    as_of_date: str | None = None,
     limit: int = 20,
 ) -> list[dict]:
     """
     Ranking of best performing funds by return period.
     fund_type: 'fm' for mutual funds, 'fi' for investment funds.
     sort_by: r_1d=1 day, r_1w=1 week, r_1m=1 month, r_1y=1 year, r_5y=5 years, r_ytd=year-to-date.
+    as_of_date: optional YYYY-MM-DD — compute returns dynamically as of that date instead of today's MV.
+    FM returns include factor_reparto (distributions). FI returns are NAV-only (no dividends) when as_of_date is set.
     """
     if sort_by not in _SORT_COLS:
         sort_by = "r_1y"
@@ -186,25 +189,131 @@ def top_funds_by_return(
     if admin:
         params["admin"] = f"%{admin}%"
 
+    # No as_of_date — use today's materialized view (fast path)
+    if not as_of_date:
+        if fund_type == "fm":
+            return _rows(f"""
+                SELECT run_fondo, serie, nombre_fondo, administrador,
+                       valor_actual, fecha_calculo,
+                       r_1d, r_1w, r_1m, r_1y, r_5y, r_ytd
+                FROM mv_rentabilidad_fm
+                WHERE {sort_by} IS NOT NULL {admin_filter}
+                ORDER BY {sort_by} DESC NULLS LAST
+                LIMIT :limit
+            """, params)
+        else:
+            return _rows(f"""
+                SELECT r.run_fondo, r.serie, f.razon_social AS nombre, r.administrador,
+                       r.valor_actual, r.fecha_calculo,
+                       r.r_1d, r.r_1w, r.r_1m, r.r_1y, r.r_5y, r.r_ytd
+                FROM mv_rentabilidad_fi r
+                LEFT JOIN fondos_inversion f ON f.run_fondo = r.run_fondo
+                WHERE r.{sort_by} IS NOT NULL {admin_filter}
+                ORDER BY r.{sort_by} DESC NULLS LAST
+                LIMIT :limit
+            """, params)
+
+    # Dynamic historical computation
+    interval_sql = {
+        "r_1d":  "INTERVAL '1 day'",
+        "r_1w":  "INTERVAL '7 days'",
+        "r_1m":  "INTERVAL '1 month'",
+        "r_1y":  "INTERVAL '1 year'",
+        "r_5y":  "INTERVAL '5 years'",
+        "r_ytd": None,
+    }[sort_by]
+
+    start_sql = (
+        f":as_of::date - {interval_sql}"
+        if interval_sql
+        else "DATE_TRUNC('year', :as_of::date)"
+    )
+    params["as_of"] = as_of_date
+
     if fund_type == "fm":
+        admin_join_filter = "AND fm.razon_social_administradora ILIKE :admin" if admin else ""
         return _rows(f"""
-            SELECT run_fondo, serie, nombre_fondo, administrador,
-                   valor_actual, fecha_calculo,
-                   r_1d, r_1w, r_1m, r_1y, r_5y, r_ytd
-            FROM mv_rentabilidad_fm
-            WHERE {sort_by} IS NOT NULL {admin_filter}
-            ORDER BY {sort_by} DESC NULLS LAST
+            WITH end_ref AS (
+                SELECT fecha FROM cartola_diaria
+                WHERE fecha <= :as_of::date
+                GROUP BY fecha ORDER BY COUNT(DISTINCT run_fondo) DESC, fecha DESC
+                LIMIT 1
+            ),
+            start_ref AS (
+                SELECT fecha FROM cartola_diaria
+                WHERE fecha <= {start_sql}
+                GROUP BY fecha ORDER BY COUNT(DISTINCT run_fondo) DESC, fecha DESC
+                LIMIT 1
+            ),
+            end_nav AS (
+                SELECT run_fondo, serie, valor_cuota, fecha
+                FROM cartola_diaria WHERE fecha = (SELECT fecha FROM end_ref)
+            ),
+            start_nav AS (
+                SELECT run_fondo, serie, valor_cuota
+                FROM cartola_diaria WHERE fecha = (SELECT fecha FROM start_ref)
+            ),
+            dist AS (
+                SELECT run_fondo, serie,
+                       EXP(SUM(LN(factor_reparto))) AS cum_factor
+                FROM cartola_diaria
+                WHERE fecha >  (SELECT fecha FROM start_ref)
+                  AND fecha <= (SELECT fecha FROM end_ref)
+                  AND factor_reparto > 0 AND factor_reparto IS NOT NULL
+                GROUP BY run_fondo, serie
+            )
+            SELECT
+                e.run_fondo, e.serie,
+                fm.nombre_fondo,
+                fm.razon_social_administradora AS administrador,
+                e.valor_cuota                  AS valor_actual,
+                e.fecha                        AS fecha_calculo,
+                ROUND((e.valor_cuota * COALESCE(d.cum_factor, 1)
+                       / NULLIF(s.valor_cuota, 0) - 1) * 100, 4) AS retorno
+            FROM end_nav e
+            JOIN start_nav s ON s.run_fondo = e.run_fondo AND s.serie = e.serie
+            LEFT JOIN dist d ON d.run_fondo = e.run_fondo AND d.serie = e.serie
+            JOIN fondo_mutuo fm ON fm.run_fondo = e.run_fondo
+            WHERE s.valor_cuota > 0 {admin_join_filter}
+            ORDER BY retorno DESC NULLS LAST
             LIMIT :limit
         """, params)
     else:
+        admin_join_filter = "AND fi.administrador ILIKE :admin" if admin else ""
         return _rows(f"""
-            SELECT r.run_fondo, r.serie, f.razon_social AS nombre, r.administrador,
-                   r.valor_actual, r.fecha_calculo,
-                   r.r_1d, r.r_1w, r.r_1m, r.r_1y, r.r_5y, r.r_ytd
-            FROM mv_rentabilidad_fi r
-            LEFT JOIN fondos_inversion f ON f.run_fondo = r.run_fondo
-            WHERE r.{sort_by} IS NOT NULL {admin_filter}
-            ORDER BY r.{sort_by} DESC NULLS LAST
+            WITH end_ref AS (
+                SELECT fecha FROM valores_cuota_fi
+                WHERE fecha <= :as_of::date
+                GROUP BY fecha ORDER BY COUNT(DISTINCT run_fondo) DESC, fecha DESC
+                LIMIT 1
+            ),
+            start_ref AS (
+                SELECT fecha FROM valores_cuota_fi
+                WHERE fecha <= {start_sql}
+                GROUP BY fecha ORDER BY COUNT(DISTINCT run_fondo) DESC, fecha DESC
+                LIMIT 1
+            ),
+            end_nav AS (
+                SELECT run_fondo, serie, valor_libro, fecha
+                FROM valores_cuota_fi WHERE fecha = (SELECT fecha FROM end_ref)
+            ),
+            start_nav AS (
+                SELECT run_fondo, serie, valor_libro
+                FROM valores_cuota_fi WHERE fecha = (SELECT fecha FROM start_ref)
+            )
+            SELECT
+                e.run_fondo, e.serie,
+                fi.razon_social AS nombre,
+                fi.administrador,
+                e.valor_libro   AS valor_actual,
+                e.fecha         AS fecha_calculo,
+                ROUND((e.valor_libro - s.valor_libro)
+                      / NULLIF(s.valor_libro, 0) * 100, 4) AS retorno
+            FROM end_nav e
+            JOIN start_nav s ON s.run_fondo = e.run_fondo AND s.serie = e.serie
+            JOIN fondos_inversion fi ON fi.run_fondo = e.run_fondo
+            WHERE s.valor_libro > 0 {admin_join_filter}
+            ORDER BY retorno DESC NULLS LAST
             LIMIT :limit
         """, params)
 
@@ -213,48 +322,66 @@ def top_funds_by_return(
 def net_new_money_ranking(
     period: Literal["this_month", "last_month", "last_3m", "last_6m", "ytd", "last_12m"] = "this_month",
     group_by: Literal["agf", "fund"] = "agf",
+    from_date: str | None = None,
+    to_date: str | None = None,
     limit: int = 20,
 ) -> list[dict]:
     """
-    Rank AGFs or individual funds by net new money (aportes - rescates) for any period.
+    Rank AGFs or individual funds by net new money (aportes - rescates).
     Positive = attracted capital. Negative = net outflows.
     Only covers mutual funds (FM) — CMF does not publish FI flow data.
+    from_date / to_date (YYYY-MM-DD): custom date range — overrides period when provided.
+    period: preset bucket used only when from_date/to_date are not set.
     """
-    period_filter = _PERIOD_SQL[period]
+    params: dict = {"limit": limit}
+
+    if from_date or to_date:
+        conditions = ["cd.monto_aportado IS NOT NULL"]
+        if from_date:
+            conditions.append("cd.fecha >= :from_date")
+            params["from_date"] = from_date
+        if to_date:
+            conditions.append("cd.fecha <= :to_date")
+            params["to_date"] = to_date
+        period_filter = " AND ".join(conditions)
+    else:
+        period_filter = _PERIOD_SQL[period] + " AND cd.monto_aportado IS NOT NULL"
 
     if group_by == "agf":
         return _rows(f"""
             SELECT
-                fm.razon_social_administradora              AS administrador,
-                ROUND(SUM(cd.monto_aportado)::numeric / 1e9, 2)     AS aportes_bn_clp,
-                ROUND(SUM(cd.monto_rescatado)::numeric / 1e9, 2)    AS rescates_bn_clp,
-                ROUND(SUM(cd.monto_aportado - cd.monto_rescatado)::numeric / 1e9, 2) AS net_new_money_bn_clp,
-                COUNT(DISTINCT cd.run_fondo)                AS num_fondos
+                fm.razon_social_administradora                                          AS administrador,
+                ROUND(SUM(cd.monto_aportado)::numeric / 1e9, 2)                        AS aportes_bn_clp,
+                ROUND(SUM(cd.monto_rescatado)::numeric / 1e9, 2)                       AS rescates_bn_clp,
+                ROUND(SUM(cd.monto_aportado - cd.monto_rescatado)::numeric / 1e9, 2)   AS net_new_money_bn_clp,
+                COUNT(DISTINCT cd.run_fondo)                                            AS num_fondos,
+                MIN(cd.fecha)                                                           AS desde,
+                MAX(cd.fecha)                                                           AS hasta
             FROM cartola_diaria cd
             JOIN fondo_mutuo fm ON fm.run_fondo = cd.run_fondo
             WHERE {period_filter}
-              AND cd.monto_aportado IS NOT NULL
             GROUP BY fm.razon_social_administradora
             ORDER BY net_new_money_bn_clp DESC NULLS LAST
             LIMIT :limit
-        """, {"limit": limit})
+        """, params)
     else:
         return _rows(f"""
             SELECT
                 cd.run_fondo,
                 fm.nombre_fondo,
-                fm.razon_social_administradora              AS administrador,
-                ROUND(SUM(cd.monto_aportado)::numeric / 1e9, 2)     AS aportes_bn_clp,
-                ROUND(SUM(cd.monto_rescatado)::numeric / 1e9, 2)    AS rescates_bn_clp,
-                ROUND(SUM(cd.monto_aportado - cd.monto_rescatado)::numeric / 1e9, 2) AS net_new_money_bn_clp
+                fm.razon_social_administradora                                          AS administrador,
+                ROUND(SUM(cd.monto_aportado)::numeric / 1e9, 2)                        AS aportes_bn_clp,
+                ROUND(SUM(cd.monto_rescatado)::numeric / 1e9, 2)                       AS rescates_bn_clp,
+                ROUND(SUM(cd.monto_aportado - cd.monto_rescatado)::numeric / 1e9, 2)   AS net_new_money_bn_clp,
+                MIN(cd.fecha)                                                           AS desde,
+                MAX(cd.fecha)                                                           AS hasta
             FROM cartola_diaria cd
             JOIN fondo_mutuo fm ON fm.run_fondo = cd.run_fondo
             WHERE {period_filter}
-              AND cd.monto_aportado IS NOT NULL
             GROUP BY cd.run_fondo, fm.nombre_fondo, fm.razon_social_administradora
             ORDER BY net_new_money_bn_clp DESC NULLS LAST
             LIMIT :limit
-        """, {"limit": limit})
+        """, params)
 
 
 @mcp.tool()
