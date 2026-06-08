@@ -1,6 +1,6 @@
 # CMF Downloader
 
-ETL pipeline that downloads public fund datasets from the Chilean CMF (Comisión para el Mercado Financiero) and Bolsa de Santiago, and loads them into PostgreSQL.
+ETL pipeline that downloads public fund datasets from the Chilean CMF (Comisión para el Mercado Financiero) and Bolsa de Santiago, loads them into PostgreSQL, and serves them through a public REST API plus an MCP server for AI-driven market analysis.
 
 ---
 
@@ -9,12 +9,12 @@ ETL pipeline that downloads public fund datasets from the Chilean CMF (Comisión
 ### Infrastructure
 - [x] Project structure: domain packages with `downloaders/`, `loaders/`, `db/models/`
 - [x] `BaseDownloader` with incremental `run()` + historical `backfill()`
-- [x] APScheduler (13 jobs) — daily + monthly + quarterly
-- [x] **Scheduler decoupled from web process** — `web` (FastAPI) and `worker` (BlockingScheduler) run as independent OS processes via Fly.io `[processes]`
+- [x] APScheduler (16 jobs) — daily + monthly + quarterly
+- [x] **Decoupled processes** — `web` (FastAPI), `worker` (BlockingScheduler), and `mcp` (FastMCP SSE) run as independent containers via `docker-compose`
 - [x] **Job run tracking** — every scheduler execution recorded in `job_runs` (status, duration, rows, errors)
 - [x] **Retry logic** — all downloaders use `make_session()` with a `Retry` transport adapter (3 attempts, exponential backoff, 429/5xx)
 - [x] Alembic migrations for all tables — `alembic/env.py` imports all models
-- [x] `fly.toml` — web + worker process groups defined
+- [x] `docker-compose.yml` — web + worker + mcp containers (`fly.toml` kept as alternative)
 - [x] Dockerfile + `.dockerignore`
 - [x] FastAPI app with `/health` + `/financial-statements/download`
 - [x] Delete downloaded files immediately after load (no disk accumulation)
@@ -45,28 +45,37 @@ ETL pipeline that downloads public fund datasets from the Chilean CMF (Comisión
 - [x] **FI Fund classifier** (`investmentFundsCategories.py`) — 20 subcategories across Capital Privado, Inmobiliario, Infraestructura, Accionario (Large/Small Cap), Deuda, and Fondo de Fondos. Uses `pct_activo_fondo` portfolio weights + IPSA ETF for size detection. Results in `categoria_fi` table, refreshed quarterly
 - [x] **Series classification** — `tipo_serie` derived from TAC `caracteristicas`
 - [x] **Canonical entity names** — `entidades` table maps RUT → canonical name
+- [x] **SII company registry** — `emisores` table: ~994k Chilean companies (rut → razon_social). Resolves `rut_emisor` → company name (96% on FM portfolios, 73% on FI)
+- [x] **Admin dimension** — `mv_administradores` materialized view: FM+FI fund counts per administradora, joined by name. Refreshed daily
 - [x] **Rentability (FM)** — `mv_rentabilidad_fm` materialized view: total return 1D/1W/1M/1Y/5Y/YTD via `valor_cuota` × cumulative `factor_reparto`. Refreshed daily
 - [x] **Rentability (FI rescatables)** — `mv_rentabilidad_fi` materialized view: NAV + dividends (CLP & USD currency-matched via `nemotecnicos_fi` → `dividendos`). Refreshed daily
 
 ### Public API (`src/api/`)
-- [x] **CORS + caching** — all endpoints open (`allow_origins=["*"]`), `Cache-Control: public, max-age=3600` for Cloudflare edge caching
-- [x] **Fund endpoints** — `GET /funds` (list + filter), `/funds/{run}` (detail), `/funds/{run}/nav` (chart data), `/funds/{run}/portfolio` (holdings)
-- [x] **Investment fund endpoints** — `GET /investment-funds`, `/investment-funds/{run}`, `/investment-funds/{run}/nav`
+- [x] **CORS + caching** — all endpoints open (`allow_origins=["*"]`), `Cache-Control: public, max-age=3600` for edge caching
+- [x] **Fund endpoints** — `GET /funds` (list + filter), `/funds/{run}` (detail), `/funds/{run}/nav` (chart data), `/funds/{run}/portfolio` (holdings, SII-enriched)
+- [x] **Investment fund endpoints** — `GET /investment-funds`, `/investment-funds/{run}`, `/investment-funds/{run}/nav`, `/investment-funds/{run}/portfolio` (SII-enriched)
 - [x] **Rentability rankings** — `GET /rentability/fm` + `/rentability/fi` from materialized views, sortable by 1D/1W/1M/1Y/5Y/YTD
 - [x] **FI categories** — `GET /categories/fi` with latest period per fund
+- [x] **Administradoras** — `GET /admins` (list + fund counts), `/admins/{rut}` (detail)
 - [x] **Shareholder endpoints**:
   - `GET /shareholders/fund/{run}` — evolution of holders in a fund across quarters
   - `GET /shareholders/entity/{rut}` — track one holder across all funds and time
   - `GET /shareholders/admin` — top holders aggregated across an admin's funds
   - `GET /shareholders/compare` — side-by-side admin comparison: shared holders, exclusives, merge AUM summary
 
+### MCP Server (`src/mcp_server.py`)
+- [x] **FastMCP server with 10 tools** — `search_funds`, `compare_funds`, `top_funds_by_return`, `net_new_money_ranking`, `get_fund_full_picture`, `get_administrator_full_picture`, `compare_administrators`, `get_shareholder_positions`, `potential_clients`, `market_overview`
+- [x] **Remote integration** — SSE on port 8081, reverse-proxied at `/mcp/sse`, connected to Claude.ai via Settings → Integrations
+- [x] **AI-driven market intelligence** — M&A analysis, net new money rankings, shareholder overlap, prospecting
+
 ### Deployment
 - [x] **Deployed on Oracle Cloud Always Free** — 2x AMD VMs (1 OCPU / 1 GB RAM each), $0/month
   - `cmf-btg-db` (`146.181.47.236`) — PostgreSQL 16 on port 5433, system install (no Docker)
-  - `cmf-btg-app` (`146.181.34.54`) — web + worker via `docker-compose`, port 8080
+  - `cmf-btg-app` (`146.181.34.54`) — web + worker + mcp via `docker-compose`
 - [x] **DB restored** — 386 MB dump (6.9M rows in `cartola_diaria`) loaded via `pg_restore`
-- [x] **API live** at `http://146.181.34.54:8080`
-- [x] **`docker-compose.yml`** — web + worker as separate containers with `restart: always`
+- [x] **HTTPS live** at `https://financial-cmf.ddns.net` — No-IP domain + nginx + Let's Encrypt
+- [x] **nginx reverse proxy** — `/` → web (8080), `/mcp/` + `/messages/` → mcp (8081)
+- [x] **`docker-compose.yml`** — web + worker + mcp as separate containers with `restart: always`
 
 ### Deploy commands
 ```bash
@@ -88,22 +97,16 @@ sudo docker compose logs -f
 
 ## TODO
 
-### Security & Domain
-- [ ] **Buy domain** (~$1/year on Namecheap for `.xyz`) 
-- [ ] **Set up Cloudflare** — proxy in front of `cmf-btg-app`, free DDoS protection + SSL + caching
-- [ ] **Lock Oracle firewall** — restrict port 8080 to Cloudflare IPs only (currently open to `0.0.0.0/0`)
+### Security
+- [ ] **Lock Oracle firewall** — restrict ports 8080/8081 to nginx-only; expose only 443 publicly
 - [ ] **GitHub Actions auto-deploy** — SSH on push to `main`, replace manual `git pull`
+- [ ] **API_TOKEN** — currently blank (dev mode); set a real token on production
 
 ### DB Improvements
-- [ ] **Alerting** — Slack/email webhook when `job_runs.status = 'error'`
-- [ ] **Data-quality checks** — flag corrupt `valor_cuota` jumps in CMF source feed
-
-### DB Improvements
+- [ ] **Load SII `emisores` on production** — table exists via migration but is empty on Oracle; transfer + load `sii_dbb.txt`
 - [ ] **Alerting** — Slack/email webhook when `job_runs.status = 'error'`
 - [ ] **Table partitioning** — partition `cartola_diaria`, `valores_cuota_fi`, `financial_statements` by year (requires data reload)
-- [ ] **Fix `factor_reparto` NaN → NULL** in cartola loader (data quality; views already filter NaN)
 - [ ] **Data-quality checks** — flag corrupt `valor_cuota` jumps in CMF source feed
-- [ ] `VACUUM FULL` on cartera tables after backfill
 
 ### MCP Server improvements
 - [ ] **Historical return rankings** — `top_funds_by_return` currently reads from the daily MV (today's snapshot only). Add `as_of_date` param that recomputes returns dynamically from `cartola_diaria` for any past date. Enables "what was the ranking on May 15?" queries.
