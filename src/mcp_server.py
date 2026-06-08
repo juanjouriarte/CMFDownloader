@@ -22,6 +22,8 @@ When answering questions:
 - Rentability figures are percentages (already multiplied by 100 for FM, direct for FI)
 - When comparing funds, always note the fund type (FM vs FI) and currency (CLP vs USD)
 - Use multiple tools to build a complete picture before answering
+- Portfolio tools use SII emisores data (96% match on FM, 73% on FI — unmatched are individual debtors by design)
+- emisor_fund_exposure and top_emisores_in_market only cover domestic (NACI) portfolios; foreign positions lack RUT
 """,
 )
 
@@ -740,3 +742,344 @@ def market_overview() -> dict:
     """)
 
     return result
+
+
+@mcp.tool()
+def get_fund_portfolio(
+    run_fondo: str,
+    fund_type: Literal["fm", "fi"] = "fm",
+    periodo: str | None = None,
+) -> dict:
+    """
+    Full portfolio positions for a fund (FM or FI) for the latest or a specific quarter.
+    Returns all positions enriched with SII company names plus a summary by instrument type.
+    periodo format: 'YYYY-MM-DD' (quarter-end date) — omit for latest available.
+    Use search_funds first to find run_fondo values.
+    """
+    result: dict = {}
+
+    if fund_type == "fm":
+        if not periodo:
+            periodo = _scalar(
+                "SELECT MAX(periodo) FROM cartera_naci WHERE run_fondo = :run",
+                {"run": run_fondo},
+            )
+        if not periodo:
+            return {"error": "No portfolio data found for this fund"}
+        result["periodo"] = str(periodo)
+
+        result["naci"] = _rows("""
+            SELECT c.nemotecnico, c.rut_emisor,
+                   COALESCE(e.razon_social, c.rut_emisor) AS nombre_emisor,
+                   c.tipo_instrumento,
+                   CAST(NULLIF(c.porcentaje_activos_fondo, '') AS numeric) AS pct_activo_fondo,
+                   CAST(NULLIF(c.valorizacion_cierre, '')      AS numeric) AS valorizacion_cierre,
+                   c.clasificacion_riesgo, c.tir, c.fecha_vencimiento,
+                   c.cantidad_unidades, c.tipo_unidades, c.moneda_liquidacion,
+                   c.porcentaje_valor_par, c.tipo_interes,
+                   c.codigo_pais_emisor, c.situacion_instrumento,
+                   c.porcentaje_capital_emisor, c.porcentaje_activos_emisor,
+                   c.codigo_grupo_empresarial
+            FROM cartera_naci c
+            LEFT JOIN emisores e ON e.rut = c.rut_emisor
+            WHERE c.run_fondo = :run AND c.periodo = :periodo
+            ORDER BY CAST(NULLIF(c.porcentaje_activos_fondo, '') AS numeric) DESC NULLS LAST
+        """, {"run": run_fondo, "periodo": periodo})
+
+        result["extr"] = _rows("""
+            SELECT c.nemotecnico, c.nombre_emisor, c.tipo_instrumento,
+                   CAST(NULLIF(c.porcentaje_activos_fondo, '') AS numeric) AS pct_activo_fondo,
+                   CAST(NULLIF(c.valorizacion_cierre, '')      AS numeric) AS valorizacion_cierre,
+                   c.clasificacion_riesgo, c.tir, c.fecha_vencimiento,
+                   c.tipo_unidades, c.codigo_pais_emisor, c.situacion_instrumento,
+                   c.nombre_grupo_empresarial
+            FROM cartera_extr c
+            WHERE c.run_fondo = :run AND c.periodo = :periodo
+            ORDER BY CAST(NULLIF(c.porcentaje_activos_fondo, '') AS numeric) DESC NULLS LAST
+        """, {"run": run_fondo, "periodo": periodo})
+
+        result["by_tipo_instrumento"] = _rows("""
+            SELECT tipo_instrumento,
+                   COUNT(*) AS posiciones,
+                   ROUND(SUM(CAST(NULLIF(porcentaje_activos_fondo, '') AS numeric))::numeric, 2) AS pct_total_fondo
+            FROM cartera_naci
+            WHERE run_fondo = :run AND periodo = :periodo
+            GROUP BY tipo_instrumento
+            ORDER BY pct_total_fondo DESC NULLS LAST
+        """, {"run": run_fondo, "periodo": periodo})
+
+    else:
+        if not periodo:
+            periodo = _scalar(
+                "SELECT MAX(periodo) FROM cartera_fi_nac WHERE run_fondo = :run",
+                {"run": run_fondo},
+            )
+        if not periodo:
+            return {"error": "No portfolio data found for this fund"}
+        result["periodo"] = str(periodo)
+
+        result["naci"] = _rows("""
+            SELECT c.nemotecnico, c.rut_emisor,
+                   COALESCE(e.razon_social, c.rut_emisor) AS nombre_emisor,
+                   c.tipo_instrumento, c.pct_activo_fondo,
+                   c.valorizacion_cierre, c.clasif_riesgo,
+                   c.tir_val_par_precio, c.fecha_vencimiento,
+                   c.cant_unidades, c.tipo_unidades, c.cod_moneda_liquidacion,
+                   c.tipo_interes, c.pct_capital_emisor, c.pct_activo_emisor,
+                   c.situacion_instrumento, c.clasif_esf, c.cod_pais
+            FROM cartera_fi_nac c
+            LEFT JOIN emisores e ON e.rut = c.rut_emisor
+            WHERE c.run_fondo = :run AND c.periodo = :periodo
+            ORDER BY c.pct_activo_fondo DESC NULLS LAST
+        """, {"run": run_fondo, "periodo": periodo})
+
+        result["extr"] = _rows("""
+            SELECT c.nemo_isin AS nemotecnico, c.nombre_emisor,
+                   c.tipo_instrumento, c.pct_activo_fondo,
+                   c.valorizacion_cierre, c.clasif_riesgo,
+                   c.tir_val_par_precio, c.fecha_vencimiento,
+                   c.cant_unidades, c.tipo_unidades, c.cod_moneda_liquidacion,
+                   c.tipo_interes, c.pct_capital_emisor, c.pct_activo_emisor,
+                   c.situacion_instrumento, c.clasif_esf, c.cod_pais
+            FROM cartera_fi_ext c
+            WHERE c.run_fondo = :run AND c.periodo = :periodo
+            ORDER BY c.pct_activo_fondo DESC NULLS LAST
+        """, {"run": run_fondo, "periodo": periodo})
+
+        result["by_tipo_instrumento"] = _rows("""
+            SELECT tipo_instrumento,
+                   COUNT(*) AS posiciones,
+                   ROUND(SUM(pct_activo_fondo)::numeric, 2) AS pct_total_fondo
+            FROM cartera_fi_nac
+            WHERE run_fondo = :run AND periodo = :periodo
+            GROUP BY tipo_instrumento
+            ORDER BY pct_total_fondo DESC NULLS LAST
+        """, {"run": run_fondo, "periodo": periodo})
+
+    return result
+
+
+@mcp.tool()
+def top_emisores_in_market(
+    fund_type: Literal["fm", "fi"] = "fm",
+    tipo_instrumento: str | None = None,
+    limit: int = 30,
+) -> list[dict]:
+    """
+    Ranking of companies (emisores) by how many funds hold them and total portfolio weight.
+    Reveals market-wide concentration in specific issuers.
+    fund_type: 'fm' uses cartera_naci, 'fi' uses cartera_fi_nac (domestic only).
+    tipo_instrumento: optional filter, e.g. 'ACCION', 'BONO', 'DEPOSITO'.
+    """
+    tipo_filter = "AND c.tipo_instrumento ILIKE :tipo" if tipo_instrumento else ""
+    params: dict = {"limit": limit}
+    if tipo_instrumento:
+        params["tipo"] = f"%{tipo_instrumento}%"
+
+    if fund_type == "fm":
+        return _rows(f"""
+            WITH latest AS (SELECT MAX(periodo) AS t FROM cartera_naci)
+            SELECT
+                c.rut_emisor,
+                COALESCE(e.razon_social, c.rut_emisor)                         AS nombre_emisor,
+                COUNT(DISTINCT c.run_fondo)                                    AS num_fondos,
+                COUNT(DISTINCT fm.razon_social_administradora)                 AS num_admins,
+                ROUND(AVG(CAST(NULLIF(c.porcentaje_activos_fondo,'') AS numeric))::numeric, 4) AS avg_pct_fondo,
+                ROUND(SUM(CAST(NULLIF(c.porcentaje_activos_fondo,'') AS numeric))::numeric, 2) AS sum_pct_across_funds,
+                STRING_AGG(DISTINCT c.tipo_instrumento, ', ')                  AS tipos_instrumento
+            FROM cartera_naci c
+            LEFT JOIN emisores e ON e.rut = c.rut_emisor
+            JOIN fondo_mutuo fm ON fm.run_fondo = c.run_fondo
+            WHERE c.periodo = (SELECT t FROM latest)
+              AND c.rut_emisor IS NOT NULL
+              {tipo_filter}
+            GROUP BY c.rut_emisor, e.razon_social
+            ORDER BY num_fondos DESC, sum_pct_across_funds DESC
+            LIMIT :limit
+        """, params)
+    else:
+        return _rows(f"""
+            WITH latest AS (SELECT MAX(periodo) AS t FROM cartera_fi_nac)
+            SELECT
+                c.rut_emisor,
+                COALESCE(e.razon_social, c.rut_emisor)          AS nombre_emisor,
+                COUNT(DISTINCT c.run_fondo)                     AS num_fondos,
+                COUNT(DISTINCT fi.administrador)                AS num_admins,
+                ROUND(AVG(c.pct_activo_fondo)::numeric, 4)      AS avg_pct_fondo,
+                ROUND(SUM(c.pct_activo_fondo)::numeric, 2)      AS sum_pct_across_funds,
+                STRING_AGG(DISTINCT c.tipo_instrumento, ', ')   AS tipos_instrumento
+            FROM cartera_fi_nac c
+            LEFT JOIN emisores e ON e.rut = c.rut_emisor
+            JOIN fondos_inversion fi ON fi.run_fondo = c.run_fondo
+            WHERE c.periodo = (SELECT t FROM latest)
+              AND c.rut_emisor IS NOT NULL
+              {tipo_filter}
+            GROUP BY c.rut_emisor, e.razon_social
+            ORDER BY num_fondos DESC, sum_pct_across_funds DESC
+            LIMIT :limit
+        """, params)
+
+
+@mcp.tool()
+def emisor_fund_exposure(
+    rut: str | None = None,
+    nombre: str | None = None,
+    fund_type: Literal["fm", "fi", "all"] = "all",
+    limit: int = 50,
+) -> dict:
+    """
+    Given a company (emisor) by RUT or partial name, show every fund that holds it
+    and at what portfolio weight. Useful for systemic risk analysis or understanding
+    how concentrated an issuer is across the Chilean fund industry.
+    Covers domestic (NACI) portfolios only — foreign positions lack RUT.
+    """
+    if not rut and not nombre:
+        return {"error": "Provide either rut or nombre"}
+
+    result: dict = {}
+
+    if fund_type in ("fm", "all"):
+        if rut:
+            condition = "c.rut_emisor = :id"
+            params: dict = {"id": rut, "limit": limit}
+        else:
+            condition = "e.razon_social ILIKE :id"
+            params = {"id": f"%{nombre}%", "limit": limit}
+
+        result["fm"] = _rows(f"""
+            WITH latest AS (SELECT MAX(periodo) AS t FROM cartera_naci)
+            SELECT
+                c.rut_emisor,
+                COALESCE(e.razon_social, c.rut_emisor)                          AS nombre_emisor,
+                c.run_fondo, fm.nombre_fondo,
+                fm.razon_social_administradora                                   AS administrador,
+                c.tipo_instrumento, c.nemotecnico,
+                CAST(NULLIF(c.porcentaje_activos_fondo, '') AS numeric)          AS pct_activo_fondo,
+                CAST(NULLIF(c.valorizacion_cierre, '')      AS numeric)          AS valorizacion_cierre,
+                c.clasificacion_riesgo, c.tir, c.fecha_vencimiento
+            FROM cartera_naci c
+            LEFT JOIN emisores e ON e.rut = c.rut_emisor
+            JOIN fondo_mutuo fm ON fm.run_fondo = c.run_fondo
+            WHERE c.periodo = (SELECT t FROM latest)
+              AND {condition}
+            ORDER BY pct_activo_fondo DESC NULLS LAST
+            LIMIT :limit
+        """, params)
+
+    if fund_type in ("fi", "all"):
+        if rut:
+            condition = "c.rut_emisor = :id"
+            params = {"id": rut, "limit": limit}
+        else:
+            condition = "e.razon_social ILIKE :id"
+            params = {"id": f"%{nombre}%", "limit": limit}
+
+        result["fi"] = _rows(f"""
+            WITH latest AS (SELECT MAX(periodo) AS t FROM cartera_fi_nac)
+            SELECT
+                c.rut_emisor,
+                COALESCE(e.razon_social, c.rut_emisor)  AS nombre_emisor,
+                c.run_fondo, fi.razon_social             AS fondo,
+                fi.administrador,
+                c.tipo_instrumento, c.nemotecnico,
+                c.pct_activo_fondo,
+                c.valorizacion_cierre,
+                c.clasif_riesgo, c.tir_val_par_precio, c.fecha_vencimiento
+            FROM cartera_fi_nac c
+            LEFT JOIN emisores e ON e.rut = c.rut_emisor
+            JOIN fondos_inversion fi ON fi.run_fondo = c.run_fondo
+            WHERE c.periodo = (SELECT t FROM latest)
+              AND {condition}
+            ORDER BY c.pct_activo_fondo DESC NULLS LAST
+            LIMIT :limit
+        """, params)
+
+    return result
+
+
+@mcp.tool()
+def portfolio_overlap(
+    run_fondo_a: str,
+    run_fondo_b: str,
+    fund_type: Literal["fm", "fi"] = "fm",
+) -> dict:
+    """
+    Portfolio overlap between two funds for the latest quarter.
+    Returns shared positions (matched by rut_emisor), exclusive positions, and an overlap score.
+    Useful for detecting closet indexing, comparing similar strategies, or M&A synergy analysis.
+    Use search_funds first to find run_fondo values.
+    """
+    if fund_type == "fm":
+        shared = _rows("""
+            WITH la AS (SELECT MAX(periodo) AS t FROM cartera_naci WHERE run_fondo = :a),
+                 lb AS (SELECT MAX(periodo) AS t FROM cartera_naci WHERE run_fondo = :b)
+            SELECT
+                a.rut_emisor,
+                COALESCE(e.razon_social, a.rut_emisor)                         AS nombre_emisor,
+                a.nemotecnico, a.tipo_instrumento,
+                CAST(NULLIF(a.porcentaje_activos_fondo, '') AS numeric)         AS pct_fondo_a,
+                CAST(NULLIF(b.porcentaje_activos_fondo, '') AS numeric)         AS pct_fondo_b
+            FROM cartera_naci a
+            JOIN cartera_naci b
+              ON b.rut_emisor = a.rut_emisor
+             AND b.run_fondo = :b AND b.periodo = (SELECT t FROM lb)
+            LEFT JOIN emisores e ON e.rut = a.rut_emisor
+            WHERE a.run_fondo = :a AND a.periodo = (SELECT t FROM la)
+              AND a.rut_emisor IS NOT NULL
+            ORDER BY pct_fondo_a DESC NULLS LAST
+        """, {"a": run_fondo_a, "b": run_fondo_b})
+
+        count_a = _scalar("""
+            SELECT COUNT(*) FROM cartera_naci
+            WHERE run_fondo = :run
+              AND periodo = (SELECT MAX(periodo) FROM cartera_naci WHERE run_fondo = :run)
+        """, {"run": run_fondo_a}) or 0
+        count_b = _scalar("""
+            SELECT COUNT(*) FROM cartera_naci
+            WHERE run_fondo = :run
+              AND periodo = (SELECT MAX(periodo) FROM cartera_naci WHERE run_fondo = :run)
+        """, {"run": run_fondo_b}) or 0
+    else:
+        shared = _rows("""
+            WITH la AS (SELECT MAX(periodo) AS t FROM cartera_fi_nac WHERE run_fondo = :a),
+                 lb AS (SELECT MAX(periodo) AS t FROM cartera_fi_nac WHERE run_fondo = :b)
+            SELECT
+                a.rut_emisor,
+                COALESCE(e.razon_social, a.rut_emisor)  AS nombre_emisor,
+                a.nemotecnico, a.tipo_instrumento,
+                a.pct_activo_fondo                       AS pct_fondo_a,
+                b.pct_activo_fondo                       AS pct_fondo_b
+            FROM cartera_fi_nac a
+            JOIN cartera_fi_nac b
+              ON b.rut_emisor = a.rut_emisor
+             AND b.run_fondo = :b AND b.periodo = (SELECT t FROM lb)
+            LEFT JOIN emisores e ON e.rut = a.rut_emisor
+            WHERE a.run_fondo = :a AND a.periodo = (SELECT t FROM la)
+              AND a.rut_emisor IS NOT NULL
+            ORDER BY a.pct_activo_fondo DESC NULLS LAST
+        """, {"a": run_fondo_a, "b": run_fondo_b})
+
+        count_a = _scalar("""
+            SELECT COUNT(*) FROM cartera_fi_nac
+            WHERE run_fondo = :run
+              AND periodo = (SELECT MAX(periodo) FROM cartera_fi_nac WHERE run_fondo = :run)
+        """, {"run": run_fondo_a}) or 0
+        count_b = _scalar("""
+            SELECT COUNT(*) FROM cartera_fi_nac
+            WHERE run_fondo = :run
+              AND periodo = (SELECT MAX(periodo) FROM cartera_fi_nac WHERE run_fondo = :run)
+        """, {"run": run_fondo_b}) or 0
+
+    n_shared = len(shared)
+    union = count_a + count_b - n_shared
+    jaccard = round(n_shared / union * 100, 1) if union else 0.0
+
+    return {
+        "summary": {
+            "positions_fund_a": count_a,
+            "positions_fund_b": count_b,
+            "shared_positions": n_shared,
+            "jaccard_overlap_pct": jaccard,
+        },
+        "shared_positions": shared,
+    }

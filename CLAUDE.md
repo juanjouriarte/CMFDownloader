@@ -252,6 +252,10 @@ FastMCP server exposing 10 tools for AI-driven fund-market analysis. Runs as the
 | `get_shareholder_positions` | Track an institutional investor across funds/time |
 | `potential_clients` | Market shareholders NOT in an admin's funds |
 | `market_overview` | Total market snapshot: AUM, top AGFs, flows, top performers |
+| `get_fund_portfolio` | Full portfolio positions (FM or FI) with all fields + SII names + instrument-type summary |
+| `top_emisores_in_market` | Rank companies by how many funds hold them + total weight (FM or FI, domestic) |
+| `emisor_fund_exposure` | Given a company (RUT or name), list every fund holding it with weight and instrument type |
+| `portfolio_overlap` | Jaccard overlap score + shared positions between two funds |
 
 AUM figures are CLP. Net new money uses `cartola_diaria` generated columns. The `mcp` container only needs `DATABASE_URL`.
 
