@@ -105,6 +105,10 @@ sudo docker compose logs -f
 - [ ] **Data-quality checks** — flag corrupt `valor_cuota` jumps in CMF source feed
 - [ ] `VACUUM FULL` on cartera tables after backfill
 
+### MCP Server improvements
+- [ ] **Historical return rankings** — `top_funds_by_return` currently reads from the daily MV (today's snapshot only). Add `as_of_date` param that recomputes returns dynamically from `cartola_diaria` for any past date. Enables "what was the ranking on May 15?" queries.
+- [ ] **Flexible net new money date range** — add `from_date` / `to_date` params to `net_new_money_ranking` instead of fixed periods. Enables "flows the week after the election" type analysis.
+
 ### New Data Sources
 - [ ] **Official AFM categorization** — actual Circular 7 category per fund as declared by administrator
 - [ ] **Rentabilidad oficial** — CMF/AFM official return indices per fund category
