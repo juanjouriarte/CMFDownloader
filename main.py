@@ -14,7 +14,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.financialStatements.api import router as financial_statements_router
 from src.api import router as public_api_router
-from src.mcp_server import mcp
 
 app = FastAPI(title="CMF Downloader")
 
@@ -27,7 +26,6 @@ app.add_middleware(
 
 app.include_router(financial_statements_router)
 app.include_router(public_api_router)
-app.mount("/mcp", mcp.sse_app())
 
 
 @app.get("/health")

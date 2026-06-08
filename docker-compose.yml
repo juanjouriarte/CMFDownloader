@@ -22,3 +22,12 @@ services:
       - DOWNLOADS_DIR=${DOWNLOADS_DIR:-/app/downloads}
       - BOLSA_COOKIES=${BOLSA_COOKIES}
       - BOLSA_CSRF=${BOLSA_CSRF}
+
+  mcp:
+    build: .
+    command: python mcp_worker.py
+    restart: always
+    ports:
+      - "8081:8081"
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
