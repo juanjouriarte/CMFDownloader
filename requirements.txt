@@ -10,3 +10,4 @@ uvicorn[standard]
 google-genai
 beautifulsoup4
 pytest
+mcp[cli]
