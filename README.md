@@ -96,7 +96,6 @@ sudo docker compose logs -f
 
 ### DB Improvements
 - [ ] **Alerting** — Slack/email webhook when `job_runs.status = 'error'`
-- [ ] **Fix `factor_reparto` NaN → NULL** in cartola loader (data quality; views already filter NaN)
 - [ ] **Data-quality checks** — flag corrupt `valor_cuota` jumps in CMF source feed
 
 ### DB Improvements
