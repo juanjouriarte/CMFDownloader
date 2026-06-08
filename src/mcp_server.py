@@ -625,16 +625,20 @@ def potential_clients(admin: str, limit: int = 20) -> list[dict]:
     Ranked by number of funds they hold with other administrators.
     """
     return _rows("""
-        WITH admin_holders AS (
+        WITH ref_period AS (
+            -- Use the most recent quarter where BOTH the admin and the broader
+            -- market have published data, so both sides use the same snapshot.
+            SELECT MAX(a.periodo) AS t
+            FROM aportantes_fi a
+            JOIN fondos_inversion fi ON fi.run_fondo = a.run_fondo
+            WHERE fi.administrador ILIKE :admin
+        ),
+        admin_holders AS (
             SELECT DISTINCT a.rut
             FROM aportantes_fi a
             JOIN fondos_inversion fi ON fi.run_fondo = a.run_fondo
             WHERE fi.administrador ILIKE :admin AND a.rut IS NOT NULL
-              AND a.periodo = (
-                  SELECT MAX(x.periodo) FROM aportantes_fi x
-                  JOIN fondos_inversion g ON g.run_fondo = x.run_fondo
-                  WHERE g.administrador ILIKE :admin
-              )
+              AND a.periodo = (SELECT t FROM ref_period)
         ),
         all_holders AS (
             SELECT
@@ -647,7 +651,7 @@ def potential_clients(admin: str, limit: int = 20) -> list[dict]:
             FROM aportantes_fi a
             JOIN fondos_inversion fi ON fi.run_fondo = a.run_fondo
             WHERE a.rut IS NOT NULL
-              AND a.periodo = (SELECT MAX(periodo) FROM aportantes_fi)
+              AND a.periodo = (SELECT t FROM ref_period)
             GROUP BY a.rut, COALESCE(a.nombre_canonical, a.nombre), a.tipo_persona
         )
         SELECT h.rut, h.nombre, h.tipo_persona,
