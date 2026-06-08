@@ -4,18 +4,54 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Purpose
 
-Daily ETL pipeline that downloads public datasets from the Chilean CMF (Comisión para el Mercado Financiero) and Bolsa de Santiago, and loads them into a PostgreSQL database. Both the app and the database run on Fly.io.
+Daily ETL pipeline that downloads public datasets from the Chilean CMF (Comisión para el Mercado Financiero) and Bolsa de Santiago, loads them into PostgreSQL, and exposes a public read API.
 
 ## Stack
 
 - **Language**: Python 3.11
-- **Database**: PostgreSQL (Fly.io managed `fly pg` cluster)
+- **Database**: PostgreSQL 16
 - **HTTP**: `requests` (sync downloads) + `urllib3.util.retry.Retry` transport adapter
 - **Data parsing**: `pandas`, `beautifulsoup4`, `xlrd`
 - **ORM / migrations**: `SQLAlchemy` (sync engine) + `Alembic`
-- **Scheduling**: `APScheduler` — `web` (FastAPI) and `worker` (BlockingScheduler) run as separate processes via Fly `[processes]`
+- **Scheduling**: `APScheduler` — `web` (FastAPI) and `worker` (BlockingScheduler) run as separate processes via `docker-compose`
 - **API**: FastAPI
-- **Deployment**: Fly.io (`fly.toml` defined)
+- **Deployment**: Oracle Cloud Always Free (2x AMD VMs) via `docker-compose`
+
+## Infrastructure
+
+Two Oracle Cloud Always Free VMs (VM.Standard.E2.1.Micro — 1 OCPU, 1 GB RAM each):
+
+| VM | Hostname | Public IP | Private IP | Runs |
+|---|---|---|---|---|
+| `cmf-btg-db` | — | `146.181.47.236` | `10.0.0.42` | PostgreSQL 16 (port 5433) |
+| `cmf-btg-app` | — | `146.181.34.54` | `10.0.0.10` | web + worker (Docker, port 8080) |
+
+**API base URL**: `http://146.181.34.54:8080` (temporary — move behind Cloudflare when domain is ready)
+
+### SSH access
+```bash
+ssh -i ~/.ssh/oracle_cmf.key ubuntu@146.181.34.54   # app VM
+ssh -i ~/.ssh/oracle_cmf.key ubuntu@146.181.47.236  # db VM
+```
+
+### Deploy (manual, until GitHub Actions is set up)
+```bash
+ssh -i ~/.ssh/oracle_cmf.key ubuntu@146.181.34.54
+cd ~/CMFDownloader
+git pull origin main
+sudo docker compose run --rm web alembic upgrade head
+sudo docker compose up -d --build
+```
+
+### DB connection (from app VM)
+```
+postgresql://cmf:cmf2026secure@10.0.0.42:5433/cmf
+```
+
+### DB connection (from db VM directly)
+```bash
+psql -h localhost -p 5433 -U cmf -d cmf
+```
 
 ## Architecture
 

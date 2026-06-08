@@ -60,30 +60,44 @@ ETL pipeline that downloads public fund datasets from the Chilean CMF (Comisión
   - `GET /shareholders/admin` — top holders aggregated across an admin's funds
   - `GET /shareholders/compare` — side-by-side admin comparison: shared holders, exclusives, merge AUM summary
 
-### Deployment readiness
-- [x] **Scheduler decoupled** — `web` + `worker` as separate processes
-- [x] **Retry logic** on all downloaders
-- [x] **API authentication** — bearer token (`API_TOKEN`) on `POST /financial-statements/download`
-- [x] **Job tracking** — `job_runs` table
-- [x] **Composite indexes** + generated flow columns (`monto_aportado`/`monto_rescatado`)
-- [x] **`fly.toml`** (release_command, health check) + **`docker-compose.yml`** for Coolify/Oracle
+### Deployment
+- [x] **Deployed on Oracle Cloud Always Free** — 2x AMD VMs (1 OCPU / 1 GB RAM each), $0/month
+  - `cmf-btg-db` (`146.181.47.236`) — PostgreSQL 16 on port 5433, system install (no Docker)
+  - `cmf-btg-app` (`146.181.34.54`) — web + worker via `docker-compose`, port 8080
+- [x] **DB restored** — 386 MB dump (6.9M rows in `cartola_diaria`) loaded via `pg_restore`
+- [x] **API live** at `http://146.181.34.54:8080`
+- [x] **`docker-compose.yml`** — web + worker as separate containers with `restart: always`
+
+### Deploy commands
+```bash
+# SSH into app VM
+ssh -i ~/.ssh/oracle_cmf.key ubuntu@146.181.34.54
+cd ~/CMFDownloader
+
+# Pull latest + migrate + restart
+git pull origin main
+sudo docker compose run --rm web alembic upgrade head
+sudo docker compose up -d --build
+
+# Check status
+sudo docker compose ps
+sudo docker compose logs -f
+```
 
 ---
 
 ## TODO
 
-### Deploy
-- [ ] **Deploy to Oracle Cloud (Always Free) + Coolify** — ARM VM (4 OCPU / 24 GB / 200 GB), self-hosted Postgres + Coolify for git-push deploys
-  ```bash
-  # On the Oracle VM
-  curl -fsSL https://cdn.coollabs.io/coolify/install.sh | bash
-  # In Coolify UI: connect repo, set env vars, pre-deploy = alembic upgrade head, add Postgres service
+### Security & Domain
+- [ ] **Buy domain** (~$1/year on Namecheap for `.xyz`) 
+- [ ] **Set up Cloudflare** — proxy in front of `cmf-btg-app`, free DDoS protection + SSL + caching
+- [ ] **Lock Oracle firewall** — restrict port 8080 to Cloudflare IPs only (currently open to `0.0.0.0/0`)
+- [ ] **GitHub Actions auto-deploy** — SSH on push to `main`, replace manual `git pull`
 
-  # Migrate local DB (~3.3 GB, ~20 min at 300 Mbps)
-  pg_dump $DATABASE_URL -Fc -f cmf_backup.dump
-  pg_restore -h <oracle-ip> -p <coolify-pg-port> -U postgres -d cmf cmf_backup.dump
-  ```
-  (`fly.toml` also kept as an alternative — managed but ~$15/mo vs $0)
+### DB Improvements
+- [ ] **Alerting** — Slack/email webhook when `job_runs.status = 'error'`
+- [ ] **Fix `factor_reparto` NaN → NULL** in cartola loader (data quality; views already filter NaN)
+- [ ] **Data-quality checks** — flag corrupt `valor_cuota` jumps in CMF source feed
 
 ### DB Improvements
 - [ ] **Alerting** — Slack/email webhook when `job_runs.status = 'error'`
