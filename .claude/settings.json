@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "btg-cmf": {
+      "command": "/Users/juanjouriarte/Desktop/Proyectos/BTG/CMFDownloader/.venv/bin/python",
+      "args": ["mcp_worker.py"],
+      "env": {
+        "DATABASE_URL": "postgresql://cmf:cmf@127.0.0.1:5432/cmf"
+      },
+      "cwd": "/Users/juanjouriarte/Desktop/Proyectos/BTG/CMFDownloader"
+    }
+  }
+}
