@@ -29,6 +29,17 @@ class FIPortfolioPosition(BaseModel):
     pct_activo_fondo: float | None
     valorizacion_cierre: float | None
     clasif_riesgo: str | None
+    tir_val_par_precio: float | None
+    fecha_vencimiento: str | None
+    cant_unidades: float | None
+    tipo_unidades: str | None
+    cod_moneda_liquidacion: str | None
+    tipo_interes: str | None
+    pct_capital_emisor: float | None
+    pct_activo_emisor: float | None
+    situacion_instrumento: str | None
+    clasif_esf: str | None
+    cod_pais: str | None
 
 
 class NavFI(BaseModel):
@@ -200,7 +211,11 @@ def get_investment_fund_portfolio(run: str, _: CacheHook) -> list[FIPortfolioPos
                 SELECT 'naci' AS source, c.nemotecnico, c.rut_emisor,
                        e.razon_social AS nombre_emisor,
                        c.tipo_instrumento, c.pct_activo_fondo,
-                       c.valorizacion_cierre, c.clasif_riesgo
+                       c.valorizacion_cierre, c.clasif_riesgo,
+                       c.tir_val_par_precio, c.fecha_vencimiento, c.cant_unidades,
+                       c.tipo_unidades, c.cod_moneda_liquidacion, c.tipo_interes,
+                       c.pct_capital_emisor, c.pct_activo_emisor,
+                       c.situacion_instrumento, c.clasif_esf, c.cod_pais
                 FROM cartera_fi_nac c
                 LEFT JOIN emisores e ON e.rut = c.rut_emisor
                 WHERE c.run_fondo = :run AND c.periodo = :period
@@ -214,7 +229,11 @@ def get_investment_fund_portfolio(run: str, _: CacheHook) -> list[FIPortfolioPos
                 SELECT 'extr' AS source, c.nemo_isin AS nemotecnico, NULL AS rut_emisor,
                        c.nombre_emisor,
                        c.tipo_instrumento, c.pct_activo_fondo,
-                       c.valorizacion_cierre, c.clasif_riesgo
+                       c.valorizacion_cierre, c.clasif_riesgo,
+                       c.tir_val_par_precio, c.fecha_vencimiento, c.cant_unidades,
+                       c.tipo_unidades, c.cod_moneda_liquidacion, c.tipo_interes,
+                       c.pct_capital_emisor, c.pct_activo_emisor,
+                       c.situacion_instrumento, c.clasif_esf, c.cod_pais
                 FROM cartera_fi_ext c
                 WHERE c.run_fondo = :run AND c.periodo = :period
                 ORDER BY c.pct_activo_fondo DESC NULLS LAST
