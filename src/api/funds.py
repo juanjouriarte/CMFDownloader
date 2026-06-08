@@ -71,6 +71,18 @@ class PortfolioPosition(BaseModel):
     porcentaje_activos_fondo: str | None
     valorizacion_cierre: str | None
     clasificacion_riesgo: str | None
+    tir: str | None
+    fecha_vencimiento: str | None
+    cantidad_unidades: str | None
+    tipo_unidades: str | None
+    moneda_liquidacion: str | None
+    porcentaje_valor_par: str | None
+    tipo_interes: str | None
+    codigo_pais_emisor: str | None
+    situacion_instrumento: str | None
+    porcentaje_capital_emisor: str | None
+    porcentaje_activos_emisor: str | None
+    codigo_grupo_empresarial: str | None
 
 
 @router.get("", response_model=list[FundFMItem])
@@ -212,7 +224,12 @@ def get_fund_portfolio(run: str, _: CacheHook) -> list[PortfolioPosition]:
                 SELECT 'naci' AS source, c.nemotecnico, c.rut_emisor,
                        e.razon_social AS nombre_emisor,
                        c.tipo_instrumento, c.porcentaje_activos_fondo,
-                       c.valorizacion_cierre, c.clasificacion_riesgo
+                       c.valorizacion_cierre, c.clasificacion_riesgo,
+                       c.tir, c.fecha_vencimiento, c.cantidad_unidades, c.tipo_unidades,
+                       c.moneda_liquidacion, c.porcentaje_valor_par, c.tipo_interes,
+                       c.codigo_pais_emisor, c.situacion_instrumento,
+                       c.porcentaje_capital_emisor, c.porcentaje_activos_emisor,
+                       c.codigo_grupo_empresarial
                 FROM cartera_naci c
                 LEFT JOIN emisores e ON e.rut = c.rut_emisor
                 WHERE c.run_fondo = :run AND c.periodo = :period
@@ -225,7 +242,12 @@ def get_fund_portfolio(run: str, _: CacheHook) -> list[PortfolioPosition]:
                 SELECT 'extr' AS source, c.nemotecnico, NULL AS rut_emisor,
                        c.nombre_emisor,
                        c.tipo_instrumento, c.porcentaje_activos_fondo,
-                       c.valorizacion_cierre, c.clasificacion_riesgo
+                       c.valorizacion_cierre, c.clasificacion_riesgo,
+                       c.tir, c.fecha_vencimiento, c.cantidad_unidades, c.tipo_unidades,
+                       c.moneda_liquidacion, c.porcentaje_valor_par, c.tipo_interes,
+                       c.codigo_pais_emisor, c.situacion_instrumento,
+                       c.porcentaje_capital_emisor, c.porcentaje_activos_emisor,
+                       c.nombre_grupo_empresarial AS codigo_grupo_empresarial
                 FROM cartera_extr c
                 WHERE c.run_fondo = :run AND c.periodo = :period
             """),
