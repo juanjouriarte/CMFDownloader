@@ -360,7 +360,7 @@ def get_administrator_full_picture(admin: str) -> dict:
         LIMIT 1
     """, {"admin": f"%{admin}%"})
 
-    # Total AUM (FM)
+    # Total AUM (FM) — use most recent date where this admin has data
     result["fm_aum"] = _rows("""
         SELECT
             ROUND(SUM(cd.patrimonio_neto)::numeric / 1e9, 2) AS aum_total_bn_clp,
@@ -369,20 +369,36 @@ def get_administrator_full_picture(admin: str) -> dict:
         FROM cartola_diaria cd
         JOIN fondo_mutuo fm ON fm.run_fondo = cd.run_fondo
         WHERE fm.razon_social_administradora ILIKE :admin
-          AND cd.fecha = (SELECT MAX(fecha) FROM cartola_diaria)
+          AND cd.fecha = (
+              SELECT MAX(cd2.fecha) FROM cartola_diaria cd2
+              JOIN fondo_mutuo fm2 ON fm2.run_fondo = cd2.run_fondo
+              WHERE fm2.razon_social_administradora ILIKE :admin
+          )
     """, {"admin": f"%{admin}%"})
 
     # Market share (FM)
-    total_aum = _scalar("SELECT SUM(patrimonio_neto) FROM cartola_diaria WHERE fecha = (SELECT MAX(fecha) FROM cartola_diaria)")
-    admin_aum_row = _rows("""
-        SELECT SUM(cd.patrimonio_neto) AS aum
-        FROM cartola_diaria cd
-        JOIN fondo_mutuo fm ON fm.run_fondo = cd.run_fondo
-        WHERE fm.razon_social_administradora ILIKE :admin
-          AND cd.fecha = (SELECT MAX(fecha) FROM cartola_diaria)
+    market_share_row = _rows("""
+        WITH ref AS (
+            SELECT fecha FROM cartola_diaria
+            WHERE fecha >= (SELECT MAX(fecha) FROM cartola_diaria) - 7
+            GROUP BY fecha ORDER BY COUNT(DISTINCT run_fondo) DESC, fecha DESC
+            LIMIT 1
+        ),
+        totals AS (
+            SELECT
+                fm.razon_social_administradora AS administrador,
+                SUM(cd.patrimonio_neto) AS aum
+            FROM cartola_diaria cd
+            JOIN fondo_mutuo fm ON fm.run_fondo = cd.run_fondo
+            WHERE cd.fecha = (SELECT fecha FROM ref)
+            GROUP BY fm.razon_social_administradora
+        )
+        SELECT
+            ROUND(SUM(aum) FILTER (WHERE administrador ILIKE :admin)::numeric / 1e9, 2) AS admin_aum_bn,
+            ROUND(SUM(aum) FILTER (WHERE administrador ILIKE :admin) * 100.0 / NULLIF(SUM(aum), 0), 2) AS market_share_pct
+        FROM totals
     """, {"admin": f"%{admin}%"})
-    admin_aum = admin_aum_row[0]["aum"] if admin_aum_row and admin_aum_row[0]["aum"] else 0
-    result["market_share_pct"] = round(float(admin_aum) / float(total_aum) * 100, 2) if total_aum and total_aum > 0 else None
+    result["market_share_pct"] = market_share_row[0]["market_share_pct"] if market_share_row else None
 
     # Best performers
     result["best_funds"] = _rows("""
@@ -454,7 +470,11 @@ def compare_administrators(admin_a: str, admin_b: str) -> dict:
             FROM cartola_diaria cd
             JOIN fondo_mutuo fm ON fm.run_fondo = cd.run_fondo
             WHERE fm.razon_social_administradora ILIKE :admin
-              AND cd.fecha = (SELECT MAX(fecha) FROM cartola_diaria)
+              AND cd.fecha = (
+                  SELECT MAX(cd2.fecha) FROM cartola_diaria cd2
+                  JOIN fondo_mutuo fm2 ON fm2.run_fondo = cd2.run_fondo
+                  WHERE fm2.razon_social_administradora ILIKE :admin
+              )
               AND fm.fecha_termino_operaciones IS NULL
         """, {"admin": f"%{admin}%"})
 
@@ -501,11 +521,11 @@ def compare_administrators(admin_a: str, admin_b: str) -> dict:
               AND a.periodo = (SELECT MAX(x.periodo) FROM aportantes_fi x JOIN fondos_inversion g ON g.run_fondo = x.run_fondo WHERE g.administrador ILIKE :admin_b)
         )
         SELECT
-            (SELECT COUNT(*) FROM holders_a)                        AS shareholders_a,
-            (SELECT COUNT(*) FROM holders_b)                        AS shareholders_b,
-            (SELECT COUNT(*) FROM holders_a INTERSECT SELECT rut FROM holders_b) AS shared,
-            (SELECT COUNT(*) FROM holders_a EXCEPT SELECT rut FROM holders_b)    AS only_in_a,
-            (SELECT COUNT(*) FROM holders_b EXCEPT SELECT rut FROM holders_a)    AS only_in_b
+            (SELECT COUNT(*) FROM holders_a)                                                     AS shareholders_a,
+            (SELECT COUNT(*) FROM holders_b)                                                     AS shareholders_b,
+            (SELECT COUNT(*) FROM (SELECT rut FROM holders_a INTERSECT SELECT rut FROM holders_b) x) AS shared,
+            (SELECT COUNT(*) FROM (SELECT rut FROM holders_a EXCEPT    SELECT rut FROM holders_b) x) AS only_in_a,
+            (SELECT COUNT(*) FROM (SELECT rut FROM holders_b EXCEPT    SELECT rut FROM holders_a) x) AS only_in_b
     """, {"admin_a": f"%{admin_a}%", "admin_b": f"%{admin_b}%"})
 
     result["shareholder_overlap"] = overlap[0] if overlap else {}
@@ -648,18 +668,27 @@ def market_overview() -> dict:
     """
     result: dict = {}
 
+    # Use most-populated date in last 7 days (same logic as rentability MVs)
+    _ref_date_sql = """
+        SELECT fecha FROM cartola_diaria
+        WHERE fecha >= (SELECT MAX(fecha) FROM cartola_diaria) - 7
+        GROUP BY fecha
+        ORDER BY COUNT(DISTINCT run_fondo) DESC, fecha DESC
+        LIMIT 1
+    """
+
     # Total FM AUM
-    result["total_fm_aum"] = _rows("""
+    result["total_fm_aum"] = _rows(f"""
         SELECT
             ROUND(SUM(patrimonio_neto)::numeric / 1e9, 2) AS total_aum_bn_clp,
             COUNT(DISTINCT run_fondo) AS num_fondos,
             MAX(fecha) AS fecha
         FROM cartola_diaria
-        WHERE fecha = (SELECT MAX(fecha) FROM cartola_diaria)
+        WHERE fecha = ({_ref_date_sql})
     """)
 
     # Top 10 AGFs by AUM
-    result["top_agfs_by_aum"] = _rows("""
+    result["top_agfs_by_aum"] = _rows(f"""
         SELECT
             fm.razon_social_administradora AS administrador,
             ROUND(SUM(cd.patrimonio_neto)::numeric / 1e9, 2) AS aum_bn_clp,
@@ -667,7 +696,7 @@ def market_overview() -> dict:
             COUNT(DISTINCT cd.run_fondo) AS num_fondos
         FROM cartola_diaria cd
         JOIN fondo_mutuo fm ON fm.run_fondo = cd.run_fondo
-        WHERE cd.fecha = (SELECT MAX(fecha) FROM cartola_diaria)
+        WHERE cd.fecha = ({_ref_date_sql})
         GROUP BY fm.razon_social_administradora
         ORDER BY aum_bn_clp DESC NULLS LAST
         LIMIT 10
