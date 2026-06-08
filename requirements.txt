@@ -9,5 +9,6 @@ fastapi
 uvicorn[standard]
 google-genai
 beautifulsoup4
+xlrd
 pytest
 mcp[cli]
