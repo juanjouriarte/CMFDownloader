@@ -244,8 +244,8 @@ FastMCP server exposing 10 tools for AI-driven fund-market analysis. Runs as the
 |---|---|
 | `search_funds` | Find FM/FI funds by name or admin |
 | `compare_funds` | Side-by-side returns for 2+ funds |
-| `top_funds_by_return` | Rankings by 1D/1W/1M/1Y/5Y/YTD |
-| `net_new_money_ranking` | Aportes − rescates by AGF or fund (FM only) |
+| `top_funds_by_return` | Rankings by 1D/1W/1M/1Y/5Y/YTD. Optional `as_of_date` (YYYY-MM-DD) computes returns dynamically from raw data for any historical date (FM: total return with factor_reparto; FI: NAV-only) |
+| `net_new_money_ranking` | Aportes − rescates by AGF or fund (FM only). Optional `from_date`/`to_date` for custom date ranges, overrides `period` preset |
 | `get_fund_full_picture` | Identity, returns, flows, portfolio, shareholders |
 | `get_administrator_full_picture` | AUM, market share, best/worst funds, flows, shareholders |
 | `compare_administrators` | M&A view: shared shareholders, AUM, merge scenario |
