@@ -4,6 +4,8 @@ services:
     restart: always
     ports:
       - "8080:8080"
+    volumes:
+      - /tmp:/tmp
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
