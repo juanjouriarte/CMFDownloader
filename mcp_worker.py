@@ -10,6 +10,6 @@ logging.basicConfig(
 from src.mcp_server import mcp
 
 if __name__ == "__main__":
-    # stdio transport — used by Claude Code locally
-    # For remote Claude.ai integration, HTTPS via Cloudflare is required
-    mcp.run()
+    mcp.settings.host = "0.0.0.0"
+    mcp.settings.port = 8081
+    mcp.run(transport="sse")
