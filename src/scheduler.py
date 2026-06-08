@@ -102,7 +102,7 @@ def register_jobs(scheduler: BaseScheduler) -> None:
     )
     scheduler.add_job(
         _job("fm_identity", lambda: FMIdentidadDownloader(force=True).run()),
-        "cron", hour=8, minute=0, id="fm_identity",
+        "cron", hour=1, minute=47, id="fm_identity",
     )
     scheduler.add_job(
         _job("mf_tickers", lambda: NemotecnicosDownloader(force=True).run()),
