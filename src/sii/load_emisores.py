@@ -52,3 +52,10 @@ def load_sii_emisores(path: Path) -> int:
             logger.info("Upserted %d / %d", total, len(records))
 
     return total
+
+
+if __name__ == "__main__":
+    import sys
+    logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+    path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("downloads/sii_emisores/sii_dbb.txt")
+    print(load_sii_emisores(path), "rows upserted")
