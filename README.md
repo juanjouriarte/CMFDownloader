@@ -103,7 +103,6 @@ sudo docker compose logs -f
 - [ ] **API_TOKEN** — currently blank (dev mode); set a real token on production
 
 ### DB Improvements
-- [ ] **Load SII `emisores` on production** — table exists via migration but is empty on Oracle; transfer + load `sii_dbb.txt`
 - [ ] **Alerting** — Slack/email webhook when `job_runs.status = 'error'`
 - [ ] **Table partitioning** — partition `cartola_diaria`, `valores_cuota_fi`, `financial_statements` by year (requires data reload)
 - [ ] **Data-quality checks** — flag corrupt `valor_cuota` jumps in CMF source feed
