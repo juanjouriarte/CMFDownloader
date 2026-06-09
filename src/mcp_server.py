@@ -619,6 +619,36 @@ def get_administrator_full_picture(admin: str) -> dict:
         LIMIT 10
     """, {"admin": f"%{admin}%"})
 
+    # Top FM portfolio positions across all admin's funds (latest quarter)
+    result["top_fm_positions"] = _rows("""
+        WITH latest AS (
+            SELECT MAX(c.periodo) AS t
+            FROM cartera_naci c
+            JOIN fondo_mutuo fm ON fm.run_fondo = c.run_fondo
+            WHERE fm.razon_social_administradora ILIKE :admin
+        )
+        SELECT
+            c.nemotecnico,
+            COALESCE(e.razon_social, n_fm.nombre_fondo, n_fi.razon_social) AS nombre_emisor,
+            COALESCE(n_fm.nombre_fondo, n_fi.razon_social)                 AS nombre_fondo_emisor,
+            c.tipo_instrumento,
+            COUNT(DISTINCT c.run_fondo)                                    AS num_fondos,
+            ROUND(AVG(CAST(NULLIF(c.porcentaje_activos_fondo,'') AS numeric))::numeric, 4) AS avg_pct_fondo,
+            ROUND(SUM(CAST(NULLIF(c.porcentaje_activos_fondo,'') AS numeric))::numeric, 2) AS sum_pct_across_funds
+        FROM cartera_naci c
+        JOIN fondo_mutuo fm ON fm.run_fondo = c.run_fondo
+        LEFT JOIN emisores e ON e.rut = c.rut_emisor
+        LEFT JOIN nemotecnicos n ON n.nemotecnico = c.nemotecnico
+        LEFT JOIN fondo_mutuo n_fm ON n_fm.run_fondo = n.run_fondo
+        LEFT JOIN nemotecnicos_fi nfi ON nfi.nemotecnico = c.nemotecnico
+        LEFT JOIN fondos_inversion n_fi ON n_fi.run_fondo = nfi.run_fondo
+        WHERE fm.razon_social_administradora ILIKE :admin
+          AND c.periodo = (SELECT t FROM latest)
+        GROUP BY c.nemotecnico, e.razon_social, n_fm.nombre_fondo, n_fi.razon_social, c.tipo_instrumento
+        ORDER BY sum_pct_across_funds DESC NULLS LAST
+        LIMIT 15
+    """, {"admin": f"%{admin}%"})
+
     return result
 
 
@@ -1120,7 +1150,8 @@ def emisor_fund_exposure(
     Given a company (emisor) by RUT or partial name, show every fund that holds it
     and at what portfolio weight. Useful for systemic risk analysis or understanding
     how concentrated an issuer is across the Chilean fund industry.
-    Covers domestic (NACI) portfolios only — foreign positions lack RUT.
+    Domestic positions matched by rut_emisor (via SII); foreign positions matched
+    by nombre_emisor partial name (only when nombre is provided, not rut).
     """
     if not rut and not nombre:
         return {"error": "Provide either rut or nombre"}
@@ -1128,16 +1159,18 @@ def emisor_fund_exposure(
     result: dict = {}
 
     if fund_type in ("fm", "all"):
+        # Domestic — match by RUT or SII name
         if rut:
-            condition = "c.rut_emisor = :id"
+            naci_condition = "c.rut_emisor = :id"
             params: dict = {"id": rut, "limit": limit}
         else:
-            condition = "e.razon_social ILIKE :id"
+            naci_condition = "e.razon_social ILIKE :id"
             params = {"id": f"%{nombre}%", "limit": limit}
 
-        result["fm"] = _rows(f"""
+        domestic = _rows(f"""
             WITH latest AS (SELECT MAX(periodo) AS t FROM cartera_naci)
             SELECT
+                'naci'                                                           AS source,
                 c.rut_emisor,
                 COALESCE(e.razon_social, c.rut_emisor)                          AS nombre_emisor,
                 c.run_fondo, fm.nombre_fondo,
@@ -1150,38 +1183,88 @@ def emisor_fund_exposure(
             LEFT JOIN emisores e ON e.rut = c.rut_emisor
             JOIN fondo_mutuo fm ON fm.run_fondo = c.run_fondo
             WHERE c.periodo = (SELECT t FROM latest)
-              AND {condition}
+              AND {naci_condition}
             ORDER BY pct_activo_fondo DESC NULLS LAST
             LIMIT :limit
         """, params)
 
+        # Foreign — match by nombre_emisor (only when searching by name)
+        foreign = []
+        if nombre:
+            foreign = _rows("""
+                WITH latest AS (SELECT MAX(periodo) AS t FROM cartera_extr)
+                SELECT
+                    'extr'                                          AS source,
+                    NULL                                            AS rut_emisor,
+                    c.nombre_emisor,
+                    c.run_fondo, fm.nombre_fondo,
+                    fm.razon_social_administradora                  AS administrador,
+                    c.tipo_instrumento, c.nemotecnico,
+                    CAST(NULLIF(c.porcentaje_activos_fondo,'') AS numeric) AS pct_activo_fondo,
+                    CAST(NULLIF(c.valorizacion_cierre,'')      AS numeric) AS valorizacion_cierre,
+                    c.clasificacion_riesgo, c.tir, c.fecha_vencimiento
+                FROM cartera_extr c
+                JOIN fondo_mutuo fm ON fm.run_fondo = c.run_fondo
+                WHERE c.periodo = (SELECT t FROM latest)
+                  AND c.nombre_emisor ILIKE :id
+                ORDER BY pct_activo_fondo DESC NULLS LAST
+                LIMIT :limit
+            """, {"id": f"%{nombre}%", "limit": limit})
+
+        result["fm"] = domestic + foreign
+
     if fund_type in ("fi", "all"):
+        # Domestic — match by RUT or SII name
         if rut:
-            condition = "c.rut_emisor = :id"
+            naci_condition = "c.rut_emisor = :id"
             params = {"id": rut, "limit": limit}
         else:
-            condition = "e.razon_social ILIKE :id"
+            naci_condition = "e.razon_social ILIKE :id"
             params = {"id": f"%{nombre}%", "limit": limit}
 
-        result["fi"] = _rows(f"""
+        domestic = _rows(f"""
             WITH latest AS (SELECT MAX(periodo) AS t FROM cartera_fi_nac)
             SELECT
+                'naci'                                          AS source,
                 c.rut_emisor,
-                COALESCE(e.razon_social, c.rut_emisor)  AS nombre_emisor,
-                c.run_fondo, fi.razon_social             AS fondo,
+                COALESCE(e.razon_social, c.rut_emisor)          AS nombre_emisor,
+                c.run_fondo, fi.razon_social                    AS fondo,
                 fi.administrador,
                 c.tipo_instrumento, c.nemotecnico,
-                c.pct_activo_fondo,
-                c.valorizacion_cierre,
+                c.pct_activo_fondo, c.valorizacion_cierre,
                 c.clasif_riesgo, c.tir_val_par_precio, c.fecha_vencimiento
             FROM cartera_fi_nac c
             LEFT JOIN emisores e ON e.rut = c.rut_emisor
             JOIN fondos_inversion fi ON fi.run_fondo = c.run_fondo
             WHERE c.periodo = (SELECT t FROM latest)
-              AND {condition}
+              AND {naci_condition}
             ORDER BY c.pct_activo_fondo DESC NULLS LAST
             LIMIT :limit
         """, params)
+
+        # Foreign — match by nombre_emisor (only when searching by name)
+        foreign = []
+        if nombre:
+            foreign = _rows("""
+                WITH latest AS (SELECT MAX(periodo) AS t FROM cartera_fi_ext)
+                SELECT
+                    'extr'                      AS source,
+                    NULL                        AS rut_emisor,
+                    c.nombre_emisor,
+                    c.run_fondo, fi.razon_social AS fondo,
+                    fi.administrador,
+                    c.tipo_instrumento, c.nemo_isin AS nemotecnico,
+                    c.pct_activo_fondo, c.valorizacion_cierre,
+                    c.clasif_riesgo, c.tir_val_par_precio, c.fecha_vencimiento
+                FROM cartera_fi_ext c
+                JOIN fondos_inversion fi ON fi.run_fondo = c.run_fondo
+                WHERE c.periodo = (SELECT t FROM latest)
+                  AND c.nombre_emisor ILIKE :id
+                ORDER BY c.pct_activo_fondo DESC NULLS LAST
+                LIMIT :limit
+            """, {"id": f"%{nombre}%", "limit": limit})
+
+        result["fi"] = domestic + foreign
 
     return result
 
