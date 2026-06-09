@@ -52,8 +52,8 @@ ETL pipeline that downloads public fund datasets from the Chilean CMF (Comisión
 
 ### Public API (`src/api/`)
 - [x] **CORS + caching** — all endpoints open (`allow_origins=["*"]`), `Cache-Control: public, max-age=3600` for edge caching
-- [x] **Fund endpoints** — `GET /funds` (list + filter), `/funds/{run}` (detail), `/funds/{run}/nav` (chart data), `/funds/{run}/portfolio` (full holdings: `tir`, `fecha_vencimiento`, `cantidad_unidades`, `tipo_unidades`, `moneda_liquidacion`, `porcentaje_valor_par`, `tipo_interes`, `codigo_pais_emisor`, `situacion_instrumento`, `porcentaje_capital_emisor`, `porcentaje_activos_emisor`, `codigo_grupo_empresarial`, SII-enriched)
-- [x] **Investment fund endpoints** — `GET /investment-funds`, `/investment-funds/{run}`, `/investment-funds/{run}/nav`, `/investment-funds/{run}/portfolio` (full holdings: `tir_val_par_precio`, `fecha_vencimiento`, `cant_unidades`, `tipo_unidades`, `cod_moneda_liquidacion`, `tipo_interes`, `pct_capital_emisor`, `pct_activo_emisor`, `situacion_instrumento`, `clasif_esf`, `cod_pais`, SII-enriched)
+- [x] **Fund endpoints** — `GET /funds` (list + filter), `/funds/{run}` (detail), `/funds/{run}/nav` (chart data), `/funds/{run}/portfolio` (full holdings enriched with SII names + fund names from nemotecnicos — includes `tir`, `fecha_vencimiento`, `cantidad_unidades`, `tipo_unidades`, `moneda_liquidacion`, `porcentaje_valor_par`, `tipo_interes`, `codigo_pais_emisor`, `situacion_instrumento`, `porcentaje_capital_emisor`, `porcentaje_activos_emisor`, `codigo_grupo_empresarial`, `nombre_fondo_emisor`)
+- [x] **Investment fund endpoints** — `GET /investment-funds`, `/investment-funds/{run}`, `/investment-funds/{run}/nav`, `/investment-funds/{run}/portfolio` (full holdings enriched with SII names + fund names — includes `tir_val_par_precio`, `fecha_vencimiento`, `cant_unidades`, `tipo_unidades`, `cod_moneda_liquidacion`, `tipo_interes`, `pct_capital_emisor`, `pct_activo_emisor`, `situacion_instrumento`, `clasif_esf`, `cod_pais`, `nombre_fondo_emisor`)
 - [x] **Rentability rankings** — `GET /rentability/fm` + `/rentability/fi` from materialized views, sortable by 1D/1W/1M/1Y/5Y/YTD
 - [x] **FI categories** — `GET /categories/fi` with latest period per fund
 - [x] **Administradoras** — `GET /admins` (list + fund counts), `/admins/{rut}` (detail)
@@ -64,9 +64,9 @@ ETL pipeline that downloads public fund datasets from the Chilean CMF (Comisión
   - `GET /shareholders/compare` — side-by-side admin comparison: shared holders, exclusives, merge AUM summary
 
 ### MCP Server (`src/mcp_server.py`)
-- [x] **FastMCP server with 10 tools** — `search_funds`, `compare_funds`, `top_funds_by_return`, `net_new_money_ranking`, `get_fund_full_picture`, `get_administrator_full_picture`, `compare_administrators`, `get_shareholder_positions`, `potential_clients`, `market_overview`
+- [x] **FastMCP server with 14 tools** — `search_funds`, `compare_funds`, `top_funds_by_return` (+ `as_of_date`), `net_new_money_ranking` (+ `from_date`/`to_date`), `get_fund_full_picture` (+ enriched `top_positions`), `get_administrator_full_picture` (+ `top_fm_positions`), `compare_administrators`, `get_shareholder_positions`, `potential_clients`, `market_overview`, `get_fund_portfolio`, `top_emisores_in_market`, `emisor_fund_exposure` (domestic + foreign), `portfolio_overlap`
 - [x] **Remote integration** — SSE on port 8081, reverse-proxied at `/mcp/sse`, connected to Claude.ai via Settings → Integrations
-- [x] **AI-driven market intelligence** — M&A analysis, net new money rankings, shareholder overlap, prospecting
+- [x] **AI-driven market intelligence** — M&A analysis, net new money rankings, shareholder overlap, prospecting, portfolio analysis, issuer exposure across the market
 
 ### Deployment
 - [x] **Deployed on Oracle Cloud Always Free** — 2x AMD VMs (1 OCPU / 1 GB RAM each), $0/month

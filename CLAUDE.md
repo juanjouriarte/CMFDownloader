@@ -250,14 +250,14 @@ FastMCP server exposing 10 tools for AI-driven fund-market analysis. Runs as the
 | `top_funds_by_return` | Rankings by 1D/1W/1M/1Y/5Y/YTD. Optional `as_of_date` (YYYY-MM-DD) computes returns dynamically from raw data for any historical date (FM: total return with factor_reparto; FI: NAV-only) |
 | `net_new_money_ranking` | Aportes − rescates by AGF or fund (FM only). Optional `from_date`/`to_date` for custom date ranges, overrides `period` preset |
 | `get_fund_full_picture` | Identity, returns, flows, portfolio, shareholders |
-| `get_administrator_full_picture` | AUM, market share, best/worst funds, flows, shareholders |
+| `get_administrator_full_picture` | AUM, market share, best/worst funds, flows, shareholders, `top_fm_positions` (top 15 holdings across all admin FM funds, enriched) |
 | `compare_administrators` | M&A view: shared shareholders, AUM, merge scenario |
 | `get_shareholder_positions` | Track an institutional investor across funds/time |
 | `potential_clients` | Market shareholders NOT in an admin's funds |
 | `market_overview` | Total market snapshot: AUM, top AGFs, flows, top performers |
-| `get_fund_portfolio` | Full portfolio positions (FM or FI) with all fields + SII names + instrument-type summary |
+| `get_fund_portfolio` | Full portfolio positions (FM or FI) with all fields + SII names + fund names from nemotecnicos + instrument-type summary |
 | `top_emisores_in_market` | Rank companies by how many funds hold them + total weight (FM or FI, domestic) |
-| `emisor_fund_exposure` | Given a company (RUT or name), list every fund holding it with weight and instrument type |
+| `emisor_fund_exposure` | Given a company (RUT or name), list every fund holding it with weight and instrument type. Covers domestic (naci) + foreign (extr) portfolios — foreign matched by nombre_emisor when searching by name; results tagged with `source=naci/extr` |
 | `portfolio_overlap` | Jaccard overlap score + shared positions between two funds |
 
 AUM figures are CLP. Net new money uses `cartola_diaria` generated columns. The `mcp` container only needs `DATABASE_URL`.
