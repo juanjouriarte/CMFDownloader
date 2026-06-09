@@ -35,7 +35,10 @@ ssh -i ~/.ssh/oracle_cmf.key ubuntu@146.181.34.54   # app VM
 ssh -i ~/.ssh/oracle_cmf.key ubuntu@146.181.47.236  # db VM
 ```
 
-### Deploy (manual, until GitHub Actions is set up)
+### Deploy (automatic via GitHub Actions)
+Push to `main` triggers `.github/workflows/deploy.yml` — SSHes into the app VM, pulls, migrates, and rebuilds automatically.
+
+Manual deploy if needed:
 ```bash
 ssh -i ~/.ssh/oracle_cmf.key ubuntu@146.181.34.54
 cd ~/CMFDownloader
@@ -67,53 +70,53 @@ src/
 │   ├── shareholders.py       # /shareholders — fund/entity/admin/compare endpoints
 │   ├── admins.py             # /admins — administradora list + detail (from mv_administradores)
 │   └── router.py             # Assembles all sub-routers
-├── mcp_server.py             # FastMCP server — 10 tools for fund-market intelligence (see MCP section)
-├── sii/                      # SII (tax authority) company registry
-│   ├── __init__.py
-│   └── load_emisores.py      # Loads ~994k Chilean companies → emisores table
-├── financialStatements/      # IFRS statements for all CMF-supervised companies
-│   ├── downloaders/
-│   │   └── financialStatementsDownloader.py
-│   ├── loaders/
-│   │   └── financial_statements.py
-│   └── api.py                # FastAPI router — on-demand download trigger (auth-protected)
-├── mutualFunds/
-│   ├── downloaders/          # One class per CMF mutual-fund dataset, all extend BaseDownloader
-│   │   ├── cartolaDownloader.py
-│   │   ├── carterasDownloader.py
-│   │   ├── identificationDownloader.py
-│   │   ├── nemotecnicosDownloader.py
-│   │   ├── bondsNemotecnicos.py
-│   │   └── tacDownloader.py
-│   ├── loaders/
-│   │   ├── cartola.py
-│   │   ├── carteras.py
-│   │   ├── identidad.py
-│   │   ├── nemotecnicos.py
-│   │   ├── bonos.py
-│   │   └── tac.py
-│   └── mutualFundsCategories.py  # Fund classifier per Circular No. 7 (AFM 2025)
-├── investmentFunds/          # Fondos de Inversión (FI) — CMF
-│   ├── downloaders/
-│   │   ├── nemotecnicosDownloader.py   # FI series tickers
-│   │   ├── identidadDownloader.py      # Fund registry (FIRES + FINRE, VI + NV)
-│   │   ├── valoresCuotaDownloader.py   # Daily NAV per fund (pestania=7)
-│   │   ├── aportantesDownloader.py     # Quarterly shareholders + cuotas (pestania=27)
-│   │   └── carterasDownloader.py       # Quarterly IFRS portfolio positions (NACI/EXT/MET_PART/FUT_FW)
-│   ├── loaders/
-│   │   ├── nemotecnicos.py
-│   │   ├── identidad.py
-│   │   ├── valores_cuota.py
-│   │   ├── aportantes.py
-│   │   ├── carteras.py
-│   │   ├── entidades.py      # refresh_entidades() — canonical names from aportantes_fi
-│   │   └── utils.py          # mark_has_data() helper
-│   └── investmentFundsCategories.py  # FI classifier — 20 subcategories, IPSA-based size detection
-├── bolsaSantiago/            # Bolsa de Santiago data sources
-│   ├── downloaders/
-│   │   └── dividendosDownloader.py   # Dividends + capital changes 1973→today
-│   └── loaders/
-│       └── dividendos.py
+├── mcp_server.py             # FastMCP server — 14 tools for fund-market intelligence (see MCP section)
+├── etl/                      # All ETL domain packages (extract + load per data source)
+│   ├── sii/                  # SII (tax authority) company registry
+│   │   └── load_emisores.py  # Loads ~994k Chilean companies → emisores table
+│   ├── financialStatements/  # IFRS statements for all CMF-supervised companies
+│   │   ├── downloaders/
+│   │   │   └── financialStatementsDownloader.py
+│   │   ├── loaders/
+│   │   │   └── financial_statements.py
+│   │   └── api.py            # FastAPI router — on-demand download trigger (auth-protected)
+│   ├── mutualFunds/
+│   │   ├── downloaders/      # One class per CMF mutual-fund dataset, all extend BaseDownloader
+│   │   │   ├── cartolaDownloader.py
+│   │   │   ├── carterasDownloader.py
+│   │   │   ├── identificationDownloader.py
+│   │   │   ├── nemotecnicosDownloader.py
+│   │   │   ├── bondsNemotecnicos.py
+│   │   │   └── tacDownloader.py
+│   │   ├── loaders/
+│   │   │   ├── cartola.py
+│   │   │   ├── carteras.py
+│   │   │   ├── identidad.py
+│   │   │   ├── nemotecnicos.py
+│   │   │   ├── bonos.py
+│   │   │   └── tac.py
+│   │   └── mutualFundsCategories.py  # Fund classifier per Circular No. 7 (AFM 2025)
+│   ├── investmentFunds/      # Fondos de Inversión (FI) — CMF
+│   │   ├── downloaders/
+│   │   │   ├── nemotecnicosDownloader.py   # FI series tickers
+│   │   │   ├── identidadDownloader.py      # Fund registry (FIRES + FINRE, VI + NV)
+│   │   │   ├── valoresCuotaDownloader.py   # Daily NAV per fund (pestania=7)
+│   │   │   ├── aportantesDownloader.py     # Quarterly shareholders + cuotas (pestania=27)
+│   │   │   └── carterasDownloader.py       # Quarterly IFRS portfolio positions (NACI/EXT/MET_PART/FUT_FW)
+│   │   ├── loaders/
+│   │   │   ├── nemotecnicos.py
+│   │   │   ├── identidad.py
+│   │   │   ├── valores_cuota.py
+│   │   │   ├── aportantes.py
+│   │   │   ├── carteras.py
+│   │   │   ├── entidades.py      # refresh_entidades() — canonical names from aportantes_fi
+│   │   │   └── utils.py          # mark_has_data() helper
+│   │   └── investmentFundsCategories.py  # FI classifier — 20 subcategories, IPSA-based size detection
+│   └── bolsaSantiago/        # Bolsa de Santiago data sources
+│       ├── downloaders/
+│       │   └── dividendosDownloader.py   # Dividends + capital changes 1973→today
+│       └── loaders/
+│           └── dividendos.py
 ├── db/
 │   ├── engine.py             # SQLAlchemy engine + SessionLocal + Base
 │   └── models/
@@ -383,13 +386,13 @@ python worker.py
 python -c "
 import logging, sys
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
-from src.mutualFunds.downloaders.cartolaDownloader import CartolaDownloader
+from src.etl.mutualFunds.downloaders.cartolaDownloader import CartolaDownloader
 print(CartolaDownloader().run())
 "
 
 # Run FI classifier and save to DB
 python -c "
-from src.investmentFunds.investmentFundsCategories import run_and_save
+from src.etl.investmentFunds.investmentFundsCategories import run_and_save
 print(run_and_save(), 'rows saved')
 "
 
@@ -397,7 +400,7 @@ print(run_and_save(), 'rows saved')
 python -c "
 import logging, sys
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
-from src.investmentFunds.downloaders.carterasDownloader import CarterasFIDownloader
+from src.etl.investmentFunds.downloaders.carterasDownloader import CarterasFIDownloader
 print(CarterasFIDownloader().backfill())
 "
 
@@ -405,7 +408,7 @@ print(CarterasFIDownloader().backfill())
 python -c "
 import logging, sys
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
-from src.investmentFunds.downloaders.valoresCuotaDownloader import ValoresCuotaFIDownloader
+from src.etl.investmentFunds.downloaders.valoresCuotaDownloader import ValoresCuotaFIDownloader
 print(ValoresCuotaFIDownloader().backfill())
 "
 
@@ -413,9 +416,16 @@ print(ValoresCuotaFIDownloader().backfill())
 python -c "
 import logging, sys
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
-from src.bolsaSantiago.downloaders.dividendosDownloader import DividendosDownloader
+from src.etl.bolsaSantiago.downloaders.dividendosDownloader import DividendosDownloader
 print(DividendosDownloader().backfill())
 "
+
+# Load SII emisores (yearly refresh)
+# 1. Copy sii_dbb.txt to DB VM, then in psql:
+# CREATE TEMP TABLE sii_raw (ano text, rut text, dv text, razon_social text, col5 text, col6 text, col7 text, col8 text, col9 text, col10 text, col11 text, col12 text, col13 text, col14 text, col15 text, col16 text, col17 text, col18 text, col19 text, col20 text, col21 text, col22 text);
+# \COPY sii_raw FROM '/tmp/sii_dbb.txt' WITH (FORMAT csv, DELIMITER E'\t', HEADER true, ENCODING 'utf8');
+# INSERT INTO emisores(rut, dv, razon_social) SELECT TRIM(rut), TRIM(dv), TRIM(razon_social) FROM sii_raw ON CONFLICT (rut) DO UPDATE SET dv = EXCLUDED.dv, razon_social = EXCLUDED.razon_social;
+# DROP TABLE sii_raw;
 
 # Fly.io — deploy
 fly deploy
