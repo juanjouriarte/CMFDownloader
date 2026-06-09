@@ -11,7 +11,7 @@ from src.config import CMFUrl, DOWNLOADS_DIR
 from src.db.engine import SessionLocal
 from src.db.models.carteras import CarteraNaci
 from src.http import make_session
-from src.mutualFunds.loaders.carteras import load_cartera
+from src.etl.mutualFunds.loaders.carteras import load_cartera
 
 CARTERA_TYPES = ["NACI", "EXTR", "OPCI", "FUTU", "OPLA"]
 BACKFILL_START = date(2020, 1, 1)

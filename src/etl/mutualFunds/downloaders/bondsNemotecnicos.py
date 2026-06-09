@@ -5,7 +5,7 @@ from pathlib import Path
 from src.base import BaseDownloader, DownloadResult
 from src.config import CMFUrl, DOWNLOADS_DIR
 from src.http import make_session
-from src.mutualFunds.loaders.bonos import load_bonos
+from src.etl.mutualFunds.loaders.bonos import load_bonos
 
 OUTPUT_FILE = "bonos_nemotecnicos.html"
 

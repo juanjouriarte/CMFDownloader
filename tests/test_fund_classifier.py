@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from src.mutualFunds.mutualFundsCategories import (
+from src.etl.mutualFunds.mutualFundsCategories import (
     _classify_debt,
     _classify_equity_geography,
 )

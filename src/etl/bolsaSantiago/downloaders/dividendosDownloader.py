@@ -11,7 +11,7 @@ from src.base import DownloadResult
 from src.config import BOLSA_COOKIES, BOLSA_CSRF
 from src.db.engine import SessionLocal
 from src.db.models.dividendos import Dividendo
-from src.bolsaSantiago.loaders.dividendos import load_dividendos
+from src.etl.bolsaSantiago.loaders.dividendos import load_dividendos
 
 API_URL    = "https://www.bolsadesantiago.com/api/RV_ResumenMercado/getDividendos"
 START_YEAR = 1973

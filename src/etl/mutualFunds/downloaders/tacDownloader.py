@@ -11,7 +11,7 @@ from src.config import CMFUrl, DOWNLOADS_DIR
 from src.db.engine import SessionLocal
 from src.db.models.tac import Tac
 from src.http import make_session
-from src.mutualFunds.loaders.tac import load_tac
+from src.etl.mutualFunds.loaders.tac import load_tac
 
 BACKFILL_START = date(2020, 1, 1)
 

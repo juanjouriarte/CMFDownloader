@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from src.mutualFunds.loaders.tac import (
+from src.etl.mutualFunds.loaders.tac import (
     _fix_mojibake,
     _normalize,
     _strip_suffix,

@@ -12,8 +12,8 @@ from src.db.engine import SessionLocal
 from src.db.models.fondos_inversion import FondoInversion
 from src.db.models.valores_cuota_fi import ValorCuotaFI
 from src.http import make_session
-from src.investmentFunds.loaders.valores_cuota import parse_html, load_valores_cuota
-from src.investmentFunds.loaders.utils import mark_has_data
+from src.etl.investmentFunds.loaders.valores_cuota import parse_html, load_valores_cuota
+from src.etl.investmentFunds.loaders.utils import mark_has_data
 
 BASE_URL  = "https://www.cmfchile.cl/institucional/mercados/entidad.php"
 BACKFILL_START = date(2020, 1, 1)

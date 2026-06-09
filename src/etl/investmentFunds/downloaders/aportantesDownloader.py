@@ -12,24 +12,16 @@ from sqlalchemy import select
 from src.base import BaseDownloader, DownloadResult
 from src.config import DOWNLOADS_DIR
 from src.db.engine import SessionLocal
-from src.db.models.carteras_fi import CarteraFINac
+from src.db.models.aportantes_fi import CuotasFI
 from src.db.models.fondos_inversion import FondoInversion
 from src.http import fetch, make_session
-from src.investmentFunds.loaders.carteras import (
-    load_carteras, parse_ext, parse_fut_fw, parse_met_part, parse_nac,
-)
-from src.investmentFunds.loaders.utils import mark_has_data
+from src.etl.investmentFunds.loaders.aportantes import load_aportantes, parse_html
+from src.etl.investmentFunds.loaders.entidades import refresh_entidades
+from src.etl.investmentFunds.loaders.utils import mark_has_data
 
-BASE_URL  = "https://www.cmfchile.cl/institucional/inc/inf_financiera/ifrs_xml"
+BASE_URL       = "https://www.cmfchile.cl/institucional/mercados/entidad.php"
 BACKFILL_START = date(2020, 3, 1)
 QUARTER_MONTHS = (3, 6, 9, 12)
-
-ENDPOINTS = {
-    "nac":      "ifrs_cartera_nac.php",
-    "ext":      "ifrs_cartera_ext.php",
-    "met_part": "ifrs_cartera_met_part.php",
-    "fut_fw":   "ifrs_cartera_fut_fw.php",
-}
 
 
 def _quarter_end(year: int, month: int) -> date:
@@ -50,56 +42,58 @@ def _iter_quarters(start: date, end: date):
             month = QUARTER_MONTHS[idx + 1]
 
 
+def _tipo(rescatable: bool) -> str:
+    return "FIRES" if rescatable else "FINRE"
+
+
+def _vig(vigente: bool) -> str:
+    return "VI" if vigente else "NV"
+
+
 def _already_loaded(run_fondo: str, periodo: date) -> bool:
     with SessionLocal() as s:
         return s.execute(
-            select(CarteraFINac).where(
-                CarteraFINac.run_fondo == run_fondo,
-                CarteraFINac.periodo == periodo,
-            ).limit(1)
+            select(CuotasFI).where(
+                CuotasFI.run_fondo == run_fondo,
+                CuotasFI.periodo == periodo,
+            )
         ).first() is not None
 
 
-def _fetch_fund(fund: FondoInversion, quarters: list[tuple[int, int]],
+def _fetch_fund(fund: FondoInversion, months: list[tuple[int, int]],
                 fast: bool, force: bool) -> DownloadResult:
-    run_fondo = fund.run_fondo
-    vigente   = fund.vigente if fund.vigente is not None else True
-    session   = make_session(headers={"User-Agent": "Mozilla/5.0"})
-    result    = DownloadResult()
+    run_fondo  = fund.run_fondo
+    rescatable = fund.rescatable if fund.rescatable is not None else True
+    vigente    = fund.vigente if fund.vigente is not None else True
+    url = (
+        f"{BASE_URL}?mercado=V&rut={run_fondo}&grupo=&tipoentidad={_tipo(rescatable)}"
+        f"&vig={_vig(vigente)}&control=svs&pestania=27"
+    )
+    session = make_session(headers={
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Referer": BASE_URL,
+    })
+    result = DownloadResult()
 
-    for year, month in quarters:
+    for year, month in months:
         periodo = _quarter_end(year, month)
-        periodo_str = f"{year}{month:02d}"
 
         if not force and _already_loaded(run_fondo, periodo):
             result += DownloadResult(skipped=1)
             continue
 
         try:
-            responses = {}
-            for tipo, endpoint in ENDPOINTS.items():
-                url = f"{BASE_URL}/{endpoint}?rut={run_fondo}&periodo={periodo_str}"
-                resp = fetch(session, url, timeout=30)
-                responses[tipo] = resp.text
-
-            nac      = parse_nac(responses.get("nac", ""), run_fondo, periodo)
-            ext      = parse_ext(responses.get("ext", ""), run_fondo, periodo)
-            met_part = parse_met_part(responses.get("met_part", ""), run_fondo, periodo)
-            fut_fw   = parse_fut_fw(responses.get("fut_fw", ""), run_fondo, periodo)
-
-            rows = load_carteras(nac, ext, met_part, fut_fw, run_fondo, periodo)
-
+            resp = fetch(session, url, method="POST",
+                         data=f"mm={month:02d}&aa={year}&rut={run_fondo}",
+                         timeout=30)
+            aportantes, cuotas = parse_html(resp.text, run_fondo, periodo)
+            rows = load_aportantes(aportantes, cuotas)
             if rows:
                 mark_has_data(run_fondo, True)
             elif not vigente:
                 mark_has_data(run_fondo, False)
-
             result += DownloadResult(downloaded=1, rows_upserted=rows)
-
-        except Exception as exc:
-            import traceback
-            logger = __import__('logging').getLogger(__name__)
-            logger.warning("Error %s %d-%02d: %s\n%s", run_fondo, year, month, exc, traceback.format_exc())
+        except Exception:
             result += DownloadResult(errors=1)
 
         time.sleep(random.uniform(0.05, 0.15) if fast else random.uniform(0.3, 0.8))
@@ -107,34 +101,38 @@ def _fetch_fund(fund: FondoInversion, quarters: list[tuple[int, int]],
     return result
 
 
-class CarterasFIDownloader(BaseDownloader):
-    """Descarga carteras de inversión trimestrales de todos los FI desde CMF IFRS."""
+class AportantesDownloader(BaseDownloader):
+    """Descarga aportantes y cuotas trimestrales de todos los Fondos de Inversión desde CMF."""
 
     def __init__(self, force: bool = False) -> None:
-        super().__init__(output_dir=DOWNLOADS_DIR / "carteras_fi", force=force)
+        super().__init__(output_dir=DOWNLOADS_DIR / "aportantes_fi", force=force)
 
     def run(self) -> DownloadResult:
         today = date.today()
         last_quarter = max((m for m in QUARTER_MONTHS if m <= today.month), default=12)
         year = today.year if last_quarter <= today.month else today.year - 1
-        return self._download_all(date(year, last_quarter, 1), today,
-                                  only_vigentes=True, workers=1, fast=False)
+        result = self._download_all(date(year, last_quarter, 1), today,
+                                    only_vigentes=True, workers=1, fast=False)
+        refresh_entidades()
+        return result
 
     def backfill(self, from_date: date = BACKFILL_START) -> DownloadResult:
-        self.logger.info("Backfill carteras FI desde %s", from_date)
-        return self._download_all(from_date, date.today(),
-                                  only_vigentes=False, workers=10, fast=True)
+        self.logger.info("Backfill aportantes FI desde %s", from_date)
+        result = self._download_all(from_date, date.today(),
+                                    only_vigentes=False, workers=5, fast=True)
+        refresh_entidades()
+        return result
 
     def _download_all(self, from_date: date, to_date: date,
                       only_vigentes: bool, workers: int, fast: bool) -> DownloadResult:
-        funds    = self._get_funds(only_vigentes)
-        quarters = list(_iter_quarters(from_date, to_date))
-        total    = DownloadResult()
-        lock     = threading.Lock()
-        done     = [0]
+        funds  = self._get_funds(only_vigentes)
+        months = list(_iter_quarters(from_date, to_date))
+        total  = DownloadResult()
+        lock   = threading.Lock()
+        done   = [0]
 
         def process(fund):
-            return _fetch_fund(fund, quarters, fast, self.force)
+            return _fetch_fund(fund, months, fast, self.force)
 
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {executor.submit(process, f): f for f in funds}
