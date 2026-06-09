@@ -423,16 +423,36 @@ def get_fund_full_picture(run_fondo: str, fund_type: Literal["fm", "fi"] = "fm")
             ORDER BY mes DESC
         """, {"run": run_fondo})
 
-        # Portfolio summary (latest quarter)
+        # Portfolio summary (latest quarter) — by instrument type
         result["portfolio_summary"] = _rows("""
             SELECT tipo_instrumento,
                    COUNT(*) AS posiciones,
-                   ROUND(AVG(CAST(porcentaje_activos_fondo AS numeric)), 2) AS pct_promedio
+                   ROUND(SUM(CAST(NULLIF(porcentaje_activos_fondo,'') AS numeric))::numeric, 2) AS pct_total
             FROM cartera_naci
             WHERE run_fondo = :run
               AND periodo = (SELECT MAX(periodo) FROM cartera_naci WHERE run_fondo = :run)
             GROUP BY tipo_instrumento
-            ORDER BY pct_promedio DESC NULLS LAST
+            ORDER BY pct_total DESC NULLS LAST
+        """, {"run": run_fondo})
+
+        # Top 10 positions enriched with SII + fund names
+        result["top_positions"] = _rows("""
+            WITH latest AS (SELECT MAX(periodo) AS t FROM cartera_naci WHERE run_fondo = :run)
+            SELECT c.nemotecnico,
+                   COALESCE(e.razon_social, fm.nombre_fondo, fi.razon_social) AS nombre_emisor,
+                   COALESCE(fm.nombre_fondo, fi.razon_social)                 AS nombre_fondo_emisor,
+                   c.tipo_instrumento,
+                   CAST(NULLIF(c.porcentaje_activos_fondo,'') AS numeric)     AS pct_activo_fondo,
+                   c.clasificacion_riesgo, c.tir, c.fecha_vencimiento
+            FROM cartera_naci c
+            LEFT JOIN emisores e ON e.rut = c.rut_emisor
+            LEFT JOIN nemotecnicos n ON n.nemotecnico = c.nemotecnico
+            LEFT JOIN fondo_mutuo fm ON fm.run_fondo = n.run_fondo
+            LEFT JOIN nemotecnicos_fi nfi ON nfi.nemotecnico = c.nemotecnico
+            LEFT JOIN fondos_inversion fi ON fi.run_fondo = nfi.run_fondo
+            WHERE c.run_fondo = :run AND c.periodo = (SELECT t FROM latest)
+            ORDER BY pct_activo_fondo DESC NULLS LAST
+            LIMIT 10
         """, {"run": run_fondo})
 
     else:
@@ -467,6 +487,25 @@ def get_fund_full_picture(run_fondo: str, fund_type: Literal["fm", "fi"] = "fm")
             WHERE run_fondo = :run
               AND periodo = (SELECT MAX(periodo) FROM aportantes_fi WHERE run_fondo = :run)
             ORDER BY rank
+        """, {"run": run_fondo})
+
+        # Top 10 portfolio positions enriched with SII + fund names
+        result["top_positions"] = _rows("""
+            WITH latest AS (SELECT MAX(periodo) AS t FROM cartera_fi_nac WHERE run_fondo = :run)
+            SELECT c.nemotecnico,
+                   COALESCE(e.razon_social, fm.nombre_fondo, fi2.razon_social) AS nombre_emisor,
+                   COALESCE(fm.nombre_fondo, fi2.razon_social)                 AS nombre_fondo_emisor,
+                   c.tipo_instrumento, c.pct_activo_fondo,
+                   c.clasif_riesgo, c.tir_val_par_precio, c.fecha_vencimiento
+            FROM cartera_fi_nac c
+            LEFT JOIN emisores e ON e.rut = c.rut_emisor
+            LEFT JOIN nemotecnicos n ON n.nemotecnico = c.nemotecnico
+            LEFT JOIN fondo_mutuo fm ON fm.run_fondo = n.run_fondo
+            LEFT JOIN nemotecnicos_fi nfi ON nfi.nemotecnico = c.nemotecnico
+            LEFT JOIN fondos_inversion fi2 ON fi2.run_fondo = nfi.run_fondo
+            WHERE c.run_fondo = :run AND c.periodo = (SELECT t FROM latest)
+            ORDER BY c.pct_activo_fondo DESC NULLS LAST
+            LIMIT 10
         """, {"run": run_fondo})
 
     return result
