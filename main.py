@@ -12,7 +12,7 @@ logging.basicConfig(
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.financialStatements.api import router as financial_statements_router
+from src.etl.financialStatements.api import router as financial_statements_router
 from src.api import router as public_api_router
 
 app = FastAPI(title="CMF Downloader")

@@ -7,7 +7,7 @@ from dataclasses import asdict
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
 from src.auth import require_token
-from src.financialStatements.downloaders.financialStatementsDownloader import (
+from src.etl.financialStatements.downloaders.financialStatementsDownloader import (
     FinancialStatementsDownloader,
 )
 

@@ -1,6 +1,6 @@
 import pytest
 
-from src.mutualFunds.loaders.nemotecnicos import classify_serie
+from src.etl.mutualFunds.loaders.nemotecnicos import classify_serie
 
 
 # ---------------------------------------------------------------------------

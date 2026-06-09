@@ -73,19 +73,19 @@ def _refresh_administradores():
 def register_jobs(scheduler: BaseScheduler) -> None:
     """Register all cron jobs on the given scheduler instance."""
 
-    from src.mutualFunds.downloaders.bondsNemotecnicos import BonosNemotecnicosDownloader
-    from src.mutualFunds.downloaders.tacDownloader import TacDownloader
-    from src.mutualFunds.downloaders.carterasDownloader import CarterasDownloader
-    from src.mutualFunds.downloaders.cartolaDownloader import CartolaDownloader
-    from src.mutualFunds.downloaders.identificationDownloader import FMIdentidadDownloader
-    from src.mutualFunds.downloaders.nemotecnicosDownloader import NemotecnicosDownloader
-    from src.investmentFunds.downloaders.nemotecnicosDownloader import FINemotecnicosDownloader
-    from src.investmentFunds.downloaders.identidadDownloader import FIIdentidadDownloader
-    from src.investmentFunds.downloaders.valoresCuotaDownloader import ValoresCuotaFIDownloader
-    from src.investmentFunds.downloaders.aportantesDownloader import AportantesDownloader
-    from src.investmentFunds.downloaders.carterasDownloader import CarterasFIDownloader
-    from src.bolsaSantiago.downloaders.dividendosDownloader import DividendosDownloader
-    from src.investmentFunds.investmentFundsCategories import run_and_save as fi_categorize
+    from src.etl.mutualFunds.downloaders.bondsNemotecnicos import BonosNemotecnicosDownloader
+    from src.etl.mutualFunds.downloaders.tacDownloader import TacDownloader
+    from src.etl.mutualFunds.downloaders.carterasDownloader import CarterasDownloader
+    from src.etl.mutualFunds.downloaders.cartolaDownloader import CartolaDownloader
+    from src.etl.mutualFunds.downloaders.identificationDownloader import FMIdentidadDownloader
+    from src.etl.mutualFunds.downloaders.nemotecnicosDownloader import NemotecnicosDownloader
+    from src.etl.investmentFunds.downloaders.nemotecnicosDownloader import FINemotecnicosDownloader
+    from src.etl.investmentFunds.downloaders.identidadDownloader import FIIdentidadDownloader
+    from src.etl.investmentFunds.downloaders.valoresCuotaDownloader import ValoresCuotaFIDownloader
+    from src.etl.investmentFunds.downloaders.aportantesDownloader import AportantesDownloader
+    from src.etl.investmentFunds.downloaders.carterasDownloader import CarterasFIDownloader
+    from src.etl.bolsaSantiago.downloaders.dividendosDownloader import DividendosDownloader
+    from src.etl.investmentFunds.investmentFundsCategories import run_and_save as fi_categorize
 
 
     def _job(job_id: str, fn):

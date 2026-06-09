@@ -5,7 +5,7 @@ from pathlib import Path
 from src.base import BaseDownloader, DownloadResult
 from src.config import CMFUrl, DOWNLOADS_DIR
 from src.http import make_session
-from src.investmentFunds.loaders.identidad import load_identidad
+from src.etl.investmentFunds.loaders.identidad import load_identidad
 
 # (tipo, estado, rescatable, vigente)
 _SOURCES = [

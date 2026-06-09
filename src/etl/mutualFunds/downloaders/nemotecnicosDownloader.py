@@ -5,7 +5,7 @@ from pathlib import Path
 from src.base import BaseDownloader, DownloadResult
 from src.config import CMFUrl, DOWNLOADS_DIR
 from src.http import make_session
-from src.mutualFunds.loaders.nemotecnicos import load_nemotecnicos
+from src.etl.mutualFunds.loaders.nemotecnicos import load_nemotecnicos
 
 OUTPUT_FILE = "fm_nemotecnicos.html"
 

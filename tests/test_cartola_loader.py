@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from src.mutualFunds.loaders.cartola import COLUMN_MAP, NUMERIC_COLS, load_cartola
+from src.etl.mutualFunds.loaders.cartola import COLUMN_MAP, NUMERIC_COLS, load_cartola
 
 
 # ---------------------------------------------------------------------------

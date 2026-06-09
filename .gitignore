@@ -8,3 +8,4 @@ venv/
 downloads/
 *.log
 .DS_Store
+*.dump
