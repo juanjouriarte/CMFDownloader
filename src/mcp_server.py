@@ -61,17 +61,24 @@ def search_funds(
     fund_type: Literal["fm", "fi", "all"] = "all",
     vigente: bool = True,
     limit: int = 20,
-) -> list[dict]:
+) -> dict:
     """
     Search for mutual funds (FM) or investment funds (FI) by name or administrator.
-    Returns fund identity + latest returns. Use this first to find run_fondo values
-    before calling other tools.
+    Tolerant of partial names and typos — uses trigram similarity as fallback.
+    Returns fund identity + latest returns plus the best administrator name match
+    so you can pass it directly to get_administrator_full_picture or get_administrator_funds.
     """
-    results = []
+    params = {"q": f"%{query}%", "limit": limit, "q_sim": query}
+    vigente_fm = "AND fecha_termino_operaciones IS NULL" if vigente else ""
+    vigente_fi = "AND fi.vigente = true" if vigente else ""
 
-    if fund_type in ("fm", "all"):
-        vigente_filter = "AND fecha_termino_operaciones IS NULL" if vigente else ""
-        rows = _rows(f"""
+    type_filter_fm = "AND '1'='1'" if fund_type in ("fm", "all") else "AND '1'='0'"
+    type_filter_fi = "AND '1'='1'" if fund_type in ("fi", "all") else "AND '1'='0'"
+
+    results = _rows(f"""
+        SELECT tipo, run_fondo, nombre, administrador, tipo_fondo, moneda,
+               vigente, r_1m, r_1y, r_ytd, valor_cuota_actual, fecha_calculo
+        FROM (
             SELECT
                 'fm'                                    AS tipo,
                 fm.run_fondo,
@@ -86,15 +93,8 @@ def search_funds(
             FROM fondo_mutuo fm
             LEFT JOIN mv_rentabilidad_fm r ON r.run_fondo = fm.run_fondo
             WHERE (fm.nombre_fondo ILIKE :q OR fm.razon_social_administradora ILIKE :q)
-              {vigente_filter}
-            ORDER BY fm.nombre_fondo
-            LIMIT :limit
-        """, {"q": f"%{query}%", "limit": limit})
-        results.extend(rows)
-
-    if fund_type in ("fi", "all"):
-        vigente_filter = "AND fi.vigente = true" if vigente else ""
-        rows = _rows(f"""
+              {vigente_fm} {type_filter_fm}
+            UNION ALL
             SELECT
                 'fi'                                    AS tipo,
                 fi.run_fondo,
@@ -109,13 +109,38 @@ def search_funds(
             FROM fondos_inversion fi
             LEFT JOIN mv_rentabilidad_fi r ON r.run_fondo = fi.run_fondo
             WHERE (fi.razon_social ILIKE :q OR fi.administrador ILIKE :q)
-              {vigente_filter}
-            ORDER BY fi.razon_social
-            LIMIT :limit
-        """, {"q": f"%{query}%", "limit": limit})
-        results.extend(rows)
+              {vigente_fi} {type_filter_fi}
+        ) combined
+        ORDER BY nombre
+        LIMIT :limit
+    """, params)
 
-    return results
+    # If no results, try trigram similarity fallback
+    if not results:
+        similar = _rows("""
+            SELECT nombre, administrador, tipo FROM (
+                SELECT nombre_fondo AS nombre, razon_social_administradora AS administrador,
+                       'fm' AS tipo,
+                       SIMILARITY(nombre_fondo, :q_sim) AS sim
+                FROM fondo_mutuo
+                UNION ALL
+                SELECT razon_social, administrador, 'fi',
+                       SIMILARITY(razon_social, :q_sim)
+                FROM fondos_inversion
+            ) x
+            WHERE sim > 0.1
+            ORDER BY sim DESC
+            LIMIT 5
+        """, params)
+        return {
+            "results": [],
+            "message": f"No exact matches for '{query}'.",
+            "did_you_mean": [r["nombre"] for r in similar] if similar else [],
+        }
+
+    # Also surface the unique admin names found for easy follow-up calls
+    admins = list({r["administrador"] for r in results if r["administrador"]})
+    return {"results": results, "admins_found": admins}
 
 
 @mcp.tool()
@@ -413,11 +438,42 @@ def net_new_money_ranking(
 
 
 @mcp.tool()
-def get_fund_full_picture(run_fondo: str, fund_type: Literal["fm", "fi"] = "fm") -> dict:
+def get_fund_full_picture(
+    run_fondo: str | None = None,
+    fund_type: Literal["fm", "fi"] = "fm",
+    nombre: str | None = None,
+) -> dict:
     """
     Complete profile of a single fund: identity, all return periods, AUM trend (last 12 months),
-    net new money (FM only), top shareholders (FI), and latest portfolio summary.
+    net new money (FM only), top shareholders (FI), top portfolio positions, and instrument summary.
+    Pass run_fondo (exact) OR nombre (partial name — resolves automatically).
+    If nombre matches multiple funds, returns a list of candidates to pick from.
     """
+    # Resolve run_fondo from name if not provided
+    if not run_fondo and nombre:
+        if fund_type == "fm":
+            row = _rows("""
+                SELECT run_fondo FROM fondo_mutuo
+                WHERE nombre_fondo ILIKE :q OR nombre_corto ILIKE :q
+                ORDER BY fecha_termino_operaciones IS NOT NULL, nombre_fondo
+                LIMIT 5
+            """, {"q": f"%{nombre}%"})
+        else:
+            row = _rows("""
+                SELECT run_fondo FROM fondos_inversion
+                WHERE razon_social ILIKE :q
+                ORDER BY vigente DESC NULLS LAST, razon_social
+                LIMIT 5
+            """, {"q": f"%{nombre}%"})
+        if not row:
+            return {"error": f"No fund found matching '{nombre}'"}
+        if len(row) > 1:
+            return {"candidates": [r["run_fondo"] for r in row],
+                    "message": f"Multiple funds match '{nombre}'. Pass run_fondo directly."}
+        run_fondo = row[0]["run_fondo"]
+    elif not run_fondo:
+        return {"error": "Provide either run_fondo or nombre"}
+
     result: dict = {}
 
     if fund_type == "fm":
@@ -543,18 +599,28 @@ def get_fund_full_picture(run_fondo: str, fund_type: Literal["fm", "fi"] = "fm")
 def get_administrator_full_picture(admin: str) -> dict:
     """
     Complete administradora profile: fund counts, total AUM, market share,
-    best and worst performing funds, net new money this year, and top shareholders.
-    Use partial name match (e.g. 'BTG' or 'LarrainVial').
+    best and worst performing funds, net new money this year, top shareholders,
+    and top FM portfolio positions.
+    Use partial name match — tolerant of abbreviations (e.g. 'BTG', 'Larrain', 'Banchile').
+    If the name doesn't match, returns a list of all administrators to choose from.
     """
-    result: dict = {}
-
-    # Identity from mv_administradores
-    result["identity"] = _rows("""
+    # Check if admin name matches — return all admins as hint if not
+    identity = _rows("""
         SELECT rut, nombre, funds_fm, funds_fm_vigente, funds_fi, funds_fi_vigente, funds_total
         FROM mv_administradores
         WHERE nombre ILIKE :admin
         LIMIT 1
     """, {"admin": f"%{admin}%"})
+
+    if not identity:
+        all_admins = _rows("SELECT nombre FROM mv_administradores ORDER BY nombre", {})
+        return {
+            "error": f"No administrator found matching '{admin}'.",
+            "available_administrators": [r["nombre"] for r in all_admins],
+        }
+
+    result: dict = {}
+    result["identity"] = identity
 
     # Total AUM (FM) — use most recent date where this admin has data
     result["fm_aum"] = _rows("""
@@ -678,6 +744,95 @@ def get_administrator_full_picture(admin: str) -> dict:
     """, {"admin": f"%{admin}%"})
 
     return result
+
+
+@mcp.tool()
+def get_administrator_funds(admin: str, vigente: bool = True) -> dict:
+    """
+    All funds (FM + FI) for an administrator with their latest NAV, AUM, and return metrics.
+    Use this as a dashboard snapshot of all an admin's funds before drilling into a specific one.
+    Use partial name match (e.g. 'BTG', 'Larrain', 'Banchile').
+    If the name doesn't match, returns the list of all administrators.
+    vigente: True (default) returns only active funds.
+    """
+    # Validate admin name
+    check = _rows("""
+        SELECT nombre FROM mv_administradores WHERE nombre ILIKE :admin LIMIT 1
+    """, {"admin": f"%{admin}%"})
+
+    if not check:
+        all_admins = _rows("SELECT nombre FROM mv_administradores ORDER BY nombre", {})
+        return {
+            "error": f"No administrator found matching '{admin}'.",
+            "available_administrators": [r["nombre"] for r in all_admins],
+        }
+
+    vigente_fm = "AND fm.fecha_termino_operaciones IS NULL" if vigente else ""
+    vigente_fi = "AND fi.vigente = true" if vigente else ""
+
+    fm_funds = _rows(f"""
+        SELECT
+            'fm'                                        AS tipo,
+            fm.run_fondo,
+            fm.nombre_fondo                             AS nombre,
+            fm.tipo_fondo,
+            fm.moneda,
+            r.serie                                     AS mejor_serie,
+            r.valor_actual                              AS valor_cuota,
+            r.fecha_calculo,
+            r.r_1d, r.r_1w, r.r_1m, r.r_1y, r.r_5y, r.r_ytd,
+            cd.patrimonio_neto                          AS aum_clp
+        FROM fondo_mutuo fm
+        LEFT JOIN (
+            SELECT DISTINCT ON (run_fondo) run_fondo, serie, valor_actual, fecha_calculo,
+                   r_1d, r_1w, r_1m, r_1y, r_5y, r_ytd
+            FROM mv_rentabilidad_fm
+            ORDER BY run_fondo, r_1y DESC NULLS LAST
+        ) r ON r.run_fondo = fm.run_fondo
+        LEFT JOIN LATERAL (
+            SELECT patrimonio_neto FROM cartola_diaria
+            WHERE run_fondo = fm.run_fondo
+            ORDER BY fecha DESC LIMIT 1
+        ) cd ON true
+        WHERE fm.razon_social_administradora ILIKE :admin {vigente_fm}
+        ORDER BY aum_clp DESC NULLS LAST
+    """, {"admin": f"%{admin}%"})
+
+    fi_funds = _rows(f"""
+        SELECT
+            'fi'                                        AS tipo,
+            fi.run_fondo,
+            fi.razon_social                             AS nombre,
+            NULL                                        AS tipo_fondo,
+            NULL                                        AS moneda,
+            r.serie                                     AS mejor_serie,
+            r.valor_actual                              AS valor_cuota,
+            r.fecha_calculo,
+            r.r_1d, r.r_1w, r.r_1m, r.r_1y, r.r_5y, r.r_ytd,
+            vc.patrimonio_neto                          AS aum_clp
+        FROM fondos_inversion fi
+        LEFT JOIN (
+            SELECT DISTINCT ON (run_fondo) run_fondo, serie, valor_actual, fecha_calculo,
+                   r_1d, r_1w, r_1m, r_1y, r_5y, r_ytd
+            FROM mv_rentabilidad_fi
+            ORDER BY run_fondo, r_1y DESC NULLS LAST
+        ) r ON r.run_fondo = fi.run_fondo
+        LEFT JOIN LATERAL (
+            SELECT patrimonio_neto FROM valores_cuota_fi
+            WHERE run_fondo = fi.run_fondo
+            ORDER BY fecha DESC LIMIT 1
+        ) vc ON true
+        WHERE fi.administrador ILIKE :admin {vigente_fi}
+        ORDER BY aum_clp DESC NULLS LAST
+    """, {"admin": f"%{admin}%"})
+
+    return {
+        "administrador": check[0]["nombre"],
+        "fm_funds": fm_funds,
+        "fi_funds": fi_funds,
+        "total_fm": len(fm_funds),
+        "total_fi": len(fi_funds),
+    }
 
 
 @mcp.tool()
