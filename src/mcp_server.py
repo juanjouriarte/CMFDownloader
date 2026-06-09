@@ -175,7 +175,8 @@ def top_funds_by_return(
     limit: int = 20,
 ) -> list[dict]:
     """
-    Ranking of best performing funds by return period.
+    Ranking of best performing funds by return period. Returns one row per fund
+    (the best-performing series), so BTG Litio+ appears once, not three times.
     fund_type: 'fm' for mutual funds, 'fi' for investment funds.
     sort_by: r_1d=1 day, r_1w=1 week, r_1m=1 month, r_1y=1 year, r_5y=5 years, r_ytd=year-to-date.
     as_of_date: optional YYYY-MM-DD — compute returns dynamically as of that date instead of today's MV.
@@ -196,20 +197,33 @@ def top_funds_by_return(
                 SELECT run_fondo, serie, nombre_fondo, administrador,
                        valor_actual, fecha_calculo,
                        r_1d, r_1w, r_1m, r_1y, r_5y, r_ytd
-                FROM mv_rentabilidad_fm
-                WHERE {sort_by} IS NOT NULL {admin_filter}
+                FROM (
+                    SELECT DISTINCT ON (run_fondo) run_fondo, serie, nombre_fondo, administrador,
+                           valor_actual, fecha_calculo,
+                           r_1d, r_1w, r_1m, r_1y, r_5y, r_ytd
+                    FROM mv_rentabilidad_fm
+                    WHERE {sort_by} IS NOT NULL {admin_filter}
+                    ORDER BY run_fondo, {sort_by} DESC NULLS LAST
+                ) best
                 ORDER BY {sort_by} DESC NULLS LAST
                 LIMIT :limit
             """, params)
         else:
             return _rows(f"""
-                SELECT r.run_fondo, r.serie, f.razon_social AS nombre, r.administrador,
-                       r.valor_actual, r.fecha_calculo,
-                       r.r_1d, r.r_1w, r.r_1m, r.r_1y, r.r_5y, r.r_ytd
-                FROM mv_rentabilidad_fi r
-                LEFT JOIN fondos_inversion f ON f.run_fondo = r.run_fondo
-                WHERE r.{sort_by} IS NOT NULL {admin_filter}
-                ORDER BY r.{sort_by} DESC NULLS LAST
+                SELECT run_fondo, serie, nombre, administrador,
+                       valor_actual, fecha_calculo,
+                       r_1d, r_1w, r_1m, r_1y, r_5y, r_ytd
+                FROM (
+                    SELECT DISTINCT ON (r.run_fondo)
+                           r.run_fondo, r.serie, f.razon_social AS nombre, r.administrador,
+                           r.valor_actual, r.fecha_calculo,
+                           r.r_1d, r.r_1w, r.r_1m, r.r_1y, r.r_5y, r.r_ytd
+                    FROM mv_rentabilidad_fi r
+                    LEFT JOIN fondos_inversion f ON f.run_fondo = r.run_fondo
+                    WHERE r.{sort_by} IS NOT NULL {admin_filter}
+                    ORDER BY r.run_fondo, r.{sort_by} DESC NULLS LAST
+                ) best
+                ORDER BY {sort_by} DESC NULLS LAST
                 LIMIT :limit
             """, params)
 
@@ -262,19 +276,26 @@ def top_funds_by_return(
                   AND factor_reparto > 0 AND factor_reparto IS NOT NULL
                 GROUP BY run_fondo, serie
             )
-            SELECT
-                e.run_fondo, e.serie,
-                fm.nombre_fondo,
-                fm.razon_social_administradora AS administrador,
-                e.valor_cuota                  AS valor_actual,
-                e.fecha                        AS fecha_calculo,
-                ROUND((e.valor_cuota * COALESCE(d.cum_factor, 1)
-                       / NULLIF(s.valor_cuota, 0) - 1) * 100, 4) AS retorno
-            FROM end_nav e
-            JOIN start_nav s ON s.run_fondo = e.run_fondo AND s.serie = e.serie
-            LEFT JOIN dist d ON d.run_fondo = e.run_fondo AND d.serie = e.serie
-            JOIN fondo_mutuo fm ON fm.run_fondo = e.run_fondo
-            WHERE s.valor_cuota > 0 {admin_join_filter}
+            SELECT run_fondo, serie, nombre_fondo, administrador,
+                   valor_actual, fecha_calculo, retorno
+            FROM (
+                SELECT DISTINCT ON (e.run_fondo)
+                    e.run_fondo, e.serie,
+                    fm.nombre_fondo,
+                    fm.razon_social_administradora AS administrador,
+                    e.valor_cuota                  AS valor_actual,
+                    e.fecha                        AS fecha_calculo,
+                    ROUND((e.valor_cuota * COALESCE(d.cum_factor, 1)
+                           / NULLIF(s.valor_cuota, 0) - 1) * 100, 4) AS retorno
+                FROM end_nav e
+                JOIN start_nav s ON s.run_fondo = e.run_fondo AND s.serie = e.serie
+                LEFT JOIN dist d ON d.run_fondo = e.run_fondo AND d.serie = e.serie
+                JOIN fondo_mutuo fm ON fm.run_fondo = e.run_fondo
+                WHERE s.valor_cuota > 0 {admin_join_filter}
+                ORDER BY e.run_fondo,
+                         ROUND((e.valor_cuota * COALESCE(d.cum_factor, 1)
+                                / NULLIF(s.valor_cuota, 0) - 1) * 100, 4) DESC NULLS LAST
+            ) best
             ORDER BY retorno DESC NULLS LAST
             LIMIT :limit
         """, params)
@@ -301,18 +322,25 @@ def top_funds_by_return(
                 SELECT run_fondo, serie, valor_libro
                 FROM valores_cuota_fi WHERE fecha = (SELECT fecha FROM start_ref)
             )
-            SELECT
-                e.run_fondo, e.serie,
-                fi.razon_social AS nombre,
-                fi.administrador,
-                e.valor_libro   AS valor_actual,
-                e.fecha         AS fecha_calculo,
-                ROUND((e.valor_libro - s.valor_libro)
-                      / NULLIF(s.valor_libro, 0) * 100, 4) AS retorno
-            FROM end_nav e
-            JOIN start_nav s ON s.run_fondo = e.run_fondo AND s.serie = e.serie
-            JOIN fondos_inversion fi ON fi.run_fondo = e.run_fondo
-            WHERE s.valor_libro > 0 {admin_join_filter}
+            SELECT run_fondo, serie, nombre, administrador,
+                   valor_actual, fecha_calculo, retorno
+            FROM (
+                SELECT DISTINCT ON (e.run_fondo)
+                    e.run_fondo, e.serie,
+                    fi.razon_social AS nombre,
+                    fi.administrador,
+                    e.valor_libro   AS valor_actual,
+                    e.fecha         AS fecha_calculo,
+                    ROUND((e.valor_libro - s.valor_libro)
+                          / NULLIF(s.valor_libro, 0) * 100, 4) AS retorno
+                FROM end_nav e
+                JOIN start_nav s ON s.run_fondo = e.run_fondo AND s.serie = e.serie
+                JOIN fondos_inversion fi ON fi.run_fondo = e.run_fondo
+                WHERE s.valor_libro > 0 {admin_join_filter}
+                ORDER BY e.run_fondo,
+                         ROUND((e.valor_libro - s.valor_libro)
+                               / NULLIF(s.valor_libro, 0) * 100, 4) DESC NULLS LAST
+            ) best
             ORDER BY retorno DESC NULLS LAST
             LIMIT :limit
         """, params)
