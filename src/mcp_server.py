@@ -897,7 +897,8 @@ def get_fund_portfolio(
 
         result["naci"] = _rows("""
             SELECT c.nemotecnico, c.rut_emisor,
-                   COALESCE(e.razon_social, c.rut_emisor) AS nombre_emisor,
+                   COALESCE(e.razon_social, fm.nombre_fondo, fi.razon_social, c.rut_emisor) AS nombre_emisor,
+                   COALESCE(fm.nombre_fondo, fi.razon_social) AS nombre_fondo_emisor,
                    c.tipo_instrumento,
                    CAST(NULLIF(c.porcentaje_activos_fondo, '') AS numeric) AS pct_activo_fondo,
                    CAST(NULLIF(c.valorizacion_cierre, '')      AS numeric) AS valorizacion_cierre,
@@ -909,18 +910,29 @@ def get_fund_portfolio(
                    c.codigo_grupo_empresarial
             FROM cartera_naci c
             LEFT JOIN emisores e ON e.rut = c.rut_emisor
+            LEFT JOIN nemotecnicos n ON n.nemotecnico = c.nemotecnico
+            LEFT JOIN fondo_mutuo fm ON fm.run_fondo = n.run_fondo
+            LEFT JOIN nemotecnicos_fi nfi ON nfi.nemotecnico = c.nemotecnico
+            LEFT JOIN fondos_inversion fi ON fi.run_fondo = nfi.run_fondo
             WHERE c.run_fondo = :run AND c.periodo = :periodo
             ORDER BY CAST(NULLIF(c.porcentaje_activos_fondo, '') AS numeric) DESC NULLS LAST
         """, {"run": run_fondo, "periodo": periodo})
 
         result["extr"] = _rows("""
-            SELECT c.nemotecnico, c.nombre_emisor, c.tipo_instrumento,
+            SELECT c.nemotecnico,
+                   COALESCE(c.nombre_emisor, fm.nombre_fondo, fi.razon_social) AS nombre_emisor,
+                   COALESCE(fm.nombre_fondo, fi.razon_social) AS nombre_fondo_emisor,
+                   c.tipo_instrumento,
                    CAST(NULLIF(c.porcentaje_activos_fondo, '') AS numeric) AS pct_activo_fondo,
                    CAST(NULLIF(c.valorizacion_cierre, '')      AS numeric) AS valorizacion_cierre,
                    c.clasificacion_riesgo, c.tir, c.fecha_vencimiento,
                    c.tipo_unidades, c.codigo_pais_emisor, c.situacion_instrumento,
                    c.nombre_grupo_empresarial
             FROM cartera_extr c
+            LEFT JOIN nemotecnicos n ON n.nemotecnico = c.nemotecnico
+            LEFT JOIN fondo_mutuo fm ON fm.run_fondo = n.run_fondo
+            LEFT JOIN nemotecnicos_fi nfi ON nfi.nemotecnico = c.nemotecnico
+            LEFT JOIN fondos_inversion fi ON fi.run_fondo = nfi.run_fondo
             WHERE c.run_fondo = :run AND c.periodo = :periodo
             ORDER BY CAST(NULLIF(c.porcentaje_activos_fondo, '') AS numeric) DESC NULLS LAST
         """, {"run": run_fondo, "periodo": periodo})
@@ -947,7 +959,8 @@ def get_fund_portfolio(
 
         result["naci"] = _rows("""
             SELECT c.nemotecnico, c.rut_emisor,
-                   COALESCE(e.razon_social, c.rut_emisor) AS nombre_emisor,
+                   COALESCE(e.razon_social, fm.nombre_fondo, fi2.razon_social, c.rut_emisor) AS nombre_emisor,
+                   COALESCE(fm.nombre_fondo, fi2.razon_social) AS nombre_fondo_emisor,
                    c.tipo_instrumento, c.pct_activo_fondo,
                    c.valorizacion_cierre, c.clasif_riesgo,
                    c.tir_val_par_precio, c.fecha_vencimiento,
@@ -956,12 +969,18 @@ def get_fund_portfolio(
                    c.situacion_instrumento, c.clasif_esf, c.cod_pais
             FROM cartera_fi_nac c
             LEFT JOIN emisores e ON e.rut = c.rut_emisor
+            LEFT JOIN nemotecnicos n ON n.nemotecnico = c.nemotecnico
+            LEFT JOIN fondo_mutuo fm ON fm.run_fondo = n.run_fondo
+            LEFT JOIN nemotecnicos_fi nfi ON nfi.nemotecnico = c.nemotecnico
+            LEFT JOIN fondos_inversion fi2 ON fi2.run_fondo = nfi.run_fondo
             WHERE c.run_fondo = :run AND c.periodo = :periodo
             ORDER BY c.pct_activo_fondo DESC NULLS LAST
         """, {"run": run_fondo, "periodo": periodo})
 
         result["extr"] = _rows("""
-            SELECT c.nemo_isin AS nemotecnico, c.nombre_emisor,
+            SELECT c.nemo_isin AS nemotecnico,
+                   COALESCE(c.nombre_emisor, fm.nombre_fondo, fi2.razon_social) AS nombre_emisor,
+                   COALESCE(fm.nombre_fondo, fi2.razon_social) AS nombre_fondo_emisor,
                    c.tipo_instrumento, c.pct_activo_fondo,
                    c.valorizacion_cierre, c.clasif_riesgo,
                    c.tir_val_par_precio, c.fecha_vencimiento,
@@ -969,6 +988,10 @@ def get_fund_portfolio(
                    c.tipo_interes, c.pct_capital_emisor, c.pct_activo_emisor,
                    c.situacion_instrumento, c.clasif_esf, c.cod_pais
             FROM cartera_fi_ext c
+            LEFT JOIN nemotecnicos n ON n.nemotecnico = c.nemo_isin
+            LEFT JOIN fondo_mutuo fm ON fm.run_fondo = n.run_fondo
+            LEFT JOIN nemotecnicos_fi nfi ON nfi.nemotecnico = c.nemo_isin
+            LEFT JOIN fondos_inversion fi2 ON fi2.run_fondo = nfi.run_fondo
             WHERE c.run_fondo = :run AND c.periodo = :periodo
             ORDER BY c.pct_activo_fondo DESC NULLS LAST
         """, {"run": run_fondo, "periodo": periodo})

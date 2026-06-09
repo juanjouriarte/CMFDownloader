@@ -83,6 +83,7 @@ class PortfolioPosition(BaseModel):
     porcentaje_capital_emisor: str | None
     porcentaje_activos_emisor: str | None
     codigo_grupo_empresarial: str | None
+    nombre_fondo_emisor: str | None
 
 
 @router.get("", response_model=list[FundFMItem])
@@ -222,16 +223,21 @@ def get_fund_portfolio(run: str, _: CacheHook) -> list[PortfolioPosition]:
         naci = session.execute(
             text("""
                 SELECT 'naci' AS source, c.nemotecnico, c.rut_emisor,
-                       e.razon_social AS nombre_emisor,
+                       COALESCE(e.razon_social, fm.nombre_fondo, fi.razon_social) AS nombre_emisor,
                        c.tipo_instrumento, c.porcentaje_activos_fondo,
                        c.valorizacion_cierre, c.clasificacion_riesgo,
                        c.tir, c.fecha_vencimiento, c.cantidad_unidades, c.tipo_unidades,
                        c.moneda_liquidacion, c.porcentaje_valor_par, c.tipo_interes,
                        c.codigo_pais_emisor, c.situacion_instrumento,
                        c.porcentaje_capital_emisor, c.porcentaje_activos_emisor,
-                       c.codigo_grupo_empresarial
+                       c.codigo_grupo_empresarial,
+                       COALESCE(fm.nombre_fondo, fi.razon_social) AS nombre_fondo_emisor
                 FROM cartera_naci c
                 LEFT JOIN emisores e ON e.rut = c.rut_emisor
+                LEFT JOIN nemotecnicos n ON n.nemotecnico = c.nemotecnico
+                LEFT JOIN fondo_mutuo fm ON fm.run_fondo = n.run_fondo
+                LEFT JOIN nemotecnicos_fi nfi ON nfi.nemotecnico = c.nemotecnico
+                LEFT JOIN fondos_inversion fi ON fi.run_fondo = nfi.run_fondo
                 WHERE c.run_fondo = :run AND c.periodo = :period
             """),
             {"run": run, "period": latest},
@@ -240,15 +246,20 @@ def get_fund_portfolio(run: str, _: CacheHook) -> list[PortfolioPosition]:
         extr = session.execute(
             text("""
                 SELECT 'extr' AS source, c.nemotecnico, NULL AS rut_emisor,
-                       c.nombre_emisor,
+                       COALESCE(c.nombre_emisor, fm.nombre_fondo, fi.razon_social) AS nombre_emisor,
                        c.tipo_instrumento, c.porcentaje_activos_fondo,
                        c.valorizacion_cierre, c.clasificacion_riesgo,
                        c.tir, c.fecha_vencimiento, c.cantidad_unidades, c.tipo_unidades,
                        c.moneda_liquidacion, c.porcentaje_valor_par, c.tipo_interes,
                        c.codigo_pais_emisor, c.situacion_instrumento,
                        c.porcentaje_capital_emisor, c.porcentaje_activos_emisor,
-                       c.nombre_grupo_empresarial AS codigo_grupo_empresarial
+                       c.nombre_grupo_empresarial AS codigo_grupo_empresarial,
+                       COALESCE(fm.nombre_fondo, fi.razon_social) AS nombre_fondo_emisor
                 FROM cartera_extr c
+                LEFT JOIN nemotecnicos n ON n.nemotecnico = c.nemotecnico
+                LEFT JOIN fondo_mutuo fm ON fm.run_fondo = n.run_fondo
+                LEFT JOIN nemotecnicos_fi nfi ON nfi.nemotecnico = c.nemotecnico
+                LEFT JOIN fondos_inversion fi ON fi.run_fondo = nfi.run_fondo
                 WHERE c.run_fondo = :run AND c.periodo = :period
             """),
             {"run": run, "period": latest},
