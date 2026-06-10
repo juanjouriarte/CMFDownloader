@@ -48,14 +48,14 @@ _FI_PERIOD_SQL = {
     "last_12m":    "cf.periodo >= CURRENT_DATE - INTERVAL '12 months'",
 }
 
-# FI rescatable: period start for daily NAV-based NNM
-_FI_RESCATABLE_START_SQL = {
-    "this_month":  "DATE_TRUNC('month', CURRENT_DATE)::date",
-    "last_month":  "DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month')::date",
-    "last_3m":     "(CURRENT_DATE - INTERVAL '3 months')::date",
-    "last_6m":     "(CURRENT_DATE - INTERVAL '6 months')::date",
-    "ytd":         "DATE_TRUNC('year', CURRENT_DATE)::date",
-    "last_12m":    "(CURRENT_DATE - INTERVAL '12 months')::date",
+# FI rescatable: same date filter on valores_cuota_fi.fecha (now that flujo_neto is pre-computed)
+_FI_RESCATABLE_PERIOD_SQL = {
+    "this_month":  "v.fecha >= DATE_TRUNC('month', CURRENT_DATE)",
+    "last_month":  "v.fecha >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month') AND v.fecha < DATE_TRUNC('month', CURRENT_DATE)",
+    "last_3m":     "v.fecha >= CURRENT_DATE - INTERVAL '3 months'",
+    "last_6m":     "v.fecha >= CURRENT_DATE - INTERVAL '6 months'",
+    "ytd":         "v.fecha >= DATE_TRUNC('year', CURRENT_DATE)",
+    "last_12m":    "v.fecha >= CURRENT_DATE - INTERVAL '12 months'",
 }
 
 _SORT_COLS = {"r_1d", "r_1w", "r_1m", "r_1y", "r_5y", "r_ytd"}
@@ -541,93 +541,59 @@ def _fi_nnm_rescatable(
     params: dict,
 ) -> list[dict]:
     """
-    FI rescatable NNM: implied daily flows.
-    cuotas = patrimonio_neto / valor_libro at start and end of period.
-    NNM = (cuotas_end - cuotas_start) × valor_libro_end — strips performance from AUM change.
-    Both CTEs use narrow date windows (14 days start, 7 days end) to avoid full-table scans.
+    FI rescatable NNM: SUM(flujo_neto) over the period.
+    flujo_neto is pre-computed daily in valores_cuota_fi as:
+      (cuotas_t - cuotas_{t-1}) * valor_libro_t  where cuotas = patrimonio_neto / valor_libro.
+    Same pattern as FM monto_aportado/monto_rescatado — just a filtered aggregate.
     """
-    start_sql = ":from_date" if from_date else _FI_RESCATABLE_START_SQL[period]
-    if from_date:
-        params["from_date"] = from_date
-    if to_date:
-        params["to_date"] = to_date
-
-    # Narrow end window: last 7 days before to_date (or before MAX fecha)
-    end_window = (
-        "fecha BETWEEN :to_date::date - 7 AND :to_date::date"
-        if to_date
-        else "fecha >= (SELECT MAX(fecha) FROM valores_cuota_fi) - 7"
-    )
-    # Narrow start window: 14-day range from start so the fecha index is used
-    start_window = f"fecha BETWEEN {start_sql}::date AND {start_sql}::date + 14"
-
-    base_cte = f"""
-        WITH start_cuotas AS (
-            SELECT DISTINCT ON (run_fondo, serie)
-                run_fondo, serie, fecha,
-                patrimonio_neto::numeric / NULLIF(valor_libro, 0) AS cuotas
-            FROM valores_cuota_fi
-            WHERE {start_window}
-              AND valor_libro IS NOT NULL AND valor_libro > 0
-              AND patrimonio_neto IS NOT NULL
-            ORDER BY run_fondo, serie, fecha ASC
-        ),
-        end_cuotas AS (
-            SELECT DISTINCT ON (run_fondo, serie)
-                run_fondo, serie, fecha,
-                patrimonio_neto::numeric / NULLIF(valor_libro, 0) AS cuotas,
-                valor_libro
-            FROM valores_cuota_fi
-            WHERE {end_window}
-              AND valor_libro IS NOT NULL AND valor_libro > 0
-              AND patrimonio_neto IS NOT NULL
-            ORDER BY run_fondo, serie, fecha DESC
-        ),
-        fund_nnm AS (
-            SELECT
-                e.run_fondo,
-                SUM((e.cuotas - s.cuotas) * e.valor_libro) AS nnm_clp,
-                MIN(s.fecha)                                AS desde,
-                MAX(e.fecha)                                AS hasta
-            FROM end_cuotas e
-            JOIN start_cuotas s ON s.run_fondo = e.run_fondo AND s.serie = e.serie
-            GROUP BY e.run_fondo
-        )
-    """
+    if from_date or to_date:
+        conditions = ["v.flujo_neto IS NOT NULL"]
+        if from_date:
+            conditions.append("v.fecha >= :from_date")
+            params["from_date"] = from_date
+        if to_date:
+            conditions.append("v.fecha <= :to_date")
+            params["to_date"] = to_date
+        period_filter = " AND ".join(conditions)
+    else:
+        period_filter = _FI_RESCATABLE_PERIOD_SQL[period] + " AND v.flujo_neto IS NOT NULL"
 
     if group_by == "agf":
-        return _rows(base_cte + """
+        return _rows(f"""
             SELECT
                 fi.administrador,
                 true::boolean                                        AS rescatable,
                 NULL::numeric                                        AS aportes_bn_clp,
                 NULL::numeric                                        AS rescates_bn_clp,
-                ROUND(SUM(fn.nnm_clp) / 1e9, 2)                     AS net_new_money_bn_clp,
-                COUNT(DISTINCT fn.run_fondo)                         AS num_fondos,
-                MIN(fn.desde)                                        AS desde,
-                MAX(fn.hasta)                                        AS hasta
-            FROM fund_nnm fn
-            JOIN fondos_inversion fi ON fi.run_fondo = fn.run_fondo
-            WHERE fi.rescatable = true
+                ROUND(SUM(v.flujo_neto) / 1e9, 2)                   AS net_new_money_bn_clp,
+                COUNT(DISTINCT v.run_fondo)                         AS num_fondos,
+                MIN(v.fecha)                                         AS desde,
+                MAX(v.fecha)                                         AS hasta
+            FROM valores_cuota_fi v
+            JOIN fondos_inversion fi ON fi.run_fondo = v.run_fondo
+            WHERE {period_filter}
+              AND fi.rescatable = true
             GROUP BY fi.administrador
             ORDER BY net_new_money_bn_clp DESC NULLS LAST
             LIMIT :limit
         """, params)
     else:
-        return _rows(base_cte + """
+        return _rows(f"""
             SELECT
-                fn.run_fondo,
+                v.run_fondo,
                 fi.razon_social                                      AS nombre_fondo,
                 fi.administrador,
                 true::boolean                                        AS rescatable,
                 NULL::numeric                                        AS aportes_bn_clp,
                 NULL::numeric                                        AS rescates_bn_clp,
-                ROUND(fn.nnm_clp / 1e9, 2)                          AS net_new_money_bn_clp,
-                fn.desde,
-                fn.hasta
-            FROM fund_nnm fn
-            JOIN fondos_inversion fi ON fi.run_fondo = fn.run_fondo
-            WHERE fi.rescatable = true
+                ROUND(SUM(v.flujo_neto) / 1e9, 2)                   AS net_new_money_bn_clp,
+                MIN(v.fecha)                                         AS desde,
+                MAX(v.fecha)                                         AS hasta
+            FROM valores_cuota_fi v
+            JOIN fondos_inversion fi ON fi.run_fondo = v.run_fondo
+            WHERE {period_filter}
+              AND fi.rescatable = true
+            GROUP BY v.run_fondo, fi.razon_social, fi.administrador
             ORDER BY net_new_money_bn_clp DESC NULLS LAST
             LIMIT :limit
         """, params)

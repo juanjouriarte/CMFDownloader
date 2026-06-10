@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 from bs4 import BeautifulSoup
+from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert
 
 from src.db.engine import SessionLocal
@@ -13,6 +14,30 @@ from src.db.models.valores_cuota_fi import ValorCuotaFI
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 5_000
+
+_FLUJO_NETO_SQL = """
+    WITH lagged AS (
+        SELECT run_fondo, serie, fecha,
+            (
+                patrimonio_neto::numeric / NULLIF(valor_libro, 0)
+                - LAG(patrimonio_neto::numeric / NULLIF(valor_libro, 0)) OVER w
+            ) * valor_libro AS flujo
+        FROM valores_cuota_fi
+        WHERE run_fondo = :run_fondo
+          AND fecha >= :lookback
+          AND valor_libro IS NOT NULL AND valor_libro > 0
+          AND patrimonio_neto IS NOT NULL
+        WINDOW w AS (PARTITION BY run_fondo, serie ORDER BY fecha)
+    )
+    UPDATE valores_cuota_fi v
+    SET flujo_neto = l.flujo
+    FROM lagged l
+    WHERE v.run_fondo = l.run_fondo
+      AND v.serie IS NOT DISTINCT FROM l.serie
+      AND v.fecha = l.fecha
+      AND v.fecha >= :from_date
+      AND l.flujo IS NOT NULL
+"""
 
 
 def _parse_date(s: str):
@@ -73,6 +98,9 @@ def load_valores_cuota(records: list[dict]) -> int:
     if not records:
         return 0
 
+    run_fondo = records[0]["run_fondo"]
+    min_fecha = min(r["fecha"] for r in records if r.get("fecha"))
+
     with SessionLocal() as session:
         for start in range(0, len(records), BATCH_SIZE):
             batch = records[start:start + BATCH_SIZE]
@@ -83,6 +111,14 @@ def load_valores_cuota(records: list[dict]) -> int:
                       if c not in ("run_fondo", "fecha", "serie")},
             )
             session.execute(stmt)
+
+        # Recompute flujo_neto for newly loaded rows.
+        # lookback = 3 days before min_fecha to provide LAG() values across weekends.
+        session.execute(text(_FLUJO_NETO_SQL), {
+            "run_fondo": run_fondo,
+            "from_date": min_fecha,
+            "lookback":  min_fecha - timedelta(days=3),
+        })
         session.commit()
 
     return len(records)

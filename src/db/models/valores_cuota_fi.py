@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 
 from sqlalchemy import BigInteger, Date, Index, Integer, Numeric, String, UniqueConstraint
+from decimal import Decimal
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.db.engine import Base
@@ -28,3 +29,4 @@ class ValorCuotaFI(Base):
     num_aportantes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     num_aportantes_inst: Mapped[int | None] = mapped_column(Integer, nullable=True)
     agencia: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    flujo_neto: Mapped[Decimal | None] = mapped_column(Numeric(28, 4), nullable=True)
