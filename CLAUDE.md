@@ -183,7 +183,6 @@ main.py                       # Web entrypoint: FastAPI only (no scheduler)
 worker.py                     # Worker entrypoint: BlockingScheduler only
 mcp_worker.py                 # MCP entrypoint: FastMCP SSE server on port 8081
 docker-compose.yml            # Oracle deploy — web + worker + mcp process groups
-fly.toml                      # Fly.io app config (alternative deploy target)
 Dockerfile
 .dockerignore
 ```
@@ -463,19 +462,6 @@ print(DividendosDownloader().backfill())
 # INSERT INTO emisores(rut, dv, razon_social) SELECT TRIM(rut), TRIM(dv), TRIM(razon_social) FROM sii_raw ON CONFLICT (rut) DO UPDATE SET dv = EXCLUDED.dv, razon_social = EXCLUDED.razon_social;
 # DROP TABLE sii_raw;
 
-# Fly.io — deploy
-fly deploy
-
-# Fly.io — connect to production Postgres
-fly pg connect -a <pg-app-name>
-
-# Fly.io — tail logs
-fly logs
-
-# Fly.io — dump local DB and restore to Fly
-pg_dump $DATABASE_URL -Fc -f cmf_backup.dump
-fly proxy 5433:5432 -a <pg-app-name>
-pg_restore -h localhost -p 5433 -U postgres -d <db-name> cmf_backup.dump
 ```
 
 ## Environment Variables
@@ -489,18 +475,5 @@ pg_restore -h localhost -p 5433 -U postgres -d <db-name> cmf_backup.dump
 | `BOLSA_COOKIES` | Session cookies for Bolsa de Santiago API (expires periodically) |
 | `BOLSA_CSRF` | CSRF token for Bolsa de Santiago API (expires with cookies) |
 
-Set locally via `.env`. On Fly, set via `fly secrets set KEY=value`.
-
-When `BOLSA_COOKIES` / `BOLSA_CSRF` expire, update them without redeploying:
-```bash
-fly secrets set BOLSA_COOKIES="..." BOLSA_CSRF="..."
-```
-
-## Fly.io Notes
-
-- Two process groups (`web` + `worker`) run on a single Fly Machine — defined in `fly.toml [processes]`.
-- PostgreSQL lives in a separate `fly pg` app; connect via the private Fly network.
-- Persistent volumes are not required — all state lives in Postgres.
-- Downloaded files are deleted immediately after loading — no disk accumulation.
-- `auto_stop_machines = false` in `fly.toml` — prevents the machine stopping overnight and missing scheduler jobs.
-- To update Bolsa cookies/CSRF without redeploy: `fly secrets set BOLSA_COOKIES="..." BOLSA_CSRF="..."`
+Set locally via `.env`. Production environment variables are configured for the
+Oracle-hosted Docker Compose services.
