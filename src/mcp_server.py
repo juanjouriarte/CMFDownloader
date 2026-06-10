@@ -544,13 +544,22 @@ def _fi_nnm_rescatable(
     FI rescatable NNM: implied daily flows.
     cuotas = patrimonio_neto / valor_libro at start and end of period.
     NNM = (cuotas_end - cuotas_start) × valor_libro_end — strips performance from AUM change.
+    Both CTEs use narrow date windows (14 days start, 7 days end) to avoid full-table scans.
     """
-    start_sql = f":from_date" if from_date else _FI_RESCATABLE_START_SQL[period]
-    end_filter = "AND v.fecha <= :to_date" if to_date else ""
+    start_sql = ":from_date" if from_date else _FI_RESCATABLE_START_SQL[period]
     if from_date:
         params["from_date"] = from_date
     if to_date:
         params["to_date"] = to_date
+
+    # Narrow end window: last 7 days before to_date (or before MAX fecha)
+    end_window = (
+        "fecha BETWEEN :to_date::date - 7 AND :to_date::date"
+        if to_date
+        else "fecha >= (SELECT MAX(fecha) FROM valores_cuota_fi) - 7"
+    )
+    # Narrow start window: 14-day range from start so the fecha index is used
+    start_window = f"fecha BETWEEN {start_sql}::date AND {start_sql}::date + 14"
 
     base_cte = f"""
         WITH start_cuotas AS (
@@ -558,7 +567,7 @@ def _fi_nnm_rescatable(
                 run_fondo, serie, fecha,
                 patrimonio_neto::numeric / NULLIF(valor_libro, 0) AS cuotas
             FROM valores_cuota_fi
-            WHERE fecha >= {start_sql}
+            WHERE {start_window}
               AND valor_libro IS NOT NULL AND valor_libro > 0
               AND patrimonio_neto IS NOT NULL
             ORDER BY run_fondo, serie, fecha ASC
@@ -569,9 +578,9 @@ def _fi_nnm_rescatable(
                 patrimonio_neto::numeric / NULLIF(valor_libro, 0) AS cuotas,
                 valor_libro
             FROM valores_cuota_fi
-            WHERE valor_libro IS NOT NULL AND valor_libro > 0
+            WHERE {end_window}
+              AND valor_libro IS NOT NULL AND valor_libro > 0
               AND patrimonio_neto IS NOT NULL
-              {end_filter}
             ORDER BY run_fondo, serie, fecha DESC
         ),
         fund_nnm AS (
