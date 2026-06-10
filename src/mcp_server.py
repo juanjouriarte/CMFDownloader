@@ -60,6 +60,28 @@ _FI_RESCATABLE_PERIOD_SQL = {
 
 _SORT_COLS = {"r_1d", "r_1w", "r_1m", "r_1y", "r_5y", "r_ytd"}
 
+_ACTIVITY_FILTER_SQL = {
+    "all":           "1=1",
+    "raising":       "cuotas_emitidas > 0",
+    "returning":     "cuotas_pagadas > 0",
+    "pending_calls": "cuotas_suscritas_no_pagadas > 0",
+}
+
+_ACTIVITY_ORDER_COL = {
+    "all":           "net_equity_change_bn_clp",
+    "raising":       "capital_raised_bn_clp",
+    "returning":     "capital_returned_bn_clp",
+    "pending_calls": "pending_calls_bn_clp",
+}
+
+# HAVING equivalents of _ACTIVITY_FILTER_SQL for the AGF group_by path
+_ACTIVITY_HAVING_SQL = {
+    "all":           "TRUE",
+    "raising":       "SUM(cuotas_emitidas) > 0",
+    "returning":     "SUM(cuotas_pagadas) > 0",
+    "pending_calls": "SUM(cuotas_suscritas_no_pagadas) > 0",
+}
+
 
 def _rows(sql: str, params: dict | None = None) -> list[dict]:
     with SessionLocal() as s:
@@ -1612,6 +1634,131 @@ def emisor_fund_exposure(
         result["fi"] = domestic + foreign
 
     return result
+
+
+@mcp.tool()
+def fi_equity_activity(
+    activity_type: Literal["all", "raising", "returning", "pending_calls"] = "all",
+    period: Literal["this_month", "last_month", "last_3m", "last_6m", "ytd", "last_12m"] = "last_3m",
+    group_by: Literal["agf", "fund"] = "fund",
+    admin: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    limit: int = 30,
+) -> list[dict]:
+    """
+    Track equity events for non-rescatable FI funds: capital raises, capital returns,
+    and pending/uncommitted capital calls. Data is quarterly (cuotas_fi table).
+
+    activity_type:
+      - 'raising': funds that issued new cuotas this period (active capital raise)
+      - 'returning': funds that paid back cuotas (capital distribution or wind-down)
+      - 'pending_calls': funds with cuotas subscribed but not yet paid (committed uncalled capital)
+      - 'all': all activity, sorted by net equity change
+
+    Shows the most recent quarter per fund within the requested period.
+    group_by='fund' (default): one row per fund — best for identifying specific funds.
+    group_by='agf': aggregated by administrator — best for market-level comparison.
+    from_date / to_date (YYYY-MM-DD): custom quarter range — overrides period.
+
+    Key output fields:
+      capital_raised_bn_clp     = cuotas_emitidas × valor_libro
+      capital_returned_bn_clp   = cuotas_pagadas × valor_libro
+      net_equity_change_bn_clp  = (emitidas - pagadas) × valor_libro
+      pending_calls_bn_clp      = cuotas_suscritas_no_pagadas × valor_libro
+      num_contratos_promesa      = number of active capital commitment contracts
+      num_promitentes            = number of investors with open commitments
+    """
+    params: dict = {"limit": limit}
+
+    if from_date or to_date:
+        conditions = ["cf.valor_libro IS NOT NULL", "cf.valor_libro > 0"]
+        if from_date:
+            conditions.append("cf.periodo >= :from_date")
+            params["from_date"] = from_date
+        if to_date:
+            conditions.append("cf.periodo <= :to_date")
+            params["to_date"] = to_date
+        period_cond = " AND ".join(conditions)
+    else:
+        period_cond = _FI_PERIOD_SQL[period] + " AND cf.valor_libro IS NOT NULL AND cf.valor_libro > 0"
+
+    activity_filter = _ACTIVITY_FILTER_SQL[activity_type]
+    activity_having = _ACTIVITY_HAVING_SQL[activity_type]
+    order_col       = _ACTIVITY_ORDER_COL[activity_type]
+    admin_filter    = "AND fi.administrador ILIKE :admin" if admin else ""
+    if admin:
+        params["admin"] = f"%{admin}%"
+
+    if group_by == "fund":
+        return _rows(f"""
+            WITH latest_in_period AS (
+                SELECT DISTINCT ON (cf.run_fondo)
+                    cf.run_fondo,
+                    fi.razon_social                                              AS nombre,
+                    fi.administrador,
+                    cf.periodo,
+                    COALESCE(cf.cuotas_emitidas, 0)                             AS cuotas_emitidas,
+                    COALESCE(cf.cuotas_pagadas, 0)                              AS cuotas_pagadas,
+                    COALESCE(cf.cuotas_suscritas_no_pagadas, 0)                 AS cuotas_suscritas_no_pagadas,
+                    cf.num_cuotas_promesa,
+                    cf.num_contratos_promesa,
+                    cf.num_promitentes,
+                    cf.valor_libro
+                FROM cuotas_fi cf
+                JOIN fondos_inversion fi ON fi.run_fondo = cf.run_fondo
+                WHERE {period_cond}
+                  AND fi.rescatable = false
+                  {admin_filter}
+                ORDER BY cf.run_fondo, cf.periodo DESC
+            )
+            SELECT
+                run_fondo, nombre, administrador, periodo,
+                cuotas_emitidas, cuotas_pagadas, cuotas_suscritas_no_pagadas,
+                num_cuotas_promesa, num_contratos_promesa, num_promitentes,
+                ROUND(cuotas_emitidas * valor_libro / 1e9, 3)                   AS capital_raised_bn_clp,
+                ROUND(cuotas_pagadas  * valor_libro / 1e9, 3)                   AS capital_returned_bn_clp,
+                ROUND((cuotas_emitidas - cuotas_pagadas) * valor_libro / 1e9, 3) AS net_equity_change_bn_clp,
+                ROUND(cuotas_suscritas_no_pagadas * valor_libro / 1e9, 3)       AS pending_calls_bn_clp
+            FROM latest_in_period
+            WHERE {activity_filter}
+            ORDER BY {order_col} DESC NULLS LAST
+            LIMIT :limit
+        """, params)
+    else:
+        return _rows(f"""
+            WITH latest_in_period AS (
+                SELECT DISTINCT ON (cf.run_fondo)
+                    cf.run_fondo,
+                    fi.administrador,
+                    cf.periodo,
+                    COALESCE(cf.cuotas_emitidas, 0)             AS cuotas_emitidas,
+                    COALESCE(cf.cuotas_pagadas, 0)              AS cuotas_pagadas,
+                    COALESCE(cf.cuotas_suscritas_no_pagadas, 0) AS cuotas_suscritas_no_pagadas,
+                    cf.valor_libro
+                FROM cuotas_fi cf
+                JOIN fondos_inversion fi ON fi.run_fondo = cf.run_fondo
+                WHERE {period_cond}
+                  AND fi.rescatable = false
+                  {admin_filter}
+                ORDER BY cf.run_fondo, cf.periodo DESC
+            )
+            SELECT
+                administrador,
+                COUNT(*) FILTER (WHERE cuotas_emitidas > 0)             AS fondos_raising,
+                COUNT(*) FILTER (WHERE cuotas_pagadas > 0)              AS fondos_returning,
+                COUNT(*) FILTER (WHERE cuotas_suscritas_no_pagadas > 0) AS fondos_pending_calls,
+                COUNT(*)                                                 AS total_fondos,
+                ROUND(SUM(cuotas_emitidas * valor_libro) / 1e9, 2)      AS capital_raised_bn_clp,
+                ROUND(SUM(cuotas_pagadas  * valor_libro) / 1e9, 2)      AS capital_returned_bn_clp,
+                ROUND(SUM((cuotas_emitidas - cuotas_pagadas) * valor_libro) / 1e9, 2) AS net_equity_change_bn_clp,
+                ROUND(SUM(cuotas_suscritas_no_pagadas * valor_libro) / 1e9, 2)         AS pending_calls_bn_clp
+            FROM latest_in_period
+            GROUP BY administrador
+            HAVING {activity_having}
+            ORDER BY {order_col} DESC NULLS LAST
+            LIMIT :limit
+        """, params)
 
 
 @mcp.tool()

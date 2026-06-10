@@ -241,7 +241,7 @@ The `emisores` table holds ~994k Chilean companies from the SII (tax authority) 
 
 ### MCP server (`src/mcp_server.py`)
 
-FastMCP server exposing 10 tools for AI-driven fund-market analysis. Runs as the `mcp` container (`mcp_worker.py`, SSE on port 8081), reverse-proxied by nginx at `/mcp/sse`. Connected to Claude.ai via Settings → Integrations. Tools:
+FastMCP server exposing 15 tools for AI-driven fund-market analysis. Runs as the `mcp` container (`mcp_worker.py`, SSE on port 8081), reverse-proxied by nginx at `/mcp/sse`. Connected to Claude.ai via Settings → Integrations. Tools:
 
 | Tool | Purpose |
 |---|---|
@@ -249,6 +249,7 @@ FastMCP server exposing 10 tools for AI-driven fund-market analysis. Runs as the
 | `compare_funds` | Side-by-side returns for 2+ funds |
 | `top_funds_by_return` | Rankings by 1D/1W/1M/1Y/5Y/YTD. Optional `as_of_date` (YYYY-MM-DD) computes returns dynamically from raw data for any historical date (FM: total return with factor_reparto; FI: NAV-only) |
 | `net_new_money_ranking` | Net new money by AGF or fund. `fund_type`: `fm` (daily, explicit aportes+rescates) or `fi` (rescatable: daily implied via `flujo_neto`; non-rescatable: quarterly `cuotas_fi`). `rescatable` filter for FI. Optional `from_date`/`to_date` overrides `period` preset |
+| `fi_equity_activity` | Equity events for non-rescatable FI funds: `raising` (new cuotas issued), `returning` (cuotas paid back), `pending_calls` (cuotas subscribed but not yet paid). Returns `capital_raised_bn_clp`, `capital_returned_bn_clp`, `net_equity_change_bn_clp`, `pending_calls_bn_clp`, `num_contratos_promesa`, `num_promitentes`. Group by fund or AGF |
 | `get_fund_full_picture` | Identity, returns, flows, portfolio, shareholders |
 | `get_administrator_full_picture` | AUM, market share, best/worst funds, flows, shareholders, `top_fm_positions` (top 15 holdings across all admin FM funds, enriched) |
 | `compare_administrators` | M&A view: shared shareholders, AUM, merge scenario |
