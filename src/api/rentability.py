@@ -27,6 +27,8 @@ class RentFMItem(BaseModel):
     r_1y: float | None
     r_5y: float | None
     r_ytd: float | None
+    is_data_suspicious: bool
+    suspicious_periods: list[str]
 
 
 class RentFIItem(BaseModel):
@@ -50,6 +52,10 @@ def rentability_fm(
     _: CacheHook,
     sort: str = Query("r_1y", description="Sort field: r_1d | r_1w | r_1m | r_1y | r_5y | r_ytd"),
     admin: str | None = Query(None, description="Partial match on administrador name"),
+    include_suspicious: bool = Query(
+        False,
+        description="Include rows flagged for implausible return values",
+    ),
 ) -> list[RentFMItem]:
     if sort not in _VALID_SORT:
         sort = "r_1y"
@@ -60,12 +66,15 @@ def rentability_fm(
     if admin:
         conditions.append("administrador ILIKE :admin")
         params["admin"] = f"%{admin}%"
+    if not include_suspicious:
+        conditions.append("NOT is_data_suspicious")
 
     where = "WHERE " + " AND ".join(conditions)
     sql = text(f"""
         SELECT run_fondo, serie, nombre_fondo, administrador, valor_actual, fecha_calculo,
-               r_1d, r_1w, r_1m, r_1y, r_5y, r_ytd
-        FROM mv_rentabilidad_fm
+               r_1d, r_1w, r_1m, r_1y, r_5y, r_ytd,
+               is_data_suspicious, suspicious_periods
+        FROM v_rentabilidad_fm_quality
         {where}
         ORDER BY {sort} DESC NULLS LAST
         LIMIT :limit OFFSET :offset

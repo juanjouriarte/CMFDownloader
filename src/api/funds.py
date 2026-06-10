@@ -48,6 +48,8 @@ class RentFM(BaseModel):
     r_1y: float | None
     r_5y: float | None
     r_ytd: float | None
+    is_data_suspicious: bool
+    suspicious_periods: list[str]
 
 
 class FundFMDetail(FundFMItem):
@@ -159,8 +161,9 @@ def get_fund(run: str, _: CacheHook) -> FundFMDetail:
         rent_rows = session.execute(
             text("""
                 SELECT run_fondo, serie, nombre_fondo, administrador, valor_actual,
-                       fecha_calculo, r_1d, r_1w, r_1m, r_1y, r_5y, r_ytd
-                FROM mv_rentabilidad_fm WHERE run_fondo = :run
+                       fecha_calculo, r_1d, r_1w, r_1m, r_1y, r_5y, r_ytd,
+                       is_data_suspicious, suspicious_periods
+                FROM v_rentabilidad_fm_quality WHERE run_fondo = :run
             """),
             {"run": run},
         ).mappings().all()

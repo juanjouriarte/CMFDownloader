@@ -207,8 +207,9 @@ def compare_funds(
                 r.run_fondo, r.serie, r.nombre_fondo, r.administrador,
                 r.valor_actual, r.fecha_calculo,
                 r.r_1d, r.r_1w, r.r_1m, r.r_1y, r.r_5y, r.r_ytd,
+                r.is_data_suspicious, r.suspicious_periods,
                 cd.patrimonio_neto AS aum_clp
-            FROM mv_rentabilidad_fm r
+            FROM v_rentabilidad_fm_quality r
             LEFT JOIN LATERAL (
                 SELECT patrimonio_neto FROM cartola_diaria
                 WHERE run_fondo = r.run_fondo AND serie = r.serie
@@ -266,13 +267,15 @@ def top_funds_by_return(
             return _rows(f"""
                 SELECT run_fondo, serie, nombre_fondo, administrador,
                        valor_actual, fecha_calculo,
-                       r_1d, r_1w, r_1m, r_1y, r_5y, r_ytd
+                       r_1d, r_1w, r_1m, r_1y, r_5y, r_ytd,
+                       is_data_suspicious, suspicious_periods
                 FROM (
                     SELECT DISTINCT ON (run_fondo) run_fondo, serie, nombre_fondo, administrador,
                            valor_actual, fecha_calculo,
-                           r_1d, r_1w, r_1m, r_1y, r_5y, r_ytd
-                    FROM mv_rentabilidad_fm
-                    WHERE {sort_by} IS NOT NULL {admin_filter}
+                           r_1d, r_1w, r_1m, r_1y, r_5y, r_ytd,
+                           is_data_suspicious, suspicious_periods
+                    FROM v_rentabilidad_fm_quality
+                    WHERE {sort_by} IS NOT NULL AND NOT is_data_suspicious {admin_filter}
                     ORDER BY run_fondo, {sort_by} DESC NULLS LAST
                 ) best
                 ORDER BY {sort_by} DESC NULLS LAST
