@@ -57,6 +57,41 @@ postgresql://cmf:cmf2026secure@10.0.0.42:5433/cmf
 psql -h localhost -p 5433 -U cmf -d cmf
 ```
 
+## Dev DB Workflow
+
+**Rule**: all schema changes and data experiments must be validated locally before deploying to production.
+
+Local PostgreSQL runs at `127.0.0.1:5432` (connection string in `.env`). It holds a full copy of production data (same row counts, same schema).
+
+### Dev workflow for every change
+```bash
+# 1. Write the migration / code change on your feature branch
+# 2. Apply and test locally
+alembic upgrade head          # apply new migrations
+uvicorn main:app --reload     # verify API endpoints
+
+# 3. Only when it works locally, open the PR and merge to main
+# 4. Automatic deploy picks it up via GitHub Actions
+```
+
+### New Alembic migrations
+- Always use `IF NOT EXISTS` / `IF EXISTS` in raw SQL so migrations are idempotent (safe to re-run if partially applied)
+- Never use `CREATE INDEX CONCURRENTLY` inside a migration — it cannot run inside Alembic's transaction block. Use `CREATE INDEX IF NOT EXISTS` instead (lock is acceptable during a deploy window)
+- Test with `alembic upgrade head` locally before pushing
+
+### Querying / debugging production
+Read-only queries against production are fine via `docker exec`:
+```bash
+ssh -i ~/.ssh/oracle_cmf.key ubuntu@146.181.34.54
+sudo docker exec cmfdownloader-web-1 python -c "
+from src.db.engine import SessionLocal
+from sqlalchemy import text
+with SessionLocal() as s:
+    print(s.execute(text('SELECT COUNT(*) FROM cartola_diaria')).scalar())
+"
+```
+Never modify production schema or data directly — apply via Alembic migrations.
+
 ## Architecture
 
 ```

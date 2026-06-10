@@ -29,20 +29,21 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "valores_cuota_fi",
-        sa.Column("flujo_neto", sa.Numeric(28, 4), nullable=True),
+    # IF NOT EXISTS makes this safe to re-run on DBs where the column was applied manually.
+    op.execute(
+        "ALTER TABLE valores_cuota_fi "
+        "ADD COLUMN IF NOT EXISTS flujo_neto NUMERIC(28, 4)"
     )
 
-    # Covering index: makes date-range SUM(flujo_neto) queries fast (~0.25s for YTD).
-    # CONCURRENTLY must run outside a transaction — Alembic uses autocommit for DDL
-    # so this is safe here.
+    # Regular (non-concurrent) index creation works inside a transaction and is
+    # appropriate here — the container restarts during deploy anyway.
     op.execute(
-        "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_valores_cuota_fi_fecha_run_flujo "
+        "CREATE INDEX IF NOT EXISTS ix_valores_cuota_fi_fecha_run_flujo "
         "ON valores_cuota_fi (fecha, run_fondo, flujo_neto)"
     )
 
     # Backfill all existing rows in one pass using LAG() window function.
+    # Safe to re-run: only updates rows where the computed flujo is NOT NULL.
     op.execute("""
         WITH lagged AS (
             SELECT
@@ -72,4 +73,4 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute("DROP INDEX IF EXISTS ix_valores_cuota_fi_fecha_run_flujo")
-    op.drop_column("valores_cuota_fi", "flujo_neto")
+    op.execute("ALTER TABLE valores_cuota_fi DROP COLUMN IF EXISTS flujo_neto")
