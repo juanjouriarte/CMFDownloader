@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This is the canonical project instructions file for coding agents working in this repository.
 
 ## Project Purpose
 
