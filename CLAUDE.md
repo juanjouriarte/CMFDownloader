@@ -57,6 +57,41 @@ postgresql://cmf:cmf2026secure@10.0.0.42:5433/cmf
 psql -h localhost -p 5433 -U cmf -d cmf
 ```
 
+## Dev DB Workflow
+
+**Rule**: all schema changes and data experiments must be validated locally before deploying to production.
+
+Local PostgreSQL runs at `127.0.0.1:5432` (connection string in `.env`). It holds a full copy of production data (same row counts, same schema).
+
+### Dev workflow for every change
+```bash
+# 1. Write the migration / code change on your feature branch
+# 2. Apply and test locally
+alembic upgrade head          # apply new migrations
+uvicorn main:app --reload     # verify API endpoints
+
+# 3. Only when it works locally, open the PR and merge to main
+# 4. Automatic deploy picks it up via GitHub Actions
+```
+
+### New Alembic migrations
+- Always use `IF NOT EXISTS` / `IF EXISTS` in raw SQL so migrations are idempotent (safe to re-run if partially applied)
+- Never use `CREATE INDEX CONCURRENTLY` inside a migration — it cannot run inside Alembic's transaction block. Use `CREATE INDEX IF NOT EXISTS` instead (lock is acceptable during a deploy window)
+- Test with `alembic upgrade head` locally before pushing
+
+### Querying / debugging production
+Read-only queries against production are fine via `docker exec`:
+```bash
+ssh -i ~/.ssh/oracle_cmf.key ubuntu@146.181.34.54
+sudo docker exec cmfdownloader-web-1 python -c "
+from src.db.engine import SessionLocal
+from sqlalchemy import text
+with SessionLocal() as s:
+    print(s.execute(text('SELECT COUNT(*) FROM cartola_diaria')).scalar())
+"
+```
+Never modify production schema or data directly — apply via Alembic migrations.
+
 ## Architecture
 
 ```
@@ -227,7 +262,7 @@ r = (VL_end - VL_start + SUM(dividends in period)) / VL_start × 100
 ```
 - `VL` = `valores_cuota_fi.valor_libro`. Dividends matched via `nemotecnicos_fi` → `dividendos` using `fec_lim` (ex-date), currency-matched: `$$`/CLP → `$`, `PROM`/USD → `US$` (no FX needed). Hyphen formats normalized (`CFICOF4A-E` = `CFI-COF4AE`).
 
-Both pick the **most-populated date within the last 7 days** as reference, so CMF publish lag (typically 1-2 days) never reduces fund coverage. Note: raw CMF data occasionally has corrupt `valor_cuota` jumps for individual fund/series — the views reflect source data faithfully and do not mask these.
+Both pick the **most recent date whose fund count is ≥ 90% of the maximum seen in the last 7 days** as reference. This tolerates a handful of late-publishing funds while still preferring recency (e.g. one fund missing on a newer date no longer anchors the MV to an older date). Note: raw CMF data occasionally has corrupt `valor_cuota` jumps for individual fund/series — the views reflect source data faithfully and do not mask these.
 
 ### `mv_administradores` materialized view
 
@@ -241,14 +276,15 @@ The `emisores` table holds ~994k Chilean companies from the SII (tax authority) 
 
 ### MCP server (`src/mcp_server.py`)
 
-FastMCP server exposing 10 tools for AI-driven fund-market analysis. Runs as the `mcp` container (`mcp_worker.py`, SSE on port 8081), reverse-proxied by nginx at `/mcp/sse`. Connected to Claude.ai via Settings → Integrations. Tools:
+FastMCP server exposing 15 tools for AI-driven fund-market analysis. Runs as the `mcp` container (`mcp_worker.py`, SSE on port 8081), reverse-proxied by nginx at `/mcp/sse`. Connected to Claude.ai via Settings → Integrations. Tools:
 
 | Tool | Purpose |
 |---|---|
 | `search_funds` | Find FM/FI funds by name or admin |
 | `compare_funds` | Side-by-side returns for 2+ funds |
 | `top_funds_by_return` | Rankings by 1D/1W/1M/1Y/5Y/YTD. Optional `as_of_date` (YYYY-MM-DD) computes returns dynamically from raw data for any historical date (FM: total return with factor_reparto; FI: NAV-only) |
-| `net_new_money_ranking` | Aportes − rescates by AGF or fund (FM only). Optional `from_date`/`to_date` for custom date ranges, overrides `period` preset |
+| `net_new_money_ranking` | Net new money by AGF or fund. `fund_type`: `fm` (daily, explicit aportes+rescates) or `fi` (rescatable: daily implied via `flujo_neto`; non-rescatable: quarterly `cuotas_fi`). `rescatable` filter for FI. Optional `from_date`/`to_date` overrides `period` preset |
+| `fi_equity_activity` | Equity events for non-rescatable FI funds: `raising` (new cuotas issued), `returning` (cuotas paid back), `pending_calls` (cuotas subscribed but not yet paid). Returns `capital_raised_bn_clp`, `capital_returned_bn_clp`, `net_equity_change_bn_clp`, `pending_calls_bn_clp`, `num_contratos_promesa`, `num_promitentes`. Group by fund or AGF |
 | `get_fund_full_picture` | Identity, returns, flows, portfolio, shareholders |
 | `get_administrator_full_picture` | AUM, market share, best/worst funds, flows, shareholders, `top_fm_positions` (top 15 holdings across all admin FM funds, enriched) |
 | `compare_administrators` | M&A view: shared shareholders, AUM, merge scenario |
@@ -260,7 +296,7 @@ FastMCP server exposing 10 tools for AI-driven fund-market analysis. Runs as the
 | `emisor_fund_exposure` | Given a company (RUT or name), list every fund holding it with weight and instrument type. Covers domestic (naci) + foreign (extr) portfolios — foreign matched by nombre_emisor when searching by name; results tagged with `source=naci/extr` |
 | `portfolio_overlap` | Jaccard overlap score + shared positions between two funds |
 
-AUM figures are CLP. Net new money uses `cartola_diaria` generated columns. The `mcp` container only needs `DATABASE_URL`.
+AUM figures are CLP. FM net new money uses `cartola_diaria` generated columns (`monto_aportado`, `monto_rescatado`). FI rescatable NNM uses `valores_cuota_fi.flujo_neto` (daily implied flow, pre-computed at load time). FI non-rescatable uses quarterly `cuotas_fi`. The `mcp` container only needs `DATABASE_URL`.
 
 ### Scheduler jobs (America/Santiago)
 
@@ -335,7 +371,7 @@ All public endpoints return `Cache-Control: public, max-age=3600` and allow all 
 | `financial_statements` | 2M+ | IFRS statements (quarterly) for all CMF companies 2009–2026 |
 | `fondos_inversion` | 1,641 | FI registry: run_fondo, administrador, rescatable, vigente, has_data |
 | `nemotecnicos_fi` | 2,370 | FI cuota tickers |
-| `valores_cuota_fi` | 2.9M+ | FI daily NAV/AUM 2020–2026, 531 MB |
+| `valores_cuota_fi` | 2.9M+ | FI daily NAV/AUM 2020–2026, 531 MB. `flujo_neto` = daily implied net flow in CLP: `(cuotas_t − cuotas_{t-1}) × valor_libro_t` where `cuotas = patrimonio_neto / valor_libro`. Covering index `(fecha, run_fondo, flujo_neto)` |
 | `aportantes_fi` | 176K+ | FI quarterly top-12 shareholders with ownership % (periodo = quarter-end) |
 | `cuotas_fi` | 35K+ | FI quarterly: cuotas emitidas/pagadas, valor libro (periodo = quarter-end) |
 | `cartera_fi_nac` | 888K+ | FI quarterly domestic positions (IFRS). Composite index (run_fondo, periodo) |
