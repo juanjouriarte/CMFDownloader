@@ -227,7 +227,7 @@ r = (VL_end - VL_start + SUM(dividends in period)) / VL_start × 100
 ```
 - `VL` = `valores_cuota_fi.valor_libro`. Dividends matched via `nemotecnicos_fi` → `dividendos` using `fec_lim` (ex-date), currency-matched: `$$`/CLP → `$`, `PROM`/USD → `US$` (no FX needed). Hyphen formats normalized (`CFICOF4A-E` = `CFI-COF4AE`).
 
-Both pick the **most-populated date within the last 7 days** as reference, so CMF publish lag (typically 1-2 days) never reduces fund coverage. Note: raw CMF data occasionally has corrupt `valor_cuota` jumps for individual fund/series — the views reflect source data faithfully and do not mask these.
+Both pick the **most recent date whose fund count is ≥ 90% of the maximum seen in the last 7 days** as reference. This tolerates a handful of late-publishing funds while still preferring recency (e.g. one fund missing on a newer date no longer anchors the MV to an older date). Note: raw CMF data occasionally has corrupt `valor_cuota` jumps for individual fund/series — the views reflect source data faithfully and do not mask these.
 
 ### `mv_administradores` materialized view
 
@@ -248,7 +248,7 @@ FastMCP server exposing 10 tools for AI-driven fund-market analysis. Runs as the
 | `search_funds` | Find FM/FI funds by name or admin |
 | `compare_funds` | Side-by-side returns for 2+ funds |
 | `top_funds_by_return` | Rankings by 1D/1W/1M/1Y/5Y/YTD. Optional `as_of_date` (YYYY-MM-DD) computes returns dynamically from raw data for any historical date (FM: total return with factor_reparto; FI: NAV-only) |
-| `net_new_money_ranking` | Aportes − rescates by AGF or fund (FM only). Optional `from_date`/`to_date` for custom date ranges, overrides `period` preset |
+| `net_new_money_ranking` | Net new money by AGF or fund. `fund_type`: `fm` (daily, explicit aportes+rescates) or `fi` (rescatable: daily implied via `flujo_neto`; non-rescatable: quarterly `cuotas_fi`). `rescatable` filter for FI. Optional `from_date`/`to_date` overrides `period` preset |
 | `get_fund_full_picture` | Identity, returns, flows, portfolio, shareholders |
 | `get_administrator_full_picture` | AUM, market share, best/worst funds, flows, shareholders, `top_fm_positions` (top 15 holdings across all admin FM funds, enriched) |
 | `compare_administrators` | M&A view: shared shareholders, AUM, merge scenario |
@@ -260,7 +260,7 @@ FastMCP server exposing 10 tools for AI-driven fund-market analysis. Runs as the
 | `emisor_fund_exposure` | Given a company (RUT or name), list every fund holding it with weight and instrument type. Covers domestic (naci) + foreign (extr) portfolios — foreign matched by nombre_emisor when searching by name; results tagged with `source=naci/extr` |
 | `portfolio_overlap` | Jaccard overlap score + shared positions between two funds |
 
-AUM figures are CLP. Net new money uses `cartola_diaria` generated columns. The `mcp` container only needs `DATABASE_URL`.
+AUM figures are CLP. FM net new money uses `cartola_diaria` generated columns (`monto_aportado`, `monto_rescatado`). FI rescatable NNM uses `valores_cuota_fi.flujo_neto` (daily implied flow, pre-computed at load time). FI non-rescatable uses quarterly `cuotas_fi`. The `mcp` container only needs `DATABASE_URL`.
 
 ### Scheduler jobs (America/Santiago)
 
@@ -335,7 +335,7 @@ All public endpoints return `Cache-Control: public, max-age=3600` and allow all 
 | `financial_statements` | 2M+ | IFRS statements (quarterly) for all CMF companies 2009–2026 |
 | `fondos_inversion` | 1,641 | FI registry: run_fondo, administrador, rescatable, vigente, has_data |
 | `nemotecnicos_fi` | 2,370 | FI cuota tickers |
-| `valores_cuota_fi` | 2.9M+ | FI daily NAV/AUM 2020–2026, 531 MB |
+| `valores_cuota_fi` | 2.9M+ | FI daily NAV/AUM 2020–2026, 531 MB. `flujo_neto` = daily implied net flow in CLP: `(cuotas_t − cuotas_{t-1}) × valor_libro_t` where `cuotas = patrimonio_neto / valor_libro`. Covering index `(fecha, run_fondo, flujo_neto)` |
 | `aportantes_fi` | 176K+ | FI quarterly top-12 shareholders with ownership % (periodo = quarter-end) |
 | `cuotas_fi` | 35K+ | FI quarterly: cuotas emitidas/pagadas, valor libro (periodo = quarter-end) |
 | `cartera_fi_nac` | 888K+ | FI quarterly domestic positions (IFRS). Composite index (run_fondo, periodo) |

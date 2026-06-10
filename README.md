@@ -32,7 +32,7 @@ ETL pipeline that downloads public fund datasets from the Chilean CMF (Comisión
 ### Investment Funds (FI)
 - [x] **Identidad FI** (`fondos_inversion`) — full CMF registry: 1,641 funds (FIRES + FINRE, vigentes + no vigentes), with `rescatable`, `vigente`, `has_data`
 - [x] **Nemotecnicos FI** — cuota tickers (2,370 series)
-- [x] **Valores Cuota FI** — daily NAV, AUM, investors (2020–2026, 2.9M rows, 531 MB)
+- [x] **Valores Cuota FI** — daily NAV, AUM, investors (2020–2026, 2.9M rows, 531 MB). `flujo_neto` column: daily implied net flow `(cuotas_t − cuotas_{t-1}) × valor_libro_t` — pre-computed at load time, covering index on `(fecha, run_fondo, flujo_neto)`
 - [x] **Aportantes FI** — quarterly top-12 shareholders with ownership % (2020–2026, 176k rows). Canonical names via `entidades` table
 - [x] **Cuotas FI** — quarterly: cuotas emitidas/pagadas, valor libro (2020–2026)
 - [x] **Carteras FI** — quarterly IFRS portfolio positions: NACI, EXT, MET_PART, FUT_FW (2020–2026, 888K+ rows domestic). Composite indexes `(run_fondo, periodo)`
@@ -49,6 +49,7 @@ ETL pipeline that downloads public fund datasets from the Chilean CMF (Comisión
 - [x] **Admin dimension** — `mv_administradores` materialized view: FM+FI fund counts per administradora, joined by name. Refreshed daily
 - [x] **Rentability (FM)** — `mv_rentabilidad_fm` materialized view: total return 1D/1W/1M/1Y/5Y/YTD via `valor_cuota` × cumulative `factor_reparto`. Refreshed daily
 - [x] **Rentability (FI rescatables)** — `mv_rentabilidad_fi` materialized view: NAV + dividends (CLP & USD currency-matched via `nemotecnicos_fi` → `dividendos`). Refreshed daily
+- [x] **MV ref date — 90% coverage threshold** — both rentability MVs pick the most recent date with ≥ 90% of max fund coverage (not just max count), so late-publishing funds don't anchor the whole market to an older date
 
 ### Public API (`src/api/`)
 - [x] **CORS + caching** — all endpoints open (`allow_origins=["*"]`), `Cache-Control: public, max-age=3600` for edge caching
@@ -64,7 +65,7 @@ ETL pipeline that downloads public fund datasets from the Chilean CMF (Comisión
   - `GET /shareholders/compare` — side-by-side admin comparison: shared holders, exclusives, merge AUM summary
 
 ### MCP Server (`src/mcp_server.py`)
-- [x] **FastMCP server with 14 tools** — `search_funds`, `compare_funds`, `top_funds_by_return` (+ `as_of_date`), `net_new_money_ranking` (+ `from_date`/`to_date`), `get_fund_full_picture` (+ enriched `top_positions`), `get_administrator_full_picture` (+ `top_fm_positions`), `compare_administrators`, `get_shareholder_positions`, `potential_clients`, `market_overview`, `get_fund_portfolio`, `top_emisores_in_market`, `emisor_fund_exposure` (domestic + foreign), `portfolio_overlap`
+- [x] **FastMCP server with 14 tools** — `search_funds`, `compare_funds`, `top_funds_by_return` (+ `as_of_date`), `net_new_money_ranking` (FM: explicit daily aportes/rescates; FI rescatable: daily `flujo_neto`; FI non-rescatable: quarterly `cuotas_fi`; `rescatable` filter; `from_date`/`to_date`), `get_fund_full_picture` (+ enriched `top_positions`), `get_administrator_full_picture` (+ `top_fm_positions`), `compare_administrators`, `get_shareholder_positions`, `potential_clients`, `market_overview`, `get_fund_portfolio`, `top_emisores_in_market`, `emisor_fund_exposure` (domestic + foreign), `portfolio_overlap`
 - [x] **Remote integration** — SSE on port 8081, reverse-proxied at `/mcp/sse`, connected to Claude.ai via Settings → Integrations
 - [x] **AI-driven market intelligence** — M&A analysis, net new money rankings, shareholder overlap, prospecting, portfolio analysis, issuer exposure across the market
 
@@ -106,10 +107,6 @@ sudo docker compose logs -f
 - [ ] **Alerting** — Slack/email webhook when `job_runs.status = 'error'`
 - [ ] **Table partitioning** — partition `cartola_diaria`, `valores_cuota_fi`, `financial_statements` by year (requires data reload)
 - [ ] **Data-quality checks** — flag corrupt `valor_cuota` jumps in CMF source feed
-
-### MCP Server improvements
-- [ ] **Historical return rankings** — `top_funds_by_return` currently reads from the daily MV (today's snapshot only). Add `as_of_date` param that recomputes returns dynamically from `cartola_diaria` for any past date. Enables "what was the ranking on May 15?" queries.
-- [ ] **Flexible net new money date range** — add `from_date` / `to_date` params to `net_new_money_ranking` instead of fixed periods. Enables "flows the week after the election" type analysis.
 
 ### New Data Sources
 - [ ] **Official AFM categorization** — actual Circular 7 category per fund as declared by administrator
