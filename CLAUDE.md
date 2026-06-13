@@ -101,7 +101,8 @@ src/
 │   ├── funds.py              # /funds — FM list, detail, NAV history, portfolio (SII-enriched)
 │   ├── investment_funds.py   # /investment-funds — FI list, detail, NAV history, portfolio (SII-enriched)
 │   ├── rentability.py        # /rentability/fm + /rentability/fi — rankings from MVs
-│   ├── categories.py         # /categories/fi — FI classifications
+│   ├── categories.py         # /categories/fm + /fi + /catalog
+│   ├── industry.py           # Unified overview, screener, and AUM evolution
 │   ├── shareholders.py       # /shareholders — fund/entity/admin/compare endpoints
 │   ├── admins.py             # /admins — administradora list + detail (from mv_administradores)
 │   └── router.py             # Assembles all sub-routers
@@ -243,7 +244,7 @@ Classifies all FI funds based on IFRS quarterly cartera positions using `pct_act
 | Deuda | Deuda Nacional, Deuda Internacional |
 | Fondo de Fondos | Fondo de Fondos |
 
-Large/Small Cap detection uses `rut_emisor` overlap with IPSA ETF (run_fondo `10748`) — dynamic, no hardcoded tickers. Results persisted to `categoria_fi` table and refreshed on day 5 of each month.
+Large/Small Cap detection uses `rut_emisor` overlap with IPSA ETF (run_fondo `10748`) — dynamic, no hardcoded tickers. FI results persist to `categoria_fi`; FM Circular No. 7 classifications persist to `categoria_fm`. Both refresh after their portfolio jobs.
 
 ### Rentability materialized views
 
@@ -310,6 +311,7 @@ AUM figures are CLP. FM net new money uses `cartola_diaria` generated columns (`
 | `mf_rentabilidad` | Daily 09:15 | Refresh `mv_rentabilidad_fm` (FM returns) |
 | `administradores` | Daily 09:20 | Refresh `mv_administradores` (admin fund counts) |
 | `mf_portfolios` | Day 5 of month 09:00 | MF monthly investment portfolios |
+| `mf_categories` | Day 5 of month 09:15 | FM fund classification → categoria_fm |
 | `mf_costs` | Day 5 of month 09:30 | MF monthly TAC costs |
 | `dividends` | Daily 09:00 | Dividends + capital changes (Bolsa de Santiago) |
 | `fi_daily_nav` | Daily 09:30 | FI daily NAV/AUM (vigente funds only) |
@@ -326,17 +328,22 @@ All public endpoints return `Cache-Control: public, max-age=3600` and allow all 
 
 | Endpoint | Description |
 |---|---|
-| `GET /funds` | List FM funds. Filters: `admin`, `tipo_fondo`, `vigente` |
-| `GET /funds/{run}` | FM fund detail: identity + latest NAV per serie + rentability from MV |
+| `GET /funds` | List FM funds. Filters: `admin`, `tipo_fondo`, `vigente`, `categoria`, `tipo`. Each item includes `categoria`, `tipo`, `nombre_cat` from `categoria_fm` |
+| `GET /funds/{run}` | FM fund detail: identity + latest NAV per serie + rentability from MV + `category` (full object: `categoria`, `tipo`, `grupo`, `nombre_cat`, `confianza`, `periodo`) + `geo_breakdown` (list of `{pais, pct_peso}` from latest portfolio, descending by weight) |
 | `GET /funds/{run}/nav` | FM NAV history for charts. Filters: `serie`, `from_date`, `to_date` |
 | `GET /funds/{run}/portfolio` | FM latest quarter portfolio (naci + extr), SII-enriched `nombre_emisor`. Extra fields per position: `tir`, `fecha_vencimiento`, `cantidad_unidades`, `tipo_unidades`, `moneda_liquidacion`, `porcentaje_valor_par`, `tipo_interes`, `codigo_pais_emisor`, `situacion_instrumento`, `porcentaje_capital_emisor`, `porcentaje_activos_emisor`, `codigo_grupo_empresarial` |
-| `GET /investment-funds` | List FI funds. Filters: `admin`, `rescatable`, `vigente` |
-| `GET /investment-funds/{run}` | FI fund detail: identity + latest NAV + rentability |
+| `GET /investment-funds` | List FI funds. Filters: `admin`, `rescatable`, `vigente`, `categoria`, `tipo`. Each item includes `categoria`, `tipo`, `nombre_cat` from `categoria_fi` |
+| `GET /investment-funds/{run}` | FI fund detail: identity + latest NAV + rentability + `category` (full object) + `geo_breakdown` (list of `{pais, pct_peso}` from latest quarterly portfolio) |
 | `GET /investment-funds/{run}/nav` | FI NAV history |
 | `GET /investment-funds/{run}/portfolio` | FI latest quarter portfolio (nac + ext), SII-enriched, sorted by weight. Extra fields per position: `tir_val_par_precio`, `fecha_vencimiento`, `cant_unidades`, `tipo_unidades`, `cod_moneda_liquidacion`, `tipo_interes`, `pct_capital_emisor`, `pct_activo_emisor`, `situacion_instrumento`, `clasif_esf`, `cod_pais` |
 | `GET /rentability/fm` | FM return rankings from `mv_rentabilidad_fm`. Sort: `r_1d/r_1w/r_1m/r_1y/r_5y/r_ytd` |
 | `GET /rentability/fi` | FI return rankings from `mv_rentabilidad_fi`. Same sort options |
 | `GET /categories/fi` | FI fund classifications. Filters: `categoria`, `tipo`, `admin` |
+| `GET /categories/fm` | FM fund classifications. Filters: `categoria`, `tipo`, `admin` |
+| `GET /categories/catalog` | Hierarchical FM/FI category catalog with fund counts |
+| `GET /industry/overview` | Unified AUM, funds, administrators, flows, top AGFs, and category breakdown |
+| `GET /industry/funds` | Unified FM/FI screener with classification, AUM, returns, and flows |
+| `GET /industry/evolution` | Monthly AUM and market-share history grouped by market, admin, or category |
 | `GET /admins` | List administradoras with FM+FI fund counts. Filter: `search` |
 | `GET /admins/{rut}` | Single administradora by RUT |
 | `GET /shareholders/fund/{run}` | Shareholder evolution for a fund across quarters |
@@ -382,6 +389,7 @@ All public endpoints return `Cache-Control: public, max-age=3600` and allow all 
 | `dividendos` | 75,469 | Dividends + capital changes 1973–2026 (Bolsa de Santiago) |
 | `job_runs` | growing | Scheduler job execution history (status, duration, rows, errors) |
 | `categoria_fi` | 851 | FI fund classifications — refreshed quarterly |
+| `categoria_fm` | growing | FM fund classifications — refreshed monthly |
 | `mv_rentabilidad_fm` (MV) | ~2,900 | FM returns 1D/1W/1M/1Y/5Y/YTD (total return via factor_reparto). Refreshed daily |
 | `mv_rentabilidad_fi` (MV) | ~380 | FI rescatable returns 1D/1W/1M/1Y/5Y/YTD (NAV + dividends). Refreshed daily |
 | `mv_administradores` (MV) | ~50 | Admin dimension: FM+FI fund counts per administradora. Refreshed daily |
