@@ -69,12 +69,29 @@ class RentFM(BaseModel):
     suspicious_periods: list[str]
 
 
+class TACInfo(BaseModel):
+    periodo: date
+    tac_total: float | None
+    tac_rem_fija: float | None
+    tac_rem_var: float | None
+    tac_gastos_op: float | None
+
+
+class FlowPoint(BaseModel):
+    fecha: date
+    serie: str | None
+    monto_aportado: float | None
+    monto_rescatado: float | None
+    nnm: float | None
+
+
 class FundFMDetail(FundFMItem):
     fecha_termino_operaciones: date | None
     nav: list[NavSerie]
     rentability: list[RentFM]
     category: CategoryInfo | None
     geo_breakdown: list[GeoPct]
+    latest_tac: TACInfo | None
 
 
 class NavPoint(BaseModel):
@@ -256,12 +273,24 @@ def get_fund(run: str, _: CacheHook) -> FundFMDetail:
                 {"run": run, "period": latest_period},
             ).mappings().all()
 
+        tac_row = session.execute(
+            text("""
+                SELECT periodo, tac_total, tac_rem_fija, tac_rem_var, tac_gastos_op
+                FROM tac
+                WHERE run_fondo = :run
+                ORDER BY periodo DESC
+                LIMIT 1
+            """),
+            {"run": run},
+        ).mappings().one_or_none()
+
     return FundFMDetail(
         **dict(fund_row),
         nav=[NavSerie(**dict(r)) for r in nav_rows],
         rentability=[RentFM(**dict(r)) for r in rent_rows],
         category=CategoryInfo(**dict(cat_row)) if cat_row else None,
         geo_breakdown=[GeoPct(**dict(r)) for r in geo_rows],
+        latest_tac=TACInfo(**dict(tac_row)) if tac_row else None,
     )
 
 
@@ -359,3 +388,43 @@ def get_fund_portfolio(run: str, _: CacheHook) -> list[PortfolioPosition]:
         ).mappings().all()
 
     return [PortfolioPosition(**dict(r)) for r in naci] + [PortfolioPosition(**dict(r)) for r in extr]
+
+
+@router.get("/{run}/flows", response_model=list[FlowPoint])
+def get_fund_flows(
+    run: str,
+    pagination: Pagination,
+    _: CacheHook,
+    serie: str | None = Query(None),
+    from_date: date | None = Query(None),
+    to_date: date | None = Query(None),
+) -> list[FlowPoint]:
+    """Daily aportes, rescates, and net new money for a mutual fund series."""
+    limit, offset = pagination
+    conditions = ["run_fondo = :run"]
+    params: dict = {"run": run, "limit": limit, "offset": offset}
+
+    if serie:
+        conditions.append("serie = :serie")
+        params["serie"] = serie
+    if from_date:
+        conditions.append("fecha >= :from_date")
+        params["from_date"] = from_date
+    if to_date:
+        conditions.append("fecha <= :to_date")
+        params["to_date"] = to_date
+
+    where = "WHERE " + " AND ".join(conditions)
+    sql = text(f"""
+        SELECT fecha, serie,
+               monto_aportado, monto_rescatado,
+               monto_aportado - monto_rescatado AS nnm
+        FROM cartola_diaria
+        {where}
+        ORDER BY fecha DESC, serie
+        LIMIT :limit OFFSET :offset
+    """)
+
+    with SessionLocal() as session:
+        rows = session.execute(sql, params).mappings().all()
+    return [FlowPoint(**dict(r)) for r in rows]
