@@ -12,12 +12,29 @@ from .deps import CacheHook, Pagination
 router = APIRouter(prefix="/investment-funds", tags=["investment-funds"])
 
 
+class CategoryInfo(BaseModel):
+    categoria: str
+    tipo: str
+    grupo: str
+    nombre_cat: str
+    confianza: str
+    periodo: date
+
+
+class GeoPct(BaseModel):
+    pais: str
+    pct_peso: float
+
+
 class FundFIItem(BaseModel):
     run_fondo: str
     razon_social: str | None
     administrador: str | None
     rescatable: bool | None
     vigente: bool | None
+    categoria: str | None
+    tipo: str | None
+    nombre_cat: str | None
 
 
 class FIPortfolioPosition(BaseModel):
@@ -70,6 +87,8 @@ class RentFI(BaseModel):
 class FundFIDetail(FundFIItem):
     nav: list[NavFI]
     rentability: list[RentFI]
+    category: CategoryInfo | None
+    geo_breakdown: list[GeoPct]
 
 
 class NavPointFI(BaseModel):
@@ -85,27 +104,43 @@ def list_investment_funds(
     admin: str | None = Query(None, description="Partial match on administrador name"),
     rescatable: bool | None = Query(None),
     vigente: bool | None = Query(None),
+    categoria: str | None = Query(None, description="Category code from categoria_fi"),
+    tipo: str | None = Query(None, description="Category type (e.g. 'Accionario', 'Deuda')"),
 ) -> list[FundFIItem]:
     limit, offset = pagination
     conditions: list[str] = []
     params: dict = {"limit": limit, "offset": offset}
 
     if admin:
-        conditions.append("administrador ILIKE :admin")
+        conditions.append("f.administrador ILIKE :admin")
         params["admin"] = f"%{admin}%"
     if rescatable is not None:
-        conditions.append("rescatable = :rescatable")
+        conditions.append("f.rescatable = :rescatable")
         params["rescatable"] = rescatable
     if vigente is not None:
-        conditions.append("vigente = :vigente")
+        conditions.append("f.vigente = :vigente")
         params["vigente"] = vigente
+    if categoria:
+        conditions.append("cat.categoria = :categoria")
+        params["categoria"] = categoria
+    if tipo:
+        conditions.append("cat.tipo = :tipo")
+        params["tipo"] = tipo
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     sql = text(f"""
-        SELECT run_fondo, razon_social, administrador, rescatable, vigente
-        FROM fondos_inversion
+        SELECT f.run_fondo, f.razon_social, f.administrador, f.rescatable, f.vigente,
+               cat.categoria, cat.tipo, cat.nombre_cat
+        FROM fondos_inversion f
+        LEFT JOIN LATERAL (
+            SELECT categoria, tipo, nombre_cat
+            FROM categoria_fi
+            WHERE run_fondo = f.run_fondo
+            ORDER BY periodo DESC
+            LIMIT 1
+        ) cat ON true
         {where}
-        ORDER BY razon_social
+        ORDER BY f.razon_social
         LIMIT :limit OFFSET :offset
     """)
 
@@ -119,8 +154,17 @@ def get_investment_fund(run: str, _: CacheHook) -> FundFIDetail:
     with SessionLocal() as session:
         fund_row = session.execute(
             text("""
-                SELECT run_fondo, razon_social, administrador, rescatable, vigente
-                FROM fondos_inversion WHERE run_fondo = :run
+                SELECT f.run_fondo, f.razon_social, f.administrador, f.rescatable, f.vigente,
+                       cat.categoria, cat.tipo, cat.nombre_cat
+                FROM fondos_inversion f
+                LEFT JOIN LATERAL (
+                    SELECT categoria, tipo, nombre_cat
+                    FROM categoria_fi
+                    WHERE run_fondo = f.run_fondo
+                    ORDER BY periodo DESC
+                    LIMIT 1
+                ) cat ON true
+                WHERE f.run_fondo = :run
             """),
             {"run": run},
         ).mappings().one_or_none()
@@ -151,10 +195,50 @@ def get_investment_fund(run: str, _: CacheHook) -> FundFIDetail:
             {"run": run},
         ).mappings().all()
 
+        cat_row = session.execute(
+            text("""
+                SELECT categoria, tipo, grupo, nombre_cat, confianza, periodo
+                FROM categoria_fi
+                WHERE run_fondo = :run
+                ORDER BY periodo DESC
+                LIMIT 1
+            """),
+            {"run": run},
+        ).mappings().one_or_none()
+
+        # Geographic breakdown from latest portfolio quarter
+        latest_period = session.execute(
+            text("SELECT MAX(periodo) FROM cartera_fi_nac WHERE run_fondo = :run"),
+            {"run": run},
+        ).scalar_one_or_none()
+
+        geo_rows: list = []
+        if latest_period:
+            geo_rows = session.execute(
+                text("""
+                    WITH combined AS (
+                        SELECT COALESCE(cod_pais, 'CL') AS pais, pct_activo_fondo AS pct
+                        FROM cartera_fi_nac
+                        WHERE run_fondo = :run AND periodo = :period AND pct_activo_fondo IS NOT NULL
+                        UNION ALL
+                        SELECT COALESCE(cod_pais, 'OTHER') AS pais, pct_activo_fondo AS pct
+                        FROM cartera_fi_ext
+                        WHERE run_fondo = :run AND periodo = :period AND pct_activo_fondo IS NOT NULL
+                    )
+                    SELECT pais, SUM(pct) AS pct_peso
+                    FROM combined
+                    GROUP BY pais
+                    ORDER BY pct_peso DESC
+                """),
+                {"run": run, "period": latest_period},
+            ).mappings().all()
+
     return FundFIDetail(
         **dict(fund_row),
         nav=[NavFI(**dict(r)) for r in nav_rows],
         rentability=[RentFI(**dict(r)) for r in rent_rows],
+        category=CategoryInfo(**dict(cat_row)) if cat_row else None,
+        geo_breakdown=[GeoPct(**dict(r)) for r in geo_rows],
     )
 
 

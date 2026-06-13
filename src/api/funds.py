@@ -14,6 +14,20 @@ router = APIRouter(prefix="/funds", tags=["mutual-funds"])
 _VALID_SORT = {"r_1d", "r_1w", "r_1m", "r_1y", "r_5y", "r_ytd"}
 
 
+class CategoryInfo(BaseModel):
+    categoria: str
+    tipo: str
+    grupo: str
+    nombre_cat: str
+    confianza: str
+    periodo: date
+
+
+class GeoPct(BaseModel):
+    pais: str
+    pct_peso: float
+
+
 class FundFMItem(BaseModel):
     run_fondo: str
     nombre_fondo: str
@@ -24,6 +38,9 @@ class FundFMItem(BaseModel):
     moneda: str | None
     vigente: bool
     fecha_inicio_operaciones: date | None
+    categoria: str | None
+    tipo: str | None
+    nombre_cat: str | None
 
 
 class NavSerie(BaseModel):
@@ -56,6 +73,8 @@ class FundFMDetail(FundFMItem):
     fecha_termino_operaciones: date | None
     nav: list[NavSerie]
     rentability: list[RentFM]
+    category: CategoryInfo | None
+    geo_breakdown: list[GeoPct]
 
 
 class NavPoint(BaseModel):
@@ -95,33 +114,49 @@ def list_funds(
     admin: str | None = Query(None, description="Partial match on administrador name"),
     tipo_fondo: str | None = Query(None),
     vigente: bool | None = Query(None),
+    categoria: str | None = Query(None, description="Category code from categoria_fm"),
+    tipo: str | None = Query(None, description="Category type (e.g. 'Renta Fija', 'Renta Variable')"),
 ) -> list[FundFMItem]:
     limit, offset = pagination
     conditions: list[str] = []
     params: dict = {"limit": limit, "offset": offset}
 
     if admin:
-        conditions.append("razon_social_administradora ILIKE :admin")
+        conditions.append("f.razon_social_administradora ILIKE :admin")
         params["admin"] = f"%{admin}%"
     if tipo_fondo:
-        conditions.append("tipo_fondo = :tipo_fondo")
+        conditions.append("f.tipo_fondo = :tipo_fondo")
         params["tipo_fondo"] = tipo_fondo
     if vigente is not None:
         conditions.append(
-            "fecha_termino_operaciones IS NULL"
+            "f.fecha_termino_operaciones IS NULL"
             if vigente
-            else "fecha_termino_operaciones IS NOT NULL"
+            else "f.fecha_termino_operaciones IS NOT NULL"
         )
+    if categoria:
+        conditions.append("cat.categoria = :categoria")
+        params["categoria"] = categoria
+    if tipo:
+        conditions.append("cat.tipo = :tipo")
+        params["tipo"] = tipo
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     sql = text(f"""
-        SELECT run_fondo, nombre_fondo, nombre_corto, rut_administradora,
-               razon_social_administradora AS administrador, tipo_fondo, moneda,
-               fecha_inicio_operaciones,
-               fecha_termino_operaciones IS NULL AS vigente
-        FROM fondo_mutuo
+        SELECT f.run_fondo, f.nombre_fondo, f.nombre_corto, f.rut_administradora,
+               f.razon_social_administradora AS administrador, f.tipo_fondo, f.moneda,
+               f.fecha_inicio_operaciones,
+               f.fecha_termino_operaciones IS NULL AS vigente,
+               cat.categoria, cat.tipo, cat.nombre_cat
+        FROM fondo_mutuo f
+        LEFT JOIN LATERAL (
+            SELECT categoria, tipo, nombre_cat
+            FROM categoria_fm
+            WHERE run_fondo = f.run_fondo
+            ORDER BY periodo DESC
+            LIMIT 1
+        ) cat ON true
         {where}
-        ORDER BY nombre_fondo
+        ORDER BY f.nombre_fondo
         LIMIT :limit OFFSET :offset
     """)
 
@@ -135,11 +170,20 @@ def get_fund(run: str, _: CacheHook) -> FundFMDetail:
     with SessionLocal() as session:
         fund_row = session.execute(
             text("""
-                SELECT run_fondo, nombre_fondo, nombre_corto, rut_administradora,
-                       razon_social_administradora AS administrador, tipo_fondo, moneda,
-                       fecha_inicio_operaciones, fecha_termino_operaciones,
-                       fecha_termino_operaciones IS NULL AS vigente
-                FROM fondo_mutuo WHERE run_fondo = :run
+                SELECT f.run_fondo, f.nombre_fondo, f.nombre_corto, f.rut_administradora,
+                       f.razon_social_administradora AS administrador, f.tipo_fondo, f.moneda,
+                       f.fecha_inicio_operaciones, f.fecha_termino_operaciones,
+                       f.fecha_termino_operaciones IS NULL AS vigente,
+                       cat.categoria, cat.tipo, cat.nombre_cat
+                FROM fondo_mutuo f
+                LEFT JOIN LATERAL (
+                    SELECT categoria, tipo, nombre_cat
+                    FROM categoria_fm
+                    WHERE run_fondo = f.run_fondo
+                    ORDER BY periodo DESC
+                    LIMIT 1
+                ) cat ON true
+                WHERE f.run_fondo = :run
             """),
             {"run": run},
         ).mappings().one_or_none()
@@ -168,10 +212,56 @@ def get_fund(run: str, _: CacheHook) -> FundFMDetail:
             {"run": run},
         ).mappings().all()
 
+        cat_row = session.execute(
+            text("""
+                SELECT categoria, tipo, grupo, nombre_cat, confianza, periodo
+                FROM categoria_fm
+                WHERE run_fondo = :run
+                ORDER BY periodo DESC
+                LIMIT 1
+            """),
+            {"run": run},
+        ).mappings().one_or_none()
+
+        # Geographic breakdown from latest portfolio quarter
+        latest_period = session.execute(
+            text("SELECT MAX(periodo) FROM cartera_naci WHERE run_fondo = :run"),
+            {"run": run},
+        ).scalar_one_or_none()
+
+        geo_rows: list = []
+        if latest_period:
+            geo_rows = session.execute(
+                text("""
+                    WITH combined AS (
+                        SELECT COALESCE(codigo_pais_emisor, 'CL') AS pais,
+                               CAST(porcentaje_activos_fondo AS numeric) AS pct
+                        FROM cartera_naci
+                        WHERE run_fondo = :run AND periodo = :period
+                          AND porcentaje_activos_fondo IS NOT NULL
+                          AND porcentaje_activos_fondo ~ '^-?[0-9]+(\.[0-9]+)?$'
+                        UNION ALL
+                        SELECT COALESCE(codigo_pais_emisor, 'OTHER') AS pais,
+                               CAST(porcentaje_activos_fondo AS numeric) AS pct
+                        FROM cartera_extr
+                        WHERE run_fondo = :run AND periodo = :period
+                          AND porcentaje_activos_fondo IS NOT NULL
+                          AND porcentaje_activos_fondo ~ '^-?[0-9]+(\.[0-9]+)?$'
+                    )
+                    SELECT pais, SUM(pct) AS pct_peso
+                    FROM combined
+                    GROUP BY pais
+                    ORDER BY pct_peso DESC
+                """),
+                {"run": run, "period": latest_period},
+            ).mappings().all()
+
     return FundFMDetail(
         **dict(fund_row),
         nav=[NavSerie(**dict(r)) for r in nav_rows],
         rentability=[RentFM(**dict(r)) for r in rent_rows],
+        category=CategoryInfo(**dict(cat_row)) if cat_row else None,
+        geo_breakdown=[GeoPct(**dict(r)) for r in geo_rows],
     )
 
 
