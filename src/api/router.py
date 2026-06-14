@@ -8,6 +8,8 @@ from .investment_funds import router as fi_router
 from .rentability import router as rentability_router
 from .shareholders import router as shareholders_router
 from .admins import router as admins_router
+from .industry import router as industry_router
+from .countries import router as countries_router
 
 router = APIRouter()
 router.include_router(funds_router)
@@ -16,3 +18,5 @@ router.include_router(rentability_router)
 router.include_router(categories_router)
 router.include_router(shareholders_router)
 router.include_router(admins_router)
+router.include_router(industry_router)
+router.include_router(countries_router)

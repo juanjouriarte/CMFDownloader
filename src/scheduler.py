@@ -86,6 +86,8 @@ def register_jobs(scheduler: BaseScheduler) -> None:
     from src.etl.investmentFunds.downloaders.carterasDownloader import CarterasFIDownloader
     from src.etl.bolsaSantiago.downloaders.dividendosDownloader import DividendosDownloader
     from src.etl.investmentFunds.investmentFundsCategories import run_and_save as fi_categorize
+    from src.etl.mutualFunds.mutualFundsCategories import run_and_save as fm_categorize
+    from src.etl.cmf.countries import run as refresh_countries
 
 
     def _job(job_id: str, fn):
@@ -96,6 +98,10 @@ def register_jobs(scheduler: BaseScheduler) -> None:
         wrapper.__name__ = job_id
         return wrapper
 
+    scheduler.add_job(
+        _job("countries_refresh", refresh_countries),
+        "cron", hour=7, minute=45, id="countries_refresh",
+    )
     scheduler.add_job(
         _job("bonds_tickers", lambda: BonosNemotecnicosDownloader(force=True).run()),
         "cron", hour=8, minute=0, id="bonds_tickers",
@@ -131,6 +137,10 @@ def register_jobs(scheduler: BaseScheduler) -> None:
     scheduler.add_job(
         _job("mf_portfolios", lambda: CarterasDownloader().run()),
         "cron", day=5, hour=9, minute=0, id="mf_portfolios",
+    )
+    scheduler.add_job(
+        _job("mf_categories", fm_categorize),
+        "cron", day=5, hour=9, minute=15, id="mf_categories",
     )
     scheduler.add_job(
         _job("mf_costs", lambda: TacDownloader().run()),
