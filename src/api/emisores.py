@@ -103,6 +103,36 @@ class FundEmisorHistoryPoint(BaseModel):
     nombre_instrumento: str | None
 
 
+class EmisorPosition(BaseModel):
+    # identity
+    fund_type: str
+    run_fondo: str
+    nombre_fondo: str | None
+    administrador: str | None
+    periodo: date
+    # instrument classification
+    tipo_instrumento: str | None
+    nombre_instrumento: str | None
+    nemotecnico: str | None
+    situacion_instrumento: str | None
+    clasificacion_riesgo: str | None
+    # valuation
+    valorizacion_cierre: float | None
+    moneda_liquidacion: str | None
+    pct_activo_fondo: float | None
+    # debt-specific
+    tir: float | None
+    fecha_vencimiento: str | None
+    tipo_interes: str | None
+    base_tasa: str | None
+    porcentaje_valor_par: float | None
+    # equity-specific
+    cantidad_unidades: float | None
+    tipo_unidades: str | None
+    porcentaje_capital_emisor: float | None
+    porcentaje_activos_emisor: float | None
+
+
 class ConcentrationAGF(BaseModel):
     administrador: str | None
     rut_administradora: str | None
@@ -440,6 +470,140 @@ def get_emisor_funds(
     with SessionLocal() as session:
         rows = session.execute(sql, params).mappings().all()
     return [FundHolding(**dict(r)) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# RAW POSITIONS — full instrument-level detail
+# ---------------------------------------------------------------------------
+
+@router.get("/{rut}/positions", response_model=list[EmisorPosition])
+def get_emisor_positions(
+    rut: str,
+    pagination: Pagination,
+    _: CacheHook,
+    fund_type: str | None = Query(None, description="fm | fi (default: both)"),
+    tipo_instrumento: str | None = Query(None, description="Filter by instrument code, e.g. ACC, BC, EC"),
+    period: str | None = Query(None, description="YYYY-MM-DD — defaults to latest available period"),
+) -> list[EmisorPosition]:
+    """Every individual portfolio position for this company across all funds.
+
+    Returns one row per fund × instrument line — not aggregated. This gives
+    the frontend everything needed to render instrument-specific detail cards:
+    - Bonds (BC, BE, BB…): tir, fecha_vencimiento, tipo_interes, porcentaje_valor_par
+    - Stocks (ACC, ACCR, ACE): cantidad_unidades, porcentaje_capital_emisor
+    - Commercial paper (EC): tir, fecha_vencimiento
+    - Deposits (DPC, DPL): tir, fecha_vencimiento
+    """
+    params: dict = {"rut": rut, "limit": pagination.limit, "offset": pagination.offset}
+    instr_filter = "AND cn.tipo_instrumento = :tipo_instrumento" if tipo_instrumento else ""
+    if tipo_instrumento:
+        params["tipo_instrumento"] = tipo_instrumento
+
+    include_fm = fund_type in (None, "fm", "all")
+    include_fi = fund_type in (None, "fi", "all")
+
+    parts = []
+
+    if include_fm:
+        if period:
+            from src.api.mutual_funds import _first_of_month
+            fm_period_clause = "AND cn.periodo = :fm_period"
+            params["fm_period"] = _first_of_month(period)
+        else:
+            fm_period_clause = "AND cn.periodo = (SELECT MAX(periodo) FROM cartera_naci)"
+
+        parts.append(f"""
+            SELECT
+                'fm'                                    AS fund_type,
+                cn.run_fondo,
+                fm.nombre_fondo,
+                fm.razon_social_administradora          AS administrador,
+                cn.periodo,
+                cn.tipo_instrumento,
+                cn.nemotecnico,
+                cn.situacion_instrumento,
+                cn.clasificacion_riesgo,
+                CASE WHEN cn.valorizacion_cierre ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                     THEN cn.valorizacion_cierre::numeric ELSE NULL END     AS valorizacion_cierre,
+                cn.moneda_liquidacion,
+                CASE WHEN cn.porcentaje_activos_fondo ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                     THEN cn.porcentaje_activos_fondo::numeric ELSE NULL END AS pct_activo_fondo,
+                CASE WHEN cn.tir ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                     THEN cn.tir::numeric ELSE NULL END                     AS tir,
+                cn.fecha_vencimiento,
+                cn.tipo_interes,
+                cn.base_tasa,
+                CASE WHEN cn.porcentaje_valor_par ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                     THEN cn.porcentaje_valor_par::numeric ELSE NULL END    AS porcentaje_valor_par,
+                CASE WHEN cn.cantidad_unidades ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                     THEN cn.cantidad_unidades::numeric ELSE NULL END       AS cantidad_unidades,
+                cn.tipo_unidades,
+                CASE WHEN cn.porcentaje_capital_emisor ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                     THEN cn.porcentaje_capital_emisor::numeric ELSE NULL END AS porcentaje_capital_emisor,
+                CASE WHEN cn.porcentaje_activos_emisor ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                     THEN cn.porcentaje_activos_emisor::numeric ELSE NULL END AS porcentaje_activos_emisor
+            FROM cartera_naci cn
+            JOIN fondo_mutuo fm ON fm.run_fondo = cn.run_fondo
+            WHERE cn.rut_emisor = :rut
+              {fm_period_clause}
+              {instr_filter}
+        """)
+
+    if include_fi:
+        if period:
+            from datetime import date as _date
+            p = _date.fromisoformat(period)
+            fi_period_clause = "AND cn.periodo = :fi_period"
+            params["fi_period"] = _date(p.year, p.month, 1)
+        else:
+            fi_period_clause = "AND cn.periodo = (SELECT MAX(periodo) FROM cartera_fi_nac)"
+
+        parts.append(f"""
+            SELECT
+                'fi'                        AS fund_type,
+                cn.run_fondo,
+                fi.razon_social             AS nombre_fondo,
+                fi.administrador,
+                cn.periodo,
+                cn.tipo_instrumento,
+                cn.nemotecnico,
+                cn.situacion_instrumento,
+                cn.clasif_riesgo            AS clasificacion_riesgo,
+                cn.valorizacion_cierre,
+                cn.cod_moneda_liquidacion   AS moneda_liquidacion,
+                cn.pct_activo_fondo,
+                cn.tir_val_par_precio       AS tir,
+                cn.fecha_vencimiento,
+                cn.tipo_interes,
+                cn.base_tasa,
+                NULL::numeric               AS porcentaje_valor_par,
+                cn.cant_unidades            AS cantidad_unidades,
+                cn.tipo_unidades,
+                cn.pct_capital_emisor       AS porcentaje_capital_emisor,
+                cn.pct_activo_emisor        AS porcentaje_activos_emisor
+            FROM cartera_fi_nac cn
+            JOIN fondos_inversion fi ON fi.run_fondo = cn.run_fondo
+            WHERE cn.rut_emisor = :rut
+              {fi_period_clause}
+              {instr_filter}
+        """)
+
+    if not parts:
+        return []
+
+    union_sql = " UNION ALL ".join(parts)
+    sql = text(f"""
+        SELECT p.*,
+               rc.name AS nombre_instrumento
+        FROM ({union_sql}) p
+        LEFT JOIN ref_codes rc ON rc.domain = 'instrument' AND rc.code = p.tipo_instrumento
+        ORDER BY p.valorizacion_cierre DESC NULLS LAST
+        LIMIT :limit OFFSET :offset
+    """)
+
+    with SessionLocal() as session:
+        rows = session.execute(sql, params).mappings().all()
+    return [EmisorPosition(**dict(r)) for r in rows]
 
 
 # ---------------------------------------------------------------------------
