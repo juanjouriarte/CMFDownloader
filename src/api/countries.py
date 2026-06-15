@@ -2,14 +2,21 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from pydantic import BaseModel
 from sqlalchemy import text
 
 from src.db.engine import SessionLocal
 from .deps import CacheHook
 
-router = APIRouter(prefix="/countries", tags=["countries"])
+router = APIRouter(tags=["reference"])
+
+
+class RefCodeItem(BaseModel):
+    domain: str
+    code: str
+    name: str
+    updated_at: datetime
 
 
 class CountryItem(BaseModel):
@@ -18,11 +25,30 @@ class CountryItem(BaseModel):
     updated_at: datetime
 
 
-@router.get("", response_model=list[CountryItem])
-def list_countries(_: CacheHook) -> list[CountryItem]:
-    """All CMF country codes and their names, sorted alphabetically by name."""
+@router.get("/ref-codes", response_model=list[RefCodeItem])
+def list_ref_codes(
+    _: CacheHook,
+    domain: str | None = Query(None, description="Filter by domain: country, currency, instrument"),
+) -> list[RefCodeItem]:
+    """CMF reference codes — countries, currencies, and instrument types."""
+    params: dict = {}
+    where = ""
+    if domain:
+        where = "WHERE domain = :domain"
+        params["domain"] = domain
+
+    sql = text(f"SELECT domain, code, name, updated_at FROM ref_codes {where} ORDER BY domain, name")
     with SessionLocal() as session:
-        rows = session.execute(
-            text("SELECT code, name, updated_at FROM countries ORDER BY name")
-        ).mappings().all()
+        rows = session.execute(sql, params).mappings().all()
+    return [RefCodeItem(**dict(r)) for r in rows]
+
+
+@router.get("/countries", response_model=list[CountryItem])
+def list_countries(_: CacheHook) -> list[CountryItem]:
+    """All CMF country codes and their names, sorted alphabetically."""
+    sql = text(
+        "SELECT code, name, updated_at FROM ref_codes WHERE domain = 'country' ORDER BY name"
+    )
+    with SessionLocal() as session:
+        rows = session.execute(sql).mappings().all()
     return [CountryItem(**dict(r)) for r in rows]

@@ -105,12 +105,12 @@ src/
 │   ├── industry.py           # Unified overview, screener, and AUM evolution
 │   ├── shareholders.py       # /shareholders — fund/entity/admin/compare endpoints
 │   ├── admins.py             # /admins — administradora list + detail (from mv_administradores)
-│   ├── countries.py          # /countries — CMF country code reference (152 entries)
+│   ├── countries.py          # /countries + /ref-codes — ref_codes table (countries, currencies, instruments)
 │   └── router.py             # Assembles all sub-routers
 ├── mcp_server.py             # FastMCP server — 15 tools for fund-market intelligence (see MCP section)
 ├── etl/                      # All ETL domain packages (extract + load per data source)
 │   ├── cmf/                  # CMF reference data (non-fund)
-│   │   └── countries.py      # Scrapes CMF country code table → countries table (daily)
+│   │   └── ref_codes.py      # Scrapes CMF country/currency/instrument tables → ref_codes table (daily)
 │   ├── sii/                  # SII (tax authority) company registry
 │   │   └── load_emisores.py  # Loads ~994k Chilean companies → emisores table
 │   ├── financialStatements/  # IFRS statements for all CMF-supervised companies
@@ -176,7 +176,7 @@ src/
 │       ├── job_runs.py             # job_runs (scheduler execution history)
 │       ├── categoria_fi.py         # categoria_fi (FI fund classifications)
 │       ├── categoria_fm.py         # categoria_fm (FM fund classifications)
-│       └── countries.py            # countries — CMF country code reference (code → name)
+│       └── ref_codes.py            # ref_codes — unified CMF reference table (domain + code + name)
 ├── base.py                   # BaseDownloader + DownloadResult
 ├── categories.py             # Circular No. 7 category definitions + country tables
 ├── config.py                 # CMFUrl enum + env vars
@@ -307,7 +307,7 @@ AUM figures are CLP. FM net new money uses `cartola_diaria` generated columns (`
 
 | Job ID | Schedule | Description |
 |---|---|---|
-| `countries_refresh` | Daily 07:45 | CMF country code reference → countries table (152 entries) |
+| `ref_codes_refresh` | Daily 07:45 | CMF country/currency/instrument reference codes → ref_codes table (152+118+79 rows) |
 | `bonds_tickers` | Daily 08:00 | FM bond tickers with fiscal rate |
 | `fm_identity` | Daily 08:10 | MF fund identity register |
 | `mf_tickers` | Daily 08:15 | MF series nemotecnicos |
@@ -352,7 +352,8 @@ All public endpoints return `Cache-Control: public, max-age=3600` and allow all 
 | `GET /industry/overview` | Market snapshot: total AUM, active funds, admins, flows. Filters: `fund_type`, `categoria`, `tipo`. Returns `aportes_month_clp`, `rescates_month_clp`, `neto_month_clp` (FM gross flows) + `top_administrators` (with `nnm_ytd_clp`) + `category_aum_breakdown` (with `nnm_ytd_clp`) |
 | `GET /industry/funds` | Unified FM/FI screener with classification, AUM, returns, and flows. Filters: `fund_type`, `type`, `group`, `category`, `admin`, `rescatable`, `vigente` |
 | `GET /industry/evolution` | Monthly AUM history grouped by market/admin/category. Filters: `fund_type`, `categoria`, `tipo`, `from_date`, `to_date`. Returns `aportes_clp`, `rescates_clp`, `nnm_clp` per month point (FM only; FI flows are null) |
-| `GET /countries` | All 152 CMF country codes and names, sorted alphabetically. Used to resolve `codigo_pais_emisor` / `cod_pais` in portfolios |
+| `GET /ref-codes` | All CMF reference codes. Filter: `?domain=country\|currency\|instrument`. Returns `domain`, `code`, `name` |
+| `GET /countries` | Convenience alias — same as `GET /ref-codes?domain=country`, sorted by name |
 | `GET /admins` | List administradoras with FM+FI fund counts. Filter: `search` |
 | `GET /admins/{rut}` | Single administradora by RUT |
 | `GET /shareholders/fund/{run}` | Shareholder evolution for a fund across quarters |
@@ -399,7 +400,7 @@ All public endpoints return `Cache-Control: public, max-age=3600` and allow all 
 | `job_runs` | growing | Scheduler job execution history (status, duration, rows, errors) |
 | `categoria_fi` | 851 | FI fund classifications — refreshed quarterly |
 | `categoria_fm` | growing | FM fund classifications — refreshed monthly |
-| `countries` | 152 | CMF country code reference: `code` (PK) + `name`. Scraped daily from CMF. Used to resolve `codigo_pais_emisor` / `cod_pais` in portfolio and geo_breakdown endpoints |
+| `ref_codes` | 349 | Unified CMF reference data: `(domain, code)` unique — domains: `country` (152), `currency` (118), `instrument` (79). Scraped daily from CMF. Used to resolve country codes, currency codes, and instrument type codes across portfolio endpoints |
 | `mv_rentabilidad_fm` (MV) | ~2,900 | FM returns 1D/1W/1M/1Y/5Y/YTD (total return via factor_reparto). Refreshed daily |
 | `mv_rentabilidad_fi` (MV) | ~380 | FI rescatable returns 1D/1W/1M/1Y/5Y/YTD (NAV + dividends). Refreshed daily |
 | `mv_administradores` (MV) | ~50 | Admin dimension: FM+FI fund counts per administradora. Refreshed daily |
