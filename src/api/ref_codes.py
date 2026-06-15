@@ -19,12 +19,6 @@ class RefCodeItem(BaseModel):
     updated_at: datetime
 
 
-class CountryItem(BaseModel):
-    code: str
-    name: str
-    updated_at: datetime
-
-
 @router.get("/ref-codes", response_model=list[RefCodeItem])
 def list_ref_codes(
     _: CacheHook,
@@ -41,14 +35,3 @@ def list_ref_codes(
     with SessionLocal() as session:
         rows = session.execute(sql, params).mappings().all()
     return [RefCodeItem(**dict(r)) for r in rows]
-
-
-@router.get("/countries", response_model=list[CountryItem])
-def list_countries(_: CacheHook) -> list[CountryItem]:
-    """All CMF country codes and their names, sorted alphabetically."""
-    sql = text(
-        "SELECT code, name, updated_at FROM ref_codes WHERE domain = 'country' ORDER BY name"
-    )
-    with SessionLocal() as session:
-        rows = session.execute(sql).mappings().all()
-    return [CountryItem(**dict(r)) for r in rows]

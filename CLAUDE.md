@@ -98,14 +98,14 @@ Never modify production schema or data directly — apply via Alembic migrations
 src/
 ├── api/                      # Public read API — CORS-open, cached (max-age=3600)
 │   ├── deps.py               # Shared: Pagination (limit/offset) + CacheHook (Cache-Control header)
-│   ├── funds.py              # /funds — FM list, detail, NAV history, flows, portfolio (SII-enriched)
+│   ├── mutual_funds.py       # /mutual-funds — FM list, detail, NAV history, TAC, flows, portfolio (SII-enriched)
 │   ├── investment_funds.py   # /investment-funds — FI list, detail, NAV history, portfolio (SII-enriched)
 │   ├── rentability.py        # /rentability/fm + /rentability/fi — rankings from MVs
 │   ├── categories.py         # /categories/fm + /fi + /catalog
 │   ├── industry.py           # Unified overview, screener, and AUM evolution
 │   ├── shareholders.py       # /shareholders — fund/entity/admin/compare endpoints
 │   ├── admins.py             # /admins — administradora list + detail (from mv_administradores)
-│   ├── countries.py          # /countries + /ref-codes — ref_codes table (countries, currencies, instruments)
+│   ├── ref_codes.py          # /ref-codes — ref_codes table (countries, currencies, instruments)
 │   └── router.py             # Assembles all sub-routers
 ├── mcp_server.py             # FastMCP server — 15 tools for fund-market intelligence (see MCP section)
 ├── etl/                      # All ETL domain packages (extract + load per data source)
@@ -352,8 +352,7 @@ All public endpoints return `Cache-Control: public, max-age=3600` and allow all 
 | `GET /industry/overview` | Market snapshot: total AUM, active funds, admins, flows. Filters: `fund_type`, `categoria`, `tipo`. Returns `aportes_month_clp`, `rescates_month_clp`, `neto_month_clp` (FM gross flows) + `top_administrators` (with `nnm_ytd_clp`) + `category_aum_breakdown` (with `nnm_ytd_clp`) |
 | `GET /industry/funds` | Unified FM/FI screener with classification, AUM, returns, and flows. Filters: `fund_type`, `type`, `group`, `category`, `admin`, `rescatable`, `vigente` |
 | `GET /industry/evolution` | Monthly AUM history grouped by market/admin/category. Filters: `fund_type`, `categoria`, `tipo`, `from_date`, `to_date`. Returns `aportes_clp`, `rescates_clp`, `nnm_clp` per month point (FM only; FI flows are null) |
-| `GET /ref-codes` | All CMF reference codes. Filter: `?domain=country\|currency\|instrument`. Returns `domain`, `code`, `name` |
-| `GET /countries` | Convenience alias — same as `GET /ref-codes?domain=country`, sorted by name |
+| `GET /ref-codes` | All CMF reference codes. Filter: `?domain=country\|currency\|instrument`. Returns `domain`, `code`, `name`, `updated_at` |
 | `GET /admins` | List administradoras with FM+FI fund counts. Filter: `search` |
 | `GET /admins/{rut}` | Single administradora by RUT |
 | `GET /shareholders/fund/{run}` | Shareholder evolution for a fund across quarters |
