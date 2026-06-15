@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This is the canonical project instructions file for coding agents working in this repository.
 
 ## Project Purpose
 
@@ -98,15 +98,19 @@ Never modify production schema or data directly — apply via Alembic migrations
 src/
 ├── api/                      # Public read API — CORS-open, cached (max-age=3600)
 │   ├── deps.py               # Shared: Pagination (limit/offset) + CacheHook (Cache-Control header)
-│   ├── funds.py              # /funds — FM list, detail, NAV history, portfolio (SII-enriched)
+│   ├── mutual_funds.py       # /mutual-funds — FM list, detail, NAV history, TAC, flows, portfolio (SII-enriched)
 │   ├── investment_funds.py   # /investment-funds — FI list, detail, NAV history, portfolio (SII-enriched)
 │   ├── rentability.py        # /rentability/fm + /rentability/fi — rankings from MVs
-│   ├── categories.py         # /categories/fi — FI classifications
+│   ├── categories.py         # /categories/fm + /fi + /catalog
+│   ├── industry.py           # Unified overview, screener, and AUM evolution
 │   ├── shareholders.py       # /shareholders — fund/entity/admin/compare endpoints
 │   ├── admins.py             # /admins — administradora list + detail (from mv_administradores)
+│   ├── ref_codes.py          # /ref-codes — ref_codes table (countries, currencies, instruments)
 │   └── router.py             # Assembles all sub-routers
-├── mcp_server.py             # FastMCP server — 14 tools for fund-market intelligence (see MCP section)
+├── mcp_server.py             # FastMCP server — 15 tools for fund-market intelligence (see MCP section)
 ├── etl/                      # All ETL domain packages (extract + load per data source)
+│   ├── cmf/                  # CMF reference data (non-fund)
+│   │   └── ref_codes.py      # Scrapes CMF country/currency/instrument tables → ref_codes table (daily)
 │   ├── sii/                  # SII (tax authority) company registry
 │   │   └── load_emisores.py  # Loads ~994k Chilean companies → emisores table
 │   ├── financialStatements/  # IFRS statements for all CMF-supervised companies
@@ -167,10 +171,12 @@ src/
 │       ├── aportantes_fi.py        # aportantes_fi + cuotas_fi
 │       ├── carteras_fi.py          # cartera_fi_nac/ext/met_part/fut_fw
 │       ├── entidades.py            # entidades (canonical names)
-│       ├── emisores.py            # SIIEmisor — SII company registry (rut → razon_social)
+│       ├── emisores.py             # SIIEmisor — SII company registry (rut → razon_social)
 │       ├── dividendos.py           # dividendos
 │       ├── job_runs.py             # job_runs (scheduler execution history)
-│       └── categoria_fi.py         # categoria_fi (FI fund classifications)
+│       ├── categoria_fi.py         # categoria_fi (FI fund classifications)
+│       ├── categoria_fm.py         # categoria_fm (FM fund classifications)
+│       └── ref_codes.py            # ref_codes — unified CMF reference table (domain + code + name)
 ├── base.py                   # BaseDownloader + DownloadResult
 ├── categories.py             # Circular No. 7 category definitions + country tables
 ├── config.py                 # CMFUrl enum + env vars
@@ -183,7 +189,6 @@ main.py                       # Web entrypoint: FastAPI only (no scheduler)
 worker.py                     # Worker entrypoint: BlockingScheduler only
 mcp_worker.py                 # MCP entrypoint: FastMCP SSE server on port 8081
 docker-compose.yml            # Oracle deploy — web + worker + mcp process groups
-fly.toml                      # Fly.io app config (alternative deploy target)
 Dockerfile
 .dockerignore
 ```
@@ -244,7 +249,7 @@ Classifies all FI funds based on IFRS quarterly cartera positions using `pct_act
 | Deuda | Deuda Nacional, Deuda Internacional |
 | Fondo de Fondos | Fondo de Fondos |
 
-Large/Small Cap detection uses `rut_emisor` overlap with IPSA ETF (run_fondo `10748`) — dynamic, no hardcoded tickers. Results persisted to `categoria_fi` table and refreshed on day 5 of each month.
+Large/Small Cap detection uses `rut_emisor` overlap with IPSA ETF (run_fondo `10748`) — dynamic, no hardcoded tickers. FI results persist to `categoria_fi`; FM Circular No. 7 classifications persist to `categoria_fm`. Both refresh after their portfolio jobs.
 
 ### Rentability materialized views
 
@@ -302,6 +307,7 @@ AUM figures are CLP. FM net new money uses `cartola_diaria` generated columns (`
 
 | Job ID | Schedule | Description |
 |---|---|---|
+| `ref_codes_refresh` | Daily 07:45 | CMF country/currency/instrument reference codes → ref_codes table (152+118+79 rows) |
 | `bonds_tickers` | Daily 08:00 | FM bond tickers with fiscal rate |
 | `fm_identity` | Daily 08:10 | MF fund identity register |
 | `mf_tickers` | Daily 08:15 | MF series nemotecnicos |
@@ -311,6 +317,7 @@ AUM figures are CLP. FM net new money uses `cartola_diaria` generated columns (`
 | `mf_rentabilidad` | Daily 09:15 | Refresh `mv_rentabilidad_fm` (FM returns) |
 | `administradores` | Daily 09:20 | Refresh `mv_administradores` (admin fund counts) |
 | `mf_portfolios` | Day 5 of month 09:00 | MF monthly investment portfolios |
+| `mf_categories` | Day 5 of month 09:15 | FM fund classification → categoria_fm |
 | `mf_costs` | Day 5 of month 09:30 | MF monthly TAC costs |
 | `dividends` | Daily 09:00 | Dividends + capital changes (Bolsa de Santiago) |
 | `fi_daily_nav` | Daily 09:30 | FI daily NAV/AUM (vigente funds only) |
@@ -327,17 +334,27 @@ All public endpoints return `Cache-Control: public, max-age=3600` and allow all 
 
 | Endpoint | Description |
 |---|---|
-| `GET /funds` | List FM funds. Filters: `admin`, `tipo_fondo`, `vigente` |
-| `GET /funds/{run}` | FM fund detail: identity + latest NAV per serie + rentability from MV |
-| `GET /funds/{run}/nav` | FM NAV history for charts. Filters: `serie`, `from_date`, `to_date` |
-| `GET /funds/{run}/portfolio` | FM latest quarter portfolio (naci + extr), SII-enriched `nombre_emisor`. Extra fields per position: `tir`, `fecha_vencimiento`, `cantidad_unidades`, `tipo_unidades`, `moneda_liquidacion`, `porcentaje_valor_par`, `tipo_interes`, `codigo_pais_emisor`, `situacion_instrumento`, `porcentaje_capital_emisor`, `porcentaje_activos_emisor`, `codigo_grupo_empresarial` |
-| `GET /investment-funds` | List FI funds. Filters: `admin`, `rescatable`, `vigente` |
-| `GET /investment-funds/{run}` | FI fund detail: identity + latest NAV + rentability |
-| `GET /investment-funds/{run}/nav` | FI NAV history |
-| `GET /investment-funds/{run}/portfolio` | FI latest quarter portfolio (nac + ext), SII-enriched, sorted by weight. Extra fields per position: `tir_val_par_precio`, `fecha_vencimiento`, `cant_unidades`, `tipo_unidades`, `cod_moneda_liquidacion`, `tipo_interes`, `pct_capital_emisor`, `pct_activo_emisor`, `situacion_instrumento`, `clasif_esf`, `cod_pais` |
-| `GET /rentability/fm` | FM return rankings from `mv_rentabilidad_fm`. Sort: `r_1d/r_1w/r_1m/r_1y/r_5y/r_ytd` |
-| `GET /rentability/fi` | FI return rankings from `mv_rentabilidad_fi`. Same sort options |
+| `GET /mutual-funds` | List FM funds. Filters: `admin`, `tipo_fondo`, `vigente`, `categoria`, `tipo`. Each item includes `categoria`, `tipo`, `nombre_cat` from `categoria_fm` |
+| `GET /mutual-funds/{run}` | FM fund detail: identity + latest NAV per serie (field: `series[]`) + rentability + `category` (full object: `categoria`, `tipo`, `grupo`, `nombre_cat`, `confianza`, `periodo`) + `geo_breakdown` (`[{pais, pct_peso}]` from latest portfolio) + `latest_tac` (`tac_total`, `tac_rem_fija`, `tac_rem_var`, `tac_gastos_op`, `periodo`) |
+| `GET /mutual-funds/{run}/nav` | FM NAV history for charts. Filters: `serie`, `from_date`, `to_date`. Field: `valor_cuota` |
+| `GET /mutual-funds/{run}/tac` | FM TAC history — last 24 months descending (`periodo`, `tac_total`, `tac_rem_fija`, `tac_rem_var`, `tac_gastos_op`) |
+| `GET /mutual-funds/{run}/flows` | Monthly aportes/rescates/nnm aggregated across all series. Filters: `serie`, `from_date`, `to_date`. Fields: `aportes`, `rescates`, `nnm` |
+| `GET /mutual-funds/{run}/portfolio` | FM portfolio (naci + extr), SII-enriched. Optional `?period=YYYY-MM-DD` (defaults to latest). Fields per position: `tir`, `fecha_vencimiento`, `cantidad_unidades`, `tipo_unidades`, `moneda_liquidacion`, `porcentaje_valor_par`, `tipo_interes`, `codigo_pais_emisor`, `situacion_instrumento`, `porcentaje_capital_emisor`, `porcentaje_activos_emisor`, `codigo_grupo_empresarial` |
+| `GET /mutual-funds/{run}/return-series` | FM cumulative total-return time series for charting. Params: `serie` (optional — defaults to serie with highest recent `patrimonio_neto`), `from_date` (optional — defaults to today − 1 year; pass further back for longer periods, e.g. today − 1825 for 5Y; data available from 2020). Response: `[{ fecha, return_pct }]` where `return_pct` is cumulative % from `from_date` (first point always `0.0`). Accounts for distributions via `factor_reparto` — same methodology as `r_1m`/`r_1y` in the rentability endpoint. Returns `[]` if no data for the range. |
+| `GET /investment-funds` | List FI funds. Filters: `admin`, `rescatable`, `vigente`, `categoria`, `tipo`. Each item includes `categoria`, `tipo`, `nombre_cat` from `categoria_fi` |
+| `GET /investment-funds/{run}` | FI fund detail: identity + latest NAV per serie (field: `series[]`, `valor_cuota` aliased from `valor_libro`) + rentability + `category` (full object) + `geo_breakdown` (`[{pais, pct_peso}]` from latest quarterly portfolio). No TAC (FI not covered by CMF TAC) |
+| `GET /investment-funds/{run}/nav` | FI NAV history. Fields: `valor_cuota` (aliased from `valor_libro`), `patrimonio_neto` |
+| `GET /investment-funds/{run}/portfolio` | FI portfolio (nac + ext), SII-enriched, sorted by weight. Optional `?period=YYYY-MM-DD`. Fields per position: `tir_val_par_precio`, `fecha_vencimiento`, `cant_unidades`, `tipo_unidades`, `cod_moneda_liquidacion`, `tipo_interes`, `pct_capital_emisor`, `pct_activo_emisor`, `situacion_instrumento`, `clasif_esf`, `cod_pais` |
+| `GET /investment-funds/{run}/return-series` | FI cumulative total-return time series for charting (rescatable funds only — non-rescatable funds have quarterly NAV at best). Same params and response shape as the FM endpoint. Accounts for dividends via the `dividendos` table matched by currency — same methodology as `r_1m`/`r_1y` in the rentability endpoint. |
+| `GET /rentability/fm` | FM return rankings. Sort: `r_1d/r_1w/r_1m/r_1y/r_5y/r_ytd`. Filters: `admin`, `categoria`, `tipo` |
+| `GET /rentability/fi` | FI return rankings. Same sort options. Filters: `admin`, `categoria`, `tipo` |
 | `GET /categories/fi` | FI fund classifications. Filters: `categoria`, `tipo`, `admin` |
+| `GET /categories/fm` | FM fund classifications. Filters: `categoria`, `tipo`, `admin` |
+| `GET /categories/catalog` | Hierarchical FM/FI category catalog with fund counts |
+| `GET /industry/overview` | Market snapshot: total AUM, active funds, admins, flows. Filters: `fund_type`, `categoria`, `tipo`. Returns `aportes_month_clp`, `rescates_month_clp`, `neto_month_clp` (FM gross flows) + `top_administrators` (with `nnm_ytd_clp`) + `category_aum_breakdown` (with `nnm_ytd_clp`) |
+| `GET /industry/funds` | Unified FM/FI screener with classification, AUM, returns, and flows. Filters: `fund_type`, `type`, `group`, `category`, `admin`, `rescatable`, `vigente` |
+| `GET /industry/evolution` | Monthly AUM history grouped by market/admin/category. Filters: `fund_type`, `categoria`, `tipo`, `from_date`, `to_date`. Returns `aportes_clp`, `rescates_clp`, `nnm_clp` per month point (FM only; FI flows are null) |
+| `GET /ref-codes` | All CMF reference codes. Filter: `?domain=country\|currency\|instrument`. Returns `domain`, `code`, `name`, `updated_at` |
 | `GET /admins` | List administradoras with FM+FI fund counts. Filter: `search` |
 | `GET /admins/{rut}` | Single administradora by RUT |
 | `GET /shareholders/fund/{run}` | Shareholder evolution for a fund across quarters |
@@ -383,6 +400,8 @@ All public endpoints return `Cache-Control: public, max-age=3600` and allow all 
 | `dividendos` | 75,469 | Dividends + capital changes 1973–2026 (Bolsa de Santiago) |
 | `job_runs` | growing | Scheduler job execution history (status, duration, rows, errors) |
 | `categoria_fi` | 851 | FI fund classifications — refreshed quarterly |
+| `categoria_fm` | growing | FM fund classifications — refreshed monthly |
+| `ref_codes` | 349 | Unified CMF reference data: `(domain, code)` unique — domains: `country` (152), `currency` (118), `instrument` (79). Scraped daily from CMF. Used to resolve country codes, currency codes, and instrument type codes across portfolio endpoints |
 | `mv_rentabilidad_fm` (MV) | ~2,900 | FM returns 1D/1W/1M/1Y/5Y/YTD (total return via factor_reparto). Refreshed daily |
 | `mv_rentabilidad_fi` (MV) | ~380 | FI rescatable returns 1D/1W/1M/1Y/5Y/YTD (NAV + dividends). Refreshed daily |
 | `mv_administradores` (MV) | ~50 | Admin dimension: FM+FI fund counts per administradora. Refreshed daily |
@@ -463,19 +482,6 @@ print(DividendosDownloader().backfill())
 # INSERT INTO emisores(rut, dv, razon_social) SELECT TRIM(rut), TRIM(dv), TRIM(razon_social) FROM sii_raw ON CONFLICT (rut) DO UPDATE SET dv = EXCLUDED.dv, razon_social = EXCLUDED.razon_social;
 # DROP TABLE sii_raw;
 
-# Fly.io — deploy
-fly deploy
-
-# Fly.io — connect to production Postgres
-fly pg connect -a <pg-app-name>
-
-# Fly.io — tail logs
-fly logs
-
-# Fly.io — dump local DB and restore to Fly
-pg_dump $DATABASE_URL -Fc -f cmf_backup.dump
-fly proxy 5433:5432 -a <pg-app-name>
-pg_restore -h localhost -p 5433 -U postgres -d <db-name> cmf_backup.dump
 ```
 
 ## Environment Variables
@@ -489,18 +495,5 @@ pg_restore -h localhost -p 5433 -U postgres -d <db-name> cmf_backup.dump
 | `BOLSA_COOKIES` | Session cookies for Bolsa de Santiago API (expires periodically) |
 | `BOLSA_CSRF` | CSRF token for Bolsa de Santiago API (expires with cookies) |
 
-Set locally via `.env`. On Fly, set via `fly secrets set KEY=value`.
-
-When `BOLSA_COOKIES` / `BOLSA_CSRF` expire, update them without redeploying:
-```bash
-fly secrets set BOLSA_COOKIES="..." BOLSA_CSRF="..."
-```
-
-## Fly.io Notes
-
-- Two process groups (`web` + `worker`) run on a single Fly Machine — defined in `fly.toml [processes]`.
-- PostgreSQL lives in a separate `fly pg` app; connect via the private Fly network.
-- Persistent volumes are not required — all state lives in Postgres.
-- Downloaded files are deleted immediately after loading — no disk accumulation.
-- `auto_stop_machines = false` in `fly.toml` — prevents the machine stopping overnight and missing scheduler jobs.
-- To update Bolsa cookies/CSRF without redeploy: `fly secrets set BOLSA_COOKIES="..." BOLSA_CSRF="..."`
+Set locally via `.env`. Production environment variables are configured for the
+Oracle-hosted Docker Compose services.

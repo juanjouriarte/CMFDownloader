@@ -41,7 +41,7 @@ ETL pipeline that downloads public fund datasets from the Chilean CMF (Comisión
 - [x] **Dividendos** — dividends + capital changes for all instruments 1973–2026 (75k rows)
 
 ### Analysis
-- [x] **FM Fund classifier** — classifies 169 FM funds per Circular No. 7 (AFM 2025)
+- [x] **FM Fund classifier** — classifies FM funds per Circular No. 7 (AFM 2025). Results persisted to `categoria_fm`
 - [x] **FI Fund classifier** (`investmentFundsCategories.py`) — 20 subcategories across Capital Privado, Inmobiliario, Infraestructura, Accionario (Large/Small Cap), Deuda, and Fondo de Fondos. Uses `pct_activo_fondo` portfolio weights + IPSA ETF for size detection. Results in `categoria_fi` table, refreshed quarterly
 - [x] **Series classification** — `tipo_serie` derived from TAC `caracteristicas`
 - [x] **Canonical entity names** — `entidades` table maps RUT → canonical name
@@ -56,7 +56,8 @@ ETL pipeline that downloads public fund datasets from the Chilean CMF (Comisión
 - [x] **Fund endpoints** — `GET /funds` (list + filter), `/funds/{run}` (detail), `/funds/{run}/nav` (chart data), `/funds/{run}/portfolio` (full holdings enriched with SII names + fund names from nemotecnicos — includes `tir`, `fecha_vencimiento`, `cantidad_unidades`, `tipo_unidades`, `moneda_liquidacion`, `porcentaje_valor_par`, `tipo_interes`, `codigo_pais_emisor`, `situacion_instrumento`, `porcentaje_capital_emisor`, `porcentaje_activos_emisor`, `codigo_grupo_empresarial`, `nombre_fondo_emisor`)
 - [x] **Investment fund endpoints** — `GET /investment-funds`, `/investment-funds/{run}`, `/investment-funds/{run}/nav`, `/investment-funds/{run}/portfolio` (full holdings enriched with SII names + fund names — includes `tir_val_par_precio`, `fecha_vencimiento`, `cant_unidades`, `tipo_unidades`, `cod_moneda_liquidacion`, `tipo_interes`, `pct_capital_emisor`, `pct_activo_emisor`, `situacion_instrumento`, `clasif_esf`, `cod_pais`, `nombre_fondo_emisor`)
 - [x] **Rentability rankings** — `GET /rentability/fm` + `/rentability/fi` from materialized views, sortable by 1D/1W/1M/1Y/5Y/YTD
-- [x] **FI categories** — `GET /categories/fi` with latest period per fund
+- [x] **Fund categories** — `GET /categories/fm`, `/categories/fi`, and hierarchical `/categories/catalog`
+- [x] **Unified industry API** — `/industry/overview`, `/industry/funds`, and `/industry/evolution`
 - [x] **Administradoras** — `GET /admins` (list + fund counts), `/admins/{rut}` (detail)
 - [x] **Shareholder endpoints**:
   - `GET /shareholders/fund/{run}` — evolution of holders in a fund across quarters

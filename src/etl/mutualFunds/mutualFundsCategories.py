@@ -47,8 +47,6 @@ REGION_POR_CATEGORIA: dict[str, str | None] = {
 
 logger = logging.getLogger(__name__)
 
-PERIODO = date(2026, 5, 1)
-
 # ---------------------------------------------------------------------------
 # Instrument type → asset class
 # ---------------------------------------------------------------------------
@@ -180,29 +178,39 @@ def _classify_debt(pct_naci: float, pct_extr: float, pct_uf: float,
     return "RF>365OF"
 
 
-def run(periodo: date = PERIODO) -> pd.DataFrame:
+def latest_periodo() -> date:
+    with SessionLocal() as s:
+        periodo = s.execute(text("SELECT MAX(periodo) FROM cartera_naci")).scalar()
+    if periodo is None:
+        raise RuntimeError("No FM cartera data found in DB")
+    return periodo
+
+
+def run(periodo: date | None = None) -> pd.DataFrame:
+    if periodo is None:
+        periodo = latest_periodo()
+
     with SessionLocal() as s:
         # ------------------------------------------------------------------ NACI
         naci = pd.DataFrame(s.execute(text("""
             SELECT
                 run_fondo,
-                nombre_fondo,
-                ffm_6010400  AS tipo,
-                ffm_6011000  AS moneda,
-                ffm_6010500  AS fecha_vcto,
-                ffm_6011200  AS valor_raw
+                tipo_instrumento AS tipo,
+                moneda_liquidacion AS moneda,
+                fecha_vencimiento AS fecha_vcto,
+                valorizacion_cierre AS valor_raw
             FROM cartera_naci
             WHERE periodo = :p
         """), {"p": periodo}).fetchall(),
-            columns=["run_fondo","nombre_fondo","tipo","moneda","fecha_vcto","valor_raw"])
+            columns=["run_fondo","tipo","moneda","fecha_vcto","valor_raw"])
 
         # ------------------------------------------------------------------ EXTR
         extr = pd.DataFrame(s.execute(text("""
             SELECT
                 run_fondo,
-                ffm_6020400  AS tipo,
-                ffm_6020300  AS codigo_pais,
-                ffm_6021200  AS valor_raw
+                tipo_instrumento AS tipo,
+                codigo_pais_emisor AS codigo_pais,
+                valorizacion_cierre AS valor_raw
             FROM cartera_extr
             WHERE periodo = :p
         """), {"p": periodo}).fetchall(),
@@ -325,7 +333,7 @@ def run(periodo: date = PERIODO) -> pd.DataFrame:
         nombre = (
             names[names["run_fondo"] == run]["nombre_fondo"].iloc[0]
             if run in names["run_fondo"].values else
-            fn["nombre_fondo"].iloc[0] if not fn.empty else "—"
+            "—"
         )
 
         # Region
@@ -360,11 +368,59 @@ def run(periodo: date = PERIODO) -> pd.DataFrame:
     return df
 
 
+def save(df: pd.DataFrame, periodo: date) -> int:
+    """Upsert FM classifications for one portfolio period."""
+    from datetime import datetime, timezone
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from src.db.models.categoria_fm import CategoriaFM
+
+    if df.empty:
+        return 0
+
+    now = datetime.now(timezone.utc)
+    records = [
+        {
+            "run_fondo": r["run_fondo"],
+            "periodo": periodo,
+            "categoria": r["categoria"],
+            "grupo": r["region"],
+            "tipo": str(r["tipo"]),
+            "nombre_cat": r["nombre_cat"],
+            "confianza": r["confianza"],
+            "pct_equity": r["pct_equity"],
+            "pct_naci": r["pct_naci"],
+            "pct_uf": r["pct_uf"],
+            "pct_clp": r["pct_clp"],
+            "wam_dias": r["wam_dias"],
+            "updated_at": now,
+        }
+        for _, r in df.iterrows()
+    ]
+
+    with SessionLocal() as s:
+        stmt = pg_insert(CategoriaFM).values(records)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["run_fondo", "periodo"],
+            set_={c: stmt.excluded[c] for c in records[0] if c not in ("run_fondo", "periodo")},
+        )
+        s.execute(stmt)
+        s.commit()
+
+    logger.info("categoria_fm: %d rows upserted for periodo %s", len(records), periodo)
+    return len(records)
+
+
+def run_and_save(periodo: date | None = None) -> int:
+    periodo = periodo or latest_periodo()
+    return save(run(periodo), periodo)
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    df = run()
+    periodo = latest_periodo()
+    df = run(periodo)
     print(f"\nFondos clasificados: {len(df)}")
-    print(f"Período: {PERIODO.strftime('%B %Y')}\n")
+    print(f"Período: {periodo.strftime('%B %Y')}\n")
     for tipo in ["Deuda", "Balanceado", "Accionario", "Estructurado", "Inversionistas Calificados"]:
         sub = df[df["tipo"] == tipo]
         if sub.empty:
