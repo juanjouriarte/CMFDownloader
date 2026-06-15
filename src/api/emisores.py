@@ -494,7 +494,8 @@ def get_emisor_positions(
     - Commercial paper (EC): tir, fecha_vencimiento
     - Deposits (DPC, DPL): tir, fecha_vencimiento
     """
-    params: dict = {"rut": rut, "limit": pagination.limit, "offset": pagination.offset}
+    limit, offset = pagination
+    params: dict = {"rut": rut, "limit": limit, "offset": offset}
     instr_filter = "AND cn.tipo_instrumento = :tipo_instrumento" if tipo_instrumento else ""
     if tipo_instrumento:
         params["tipo_instrumento"] = tipo_instrumento
