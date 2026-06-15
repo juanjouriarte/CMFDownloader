@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -94,6 +94,11 @@ class FundFMDetail(FundFMItem):
     latest_tac: TACInfo | None
 
 
+class ReturnPoint(BaseModel):
+    fecha: date
+    return_pct: float
+
+
 class NavPoint(BaseModel):
     fecha: date
     serie: str | None
@@ -125,6 +130,10 @@ class PortfolioPosition(BaseModel):
     porcentaje_activos_emisor: str | None
     codigo_grupo_empresarial: str | None
     nombre_fondo_emisor: str | None
+
+
+class PortfolioHistoryPosition(PortfolioPosition):
+    periodo: date
 
 
 @router.get("", response_model=list[FundFMItem])
@@ -388,15 +397,21 @@ def get_fund_flows(
     return [FlowPoint(**dict(r)) for r in rows]
 
 
+def _first_of_month(period_str: str) -> date:
+    """Normalize any YYYY-MM-DD to the first of that month (how carteras are stored)."""
+    p = date.fromisoformat(period_str)
+    return date(p.year, p.month, 1)
+
+
 @router.get("/{run}/portfolio", response_model=list[PortfolioPosition])
 def get_fund_portfolio(
     run: str,
     _: CacheHook,
-    period: str | None = Query(None, description="Month period YYYY-MM-DD, defaults to latest"),
+    period: str | None = Query(None, description="Any date in the target month, e.g. 2025-12-31 or 2025-12-01"),
 ) -> list[PortfolioPosition]:
     with SessionLocal() as session:
         if period:
-            latest = period
+            latest = _first_of_month(period)
         else:
             latest = session.execute(
                 text("SELECT MAX(periodo) FROM cartera_naci WHERE run_fondo = :run"),
@@ -461,3 +476,170 @@ def get_fund_portfolio(
         ).mappings().all()
 
     return [PortfolioPosition(**dict(r)) for r in naci] + [PortfolioPosition(**dict(r)) for r in extr]
+
+
+@router.get("/{run}/portfolio/history", response_model=list[PortfolioHistoryPosition])
+def get_fund_portfolio_history(
+    run: str,
+    pagination: Pagination,
+    _: CacheHook,
+) -> list[PortfolioHistoryPosition]:
+    """All monthly portfolio positions for a fund across every available period.
+
+    Returns a flat list ordered by periodo DESC. Each item includes the periodo field
+    so the frontend can group by month. Paginate with ?limit= / ?offset= (max 500).
+    """
+    limit, offset = pagination
+    with SessionLocal() as session:
+        naci = session.execute(
+            text("""
+                SELECT c.periodo, 'naci' AS source, c.nemotecnico, c.rut_emisor,
+                       COALESCE(e.razon_social, fm.nombre_fondo, fi.razon_social) AS nombre_emisor,
+                       c.tipo_instrumento, rc_inst.name AS nombre_instrumento,
+                       c.porcentaje_activos_fondo, c.valorizacion_cierre, c.clasificacion_riesgo,
+                       c.tir, c.fecha_vencimiento, c.cantidad_unidades, c.tipo_unidades,
+                       c.moneda_liquidacion, rc_mon.name AS nombre_moneda,
+                       c.porcentaje_valor_par, c.tipo_interes,
+                       c.codigo_pais_emisor, rc_pais.name AS nombre_pais,
+                       c.situacion_instrumento, c.porcentaje_capital_emisor,
+                       c.porcentaje_activos_emisor, c.codigo_grupo_empresarial,
+                       COALESCE(fm.nombre_fondo, fi.razon_social) AS nombre_fondo_emisor
+                FROM cartera_naci c
+                LEFT JOIN emisores e ON e.rut = c.rut_emisor
+                LEFT JOIN nemotecnicos n ON n.nemotecnico = c.nemotecnico
+                LEFT JOIN fondo_mutuo fm ON fm.run_fondo = n.run_fondo
+                LEFT JOIN nemotecnicos_fi nfi ON nfi.nemotecnico = c.nemotecnico
+                LEFT JOIN fondos_inversion fi ON fi.run_fondo = nfi.run_fondo
+                LEFT JOIN ref_codes rc_inst ON rc_inst.domain = 'instrument' AND rc_inst.code = c.tipo_instrumento
+                LEFT JOIN ref_codes rc_mon  ON rc_mon.domain  = 'currency'   AND rc_mon.code  = c.moneda_liquidacion
+                LEFT JOIN ref_codes rc_pais ON rc_pais.domain = 'country'    AND rc_pais.code = c.codigo_pais_emisor
+                WHERE c.run_fondo = :run
+                ORDER BY c.periodo DESC, c.porcentaje_activos_fondo DESC NULLS LAST
+                LIMIT :limit OFFSET :offset
+            """),
+            {"run": run, "limit": limit, "offset": offset},
+        ).mappings().all()
+
+        extr = session.execute(
+            text("""
+                SELECT c.periodo, 'extr' AS source, c.nemotecnico, NULL AS rut_emisor,
+                       COALESCE(c.nombre_emisor, fm.nombre_fondo, fi.razon_social) AS nombre_emisor,
+                       c.tipo_instrumento, rc_inst.name AS nombre_instrumento,
+                       c.porcentaje_activos_fondo, c.valorizacion_cierre, c.clasificacion_riesgo,
+                       c.tir, c.fecha_vencimiento, c.cantidad_unidades, c.tipo_unidades,
+                       c.moneda_liquidacion, rc_mon.name AS nombre_moneda,
+                       c.porcentaje_valor_par, c.tipo_interes,
+                       c.codigo_pais_emisor, rc_pais.name AS nombre_pais,
+                       c.situacion_instrumento, c.porcentaje_capital_emisor,
+                       c.porcentaje_activos_emisor,
+                       c.nombre_grupo_empresarial AS codigo_grupo_empresarial,
+                       COALESCE(fm.nombre_fondo, fi.razon_social) AS nombre_fondo_emisor
+                FROM cartera_extr c
+                LEFT JOIN nemotecnicos n ON n.nemotecnico = c.nemotecnico
+                LEFT JOIN fondo_mutuo fm ON fm.run_fondo = n.run_fondo
+                LEFT JOIN nemotecnicos_fi nfi ON nfi.nemotecnico = c.nemotecnico
+                LEFT JOIN fondos_inversion fi ON fi.run_fondo = nfi.run_fondo
+                LEFT JOIN ref_codes rc_inst ON rc_inst.domain = 'instrument' AND rc_inst.code = c.tipo_instrumento
+                LEFT JOIN ref_codes rc_mon  ON rc_mon.domain  = 'currency'   AND rc_mon.code  = c.moneda_liquidacion
+                LEFT JOIN ref_codes rc_pais ON rc_pais.domain = 'country'    AND rc_pais.code = c.codigo_pais_emisor
+                WHERE c.run_fondo = :run
+                ORDER BY c.periodo DESC, c.porcentaje_activos_fondo DESC NULLS LAST
+                LIMIT :limit OFFSET :offset
+            """),
+            {"run": run, "limit": limit, "offset": offset},
+        ).mappings().all()
+
+    return [PortfolioHistoryPosition(**dict(r)) for r in naci] + [
+        PortfolioHistoryPosition(**dict(r)) for r in extr
+    ]
+
+
+@router.get("/{run}/return-series", response_model=list[ReturnPoint])
+def get_fund_return_series(
+    run: str,
+    _: CacheHook,
+    serie: str | None = Query(None),
+    from_date: date | None = Query(None),
+    to_date: date | None = Query(None, description=(
+        "Cap the series at this date. Pass fecha_calculo from the fund detail rentability "
+        "object to align the last point exactly with r_1y / r_1m etc."
+    )),
+) -> list[ReturnPoint]:
+    """Cumulative total-return series (price + distributions) from from_date to to_date.
+
+    Methodology mirrors mv_rentabilidad_fm:
+      cumulative_return = (VC_d × PRODUCT(factor_reparto for fecha in (start, d])) / VC_start - 1
+    First point is always 0.0. Returns [] if no data exists for the range.
+
+    To align the last point with a point-in-time return (e.g. r_1y):
+      from_date = fecha_calculo - 365 days
+      to_date   = fecha_calculo
+    Both values come from the rentability[] array in the fund detail response.
+    """
+    effective_from = from_date or (date.today() - timedelta(days=365))
+
+    with SessionLocal() as session:
+        if not serie:
+            serie = session.execute(
+                text("""
+                    SELECT serie FROM cartola_diaria
+                    WHERE run_fondo = :run
+                      AND fecha = (SELECT MAX(fecha) FROM cartola_diaria WHERE run_fondo = :run)
+                    ORDER BY patrimonio_neto DESC NULLS LAST
+                    LIMIT 1
+                """),
+                {"run": run},
+            ).scalar_one_or_none()
+            if not serie:
+                return []
+
+        rows = session.execute(
+            text("""
+                WITH
+                -- Nearest date with data on or before from_date (handles weekends/holidays)
+                start_row AS (
+                    SELECT fecha AS start_fecha, valor_cuota AS vc_start
+                    FROM cartola_diaria
+                    WHERE run_fondo = :run AND serie = :serie
+                      AND fecha <= :from_date
+                      AND valor_cuota IS NOT NULL AND valor_cuota > 0
+                    ORDER BY fecha DESC
+                    LIMIT 1
+                ),
+                -- All NAV rows from start date forward (optionally capped by to_date)
+                nav AS (
+                    SELECT cd.fecha, cd.valor_cuota, cd.factor_reparto
+                    FROM cartola_diaria cd, start_row sr
+                    WHERE cd.run_fondo = :run AND cd.serie = :serie
+                      AND cd.fecha >= sr.start_fecha
+                      AND cd.valor_cuota IS NOT NULL
+                      AND (:to_date IS NULL OR cd.fecha <= :to_date)
+                ),
+                -- Running cumulative distribution factor via EXP(SUM(LN(factor)))
+                -- Factor on start_fecha itself is excluded (consistent with MV formula)
+                factor_running AS (
+                    SELECT
+                        n.fecha,
+                        n.valor_cuota,
+                        EXP(SUM(
+                            CASE WHEN n.fecha > sr.start_fecha
+                                      AND n.factor_reparto IS NOT NULL
+                                      AND n.factor_reparto != 'NaN'::numeric
+                                      AND n.factor_reparto > 0
+                                 THEN LN(n.factor_reparto)
+                                 ELSE 0
+                            END
+                        ) OVER (ORDER BY n.fecha ROWS UNBOUNDED PRECEDING)) AS cum_factor
+                    FROM nav n, start_row sr
+                )
+                SELECT
+                    fr.fecha,
+                    ROUND(((fr.valor_cuota * fr.cum_factor / sr.vc_start - 1) * 100)::numeric, 4) AS return_pct
+                FROM factor_running fr, start_row sr
+                WHERE sr.vc_start > 0
+                ORDER BY fr.fecha
+            """),
+            {"run": run, "serie": serie, "from_date": effective_from, "to_date": to_date},
+        ).mappings().all()
+
+    return [ReturnPoint(**dict(r)) for r in rows]
