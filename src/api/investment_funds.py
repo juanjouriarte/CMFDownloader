@@ -23,6 +23,7 @@ class CategoryInfo(BaseModel):
 
 class GeoPct(BaseModel):
     pais: str
+    nombre_pais: str | None
     pct_peso: float
 
 
@@ -43,6 +44,7 @@ class FIPortfolioPosition(BaseModel):
     rut_emisor: str | None
     nombre_emisor: str | None
     tipo_instrumento: str | None
+    nombre_instrumento: str | None
     pct_activo_fondo: float | None
     valorizacion_cierre: float | None
     clasif_riesgo: str | None
@@ -51,12 +53,14 @@ class FIPortfolioPosition(BaseModel):
     cant_unidades: float | None
     tipo_unidades: str | None
     cod_moneda_liquidacion: str | None
+    nombre_moneda: str | None
     tipo_interes: str | None
     pct_capital_emisor: float | None
     pct_activo_emisor: float | None
     situacion_instrumento: str | None
     clasif_esf: str | None
     cod_pais: str | None
+    nombre_pais: str | None
     nombre_fondo_emisor: str | None
 
 
@@ -225,9 +229,10 @@ def get_investment_fund(run: str, _: CacheHook) -> FundFIDetail:
                         FROM cartera_fi_ext
                         WHERE run_fondo = :run AND periodo = :period AND pct_activo_fondo IS NOT NULL
                     )
-                    SELECT pais, SUM(pct) AS pct_peso
-                    FROM combined
-                    GROUP BY pais
+                    SELECT c.pais, rc.name AS nombre_pais, SUM(c.pct) AS pct_peso
+                    FROM combined c
+                    LEFT JOIN ref_codes rc ON rc.domain = 'country' AND rc.code = c.pais
+                    GROUP BY c.pais, rc.name
                     ORDER BY pct_peso DESC
                 """),
                 {"run": run, "period": latest_period},
@@ -302,12 +307,13 @@ def get_investment_fund_portfolio(
             text("""
                 SELECT 'naci' AS source, c.nemotecnico, c.rut_emisor,
                        COALESCE(e.razon_social, fm.nombre_fondo, fi2.razon_social) AS nombre_emisor,
-                       c.tipo_instrumento, c.pct_activo_fondo,
-                       c.valorizacion_cierre, c.clasif_riesgo,
+                       c.tipo_instrumento, rc_inst.name AS nombre_instrumento,
+                       c.pct_activo_fondo, c.valorizacion_cierre, c.clasif_riesgo,
                        c.tir_val_par_precio, c.fecha_vencimiento, c.cant_unidades,
-                       c.tipo_unidades, c.cod_moneda_liquidacion, c.tipo_interes,
-                       c.pct_capital_emisor, c.pct_activo_emisor,
-                       c.situacion_instrumento, c.clasif_esf, c.cod_pais,
+                       c.tipo_unidades, c.cod_moneda_liquidacion, rc_mon.name AS nombre_moneda,
+                       c.tipo_interes, c.pct_capital_emisor, c.pct_activo_emisor,
+                       c.situacion_instrumento, c.clasif_esf,
+                       c.cod_pais, rc_pais.name AS nombre_pais,
                        COALESCE(fm.nombre_fondo, fi2.razon_social) AS nombre_fondo_emisor
                 FROM cartera_fi_nac c
                 LEFT JOIN emisores e ON e.rut = c.rut_emisor
@@ -315,6 +321,9 @@ def get_investment_fund_portfolio(
                 LEFT JOIN fondo_mutuo fm ON fm.run_fondo = n.run_fondo
                 LEFT JOIN nemotecnicos_fi nfi ON nfi.nemotecnico = c.nemotecnico
                 LEFT JOIN fondos_inversion fi2 ON fi2.run_fondo = nfi.run_fondo
+                LEFT JOIN ref_codes rc_inst ON rc_inst.domain = 'instrument' AND rc_inst.code = c.tipo_instrumento
+                LEFT JOIN ref_codes rc_mon  ON rc_mon.domain  = 'currency'   AND rc_mon.code  = c.cod_moneda_liquidacion
+                LEFT JOIN ref_codes rc_pais ON rc_pais.domain = 'country'    AND rc_pais.code = c.cod_pais
                 WHERE c.run_fondo = :run AND c.periodo = :period
                 ORDER BY c.pct_activo_fondo DESC NULLS LAST
             """),
@@ -325,18 +334,22 @@ def get_investment_fund_portfolio(
             text("""
                 SELECT 'extr' AS source, c.nemo_isin AS nemotecnico, NULL AS rut_emisor,
                        COALESCE(c.nombre_emisor, fm.nombre_fondo, fi2.razon_social) AS nombre_emisor,
-                       c.tipo_instrumento, c.pct_activo_fondo,
-                       c.valorizacion_cierre, c.clasif_riesgo,
+                       c.tipo_instrumento, rc_inst.name AS nombre_instrumento,
+                       c.pct_activo_fondo, c.valorizacion_cierre, c.clasif_riesgo,
                        c.tir_val_par_precio, c.fecha_vencimiento, c.cant_unidades,
-                       c.tipo_unidades, c.cod_moneda_liquidacion, c.tipo_interes,
-                       c.pct_capital_emisor, c.pct_activo_emisor,
-                       c.situacion_instrumento, c.clasif_esf, c.cod_pais,
+                       c.tipo_unidades, c.cod_moneda_liquidacion, rc_mon.name AS nombre_moneda,
+                       c.tipo_interes, c.pct_capital_emisor, c.pct_activo_emisor,
+                       c.situacion_instrumento, c.clasif_esf,
+                       c.cod_pais, rc_pais.name AS nombre_pais,
                        COALESCE(fm.nombre_fondo, fi2.razon_social) AS nombre_fondo_emisor
                 FROM cartera_fi_ext c
                 LEFT JOIN nemotecnicos n ON n.nemotecnico = c.nemo_isin
                 LEFT JOIN fondo_mutuo fm ON fm.run_fondo = n.run_fondo
                 LEFT JOIN nemotecnicos_fi nfi ON nfi.nemotecnico = c.nemo_isin
                 LEFT JOIN fondos_inversion fi2 ON fi2.run_fondo = nfi.run_fondo
+                LEFT JOIN ref_codes rc_inst ON rc_inst.domain = 'instrument' AND rc_inst.code = c.tipo_instrumento
+                LEFT JOIN ref_codes rc_mon  ON rc_mon.domain  = 'currency'   AND rc_mon.code  = c.cod_moneda_liquidacion
+                LEFT JOIN ref_codes rc_pais ON rc_pais.domain = 'country'    AND rc_pais.code = c.cod_pais
                 WHERE c.run_fondo = :run AND c.periodo = :period
                 ORDER BY c.pct_activo_fondo DESC NULLS LAST
             """),
