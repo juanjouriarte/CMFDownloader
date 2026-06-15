@@ -616,20 +616,26 @@ def get_emisor_history(
     _: CacheHook,
     fund_type: str | None = Query(None, description="fm | fi (default: both)"),
     from_date: date | None = Query(None, description="Start period, defaults to 2020-01-01"),
+    tipo_instrumento: str | None = Query(None, description="Filter to a single instrument type, e.g. BC, ACC, EC"),
 ) -> list[HistoryPoint]:
     """Monthly (FM) and quarterly (FI) time series of total market exposure to this company.
 
-    Perfect for charting how interest in a company has grown or shrunk over time.
+    Pass ?tipo_instrumento=BC to drill down into a single instrument type —
+    powers the timeline chart in the instrument drill-down view.
     """
     effective_from = from_date or date(2020, 1, 1)
     params: dict = {"rut": rut, "from_date": effective_from}
+
+    instr_filter = "AND cn.tipo_instrumento = :tipo_instrumento" if tipo_instrumento else ""
+    if tipo_instrumento:
+        params["tipo_instrumento"] = tipo_instrumento
 
     include_fm = fund_type in (None, "fm", "all")
     include_fi = fund_type in (None, "fi", "all")
 
     parts = []
     if include_fm:
-        parts.append("""
+        parts.append(f"""
             SELECT
                 cn.periodo,
                 'fm'                                                           AS fund_type,
@@ -640,10 +646,11 @@ def get_emisor_history(
             FROM cartera_naci cn
             JOIN fondo_mutuo fm ON fm.run_fondo = cn.run_fondo
             WHERE cn.rut_emisor = :rut AND cn.periodo >= :from_date
+              {instr_filter}
             GROUP BY cn.periodo
         """)
     if include_fi:
-        parts.append("""
+        parts.append(f"""
             SELECT
                 cn.periodo,
                 'fi'                                        AS fund_type,
@@ -653,6 +660,7 @@ def get_emisor_history(
             FROM cartera_fi_nac cn
             JOIN fondos_inversion fi ON fi.run_fondo = cn.run_fondo
             WHERE cn.rut_emisor = :rut AND cn.periodo >= :from_date
+              {instr_filter}
             GROUP BY cn.periodo
         """)
 
