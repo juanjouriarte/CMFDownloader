@@ -91,6 +91,18 @@ class HistoryPoint(BaseModel):
     agfs_count: int
 
 
+class FundEmisorHistoryPoint(BaseModel):
+    periodo: date
+    fund_type: str
+    run_fondo: str
+    nombre_fondo: str | None
+    administrador: str | None
+    exposure_clp: float | None
+    pct_activo_fondo: float | None
+    tipo_instrumento: str | None
+    nombre_instrumento: str | None
+
+
 class ConcentrationAGF(BaseModel):
     administrador: str | None
     rut_administradora: str | None
@@ -492,7 +504,87 @@ def get_emisor_history(
 
 
 # ---------------------------------------------------------------------------
-# 5. CONCENTRATION (Herfindahl index by AGF)
+# 5. FUND-SPECIFIC EMISOR HISTORY
+# ---------------------------------------------------------------------------
+
+@router.get("/{rut}/funds/{run_fondo}/history", response_model=list[FundEmisorHistoryPoint])
+def get_emisor_fund_history(
+    rut: str,
+    run_fondo: str,
+    _: CacheHook,
+    fund_type: str | None = Query(None, description="fm | fi — auto-detected if omitted"),
+    from_date: date | None = Query(None, description="Start period, defaults to 2020-01-01"),
+) -> list[FundEmisorHistoryPoint]:
+    """Time series of how much a specific fund has held in a specific company.
+
+    Each row is one portfolio period (monthly for FM, quarterly for FI).
+    Multiple rows per period can appear when the fund holds the company
+    across different instrument types simultaneously.
+    """
+    effective_from = from_date or date(2020, 1, 1)
+    params: dict = {"rut": rut, "run_fondo": run_fondo, "from_date": effective_from}
+
+    include_fm = fund_type in (None, "fm", "all")
+    include_fi = fund_type in (None, "fi", "all")
+
+    parts = []
+    if include_fm:
+        parts.append("""
+            SELECT
+                cn.periodo,
+                'fm'                        AS fund_type,
+                cn.run_fondo,
+                fm.nombre_fondo,
+                fm.razon_social_administradora AS administrador,
+                CASE WHEN cn.valorizacion_cierre ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                     THEN cn.valorizacion_cierre::numeric ELSE NULL END AS exposure_clp,
+                CASE WHEN cn.porcentaje_activos_fondo ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                     THEN cn.porcentaje_activos_fondo::numeric ELSE NULL END AS pct_activo_fondo,
+                cn.tipo_instrumento
+            FROM cartera_naci cn
+            JOIN fondo_mutuo fm ON fm.run_fondo = cn.run_fondo
+            WHERE cn.rut_emisor = :rut
+              AND cn.run_fondo  = :run_fondo
+              AND cn.periodo   >= :from_date
+        """)
+    if include_fi:
+        parts.append("""
+            SELECT
+                cn.periodo,
+                'fi'                AS fund_type,
+                cn.run_fondo,
+                fi.razon_social     AS nombre_fondo,
+                fi.administrador,
+                cn.valorizacion_cierre AS exposure_clp,
+                cn.pct_activo_fondo,
+                cn.tipo_instrumento
+            FROM cartera_fi_nac cn
+            JOIN fondos_inversion fi ON fi.run_fondo = cn.run_fondo
+            WHERE cn.rut_emisor = :rut
+              AND cn.run_fondo  = :run_fondo
+              AND cn.periodo   >= :from_date
+        """)
+
+    if not parts:
+        return []
+
+    union_sql = " UNION ALL ".join(parts)
+    sql = text(f"""
+        SELECT p.periodo, p.fund_type, p.run_fondo, p.nombre_fondo, p.administrador,
+               p.exposure_clp, p.pct_activo_fondo, p.tipo_instrumento,
+               rc.name AS nombre_instrumento
+        FROM ({union_sql}) p
+        LEFT JOIN ref_codes rc ON rc.domain = 'instrument' AND rc.code = p.tipo_instrumento
+        ORDER BY p.periodo ASC, p.exposure_clp DESC NULLS LAST
+    """)
+
+    with SessionLocal() as session:
+        rows = session.execute(sql, params).mappings().all()
+    return [FundEmisorHistoryPoint(**dict(r)) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# 6. CONCENTRATION (Herfindahl index by AGF)
 # ---------------------------------------------------------------------------
 
 @router.get("/{rut}/concentration", response_model=ConcentrationResult)
