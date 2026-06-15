@@ -268,14 +268,14 @@ def get_fund(run: str, _: CacheHook) -> FundFMDetail:
                         FROM cartera_naci
                         WHERE run_fondo = :run AND periodo = :period
                           AND porcentaje_activos_fondo IS NOT NULL
-                          AND porcentaje_activos_fondo ~ '^-?[0-9]+(\.[0-9]+)?$'
+                          AND porcentaje_activos_fondo ~ '^-?[0-9]*\.?[0-9]+$'
                         UNION ALL
                         SELECT COALESCE(codigo_pais_emisor, 'OTHER') AS pais,
                                CAST(porcentaje_activos_fondo AS numeric) AS pct
                         FROM cartera_extr
                         WHERE run_fondo = :run AND periodo = :period
                           AND porcentaje_activos_fondo IS NOT NULL
-                          AND porcentaje_activos_fondo ~ '^-?[0-9]+(\.[0-9]+)?$'
+                          AND porcentaje_activos_fondo ~ '^-?[0-9]*\.?[0-9]+$'
                     )
                     SELECT c.pais, rc.name AS nombre_pais, SUM(c.pct) AS pct_peso
                     FROM combined c

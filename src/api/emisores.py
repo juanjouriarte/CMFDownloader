@@ -162,7 +162,7 @@ latest_fm AS (
 fm_exp AS (
     SELECT
         cn.rut_emisor,
-        SUM(CASE WHEN cn.valorizacion_cierre ~ '^-?[0-9]+(\\.[0-9]+)?$'
+        SUM(CASE WHEN cn.valorizacion_cierre ~ '^-?[0-9]*\\.?[0-9]+$'
                  THEN cn.valorizacion_cierre::numeric ELSE 0 END)   AS clp,
         COUNT(DISTINCT cn.run_fondo)                                AS funds,
         COUNT(DISTINCT fm.rut_administradora)                       AS agfs,
@@ -314,7 +314,7 @@ def get_emisor(rut: str, _: CacheHook) -> EmisorDetail:
                      latest_fi AS (SELECT MAX(periodo) AS p FROM cartera_fi_nac),
                 fm_instr AS (
                     SELECT cn.tipo_instrumento,
-                           SUM(CASE WHEN cn.valorizacion_cierre ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                           SUM(CASE WHEN cn.valorizacion_cierre ~ '^-?[0-9]*\\.?[0-9]+$'
                                     THEN cn.valorizacion_cierre::numeric ELSE 0 END) AS clp,
                            COUNT(DISTINCT cn.run_fondo) AS funds
                     FROM cartera_naci cn
@@ -358,9 +358,9 @@ def get_emisor(rut: str, _: CacheHook) -> EmisorDetail:
                 fm_pos AS (
                     SELECT 'fm' AS fund_type, cn.run_fondo,
                            fm.nombre_fondo, fm.razon_social_administradora AS administrador,
-                           CASE WHEN cn.valorizacion_cierre ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                           CASE WHEN cn.valorizacion_cierre ~ '^-?[0-9]*\\.?[0-9]+$'
                                 THEN cn.valorizacion_cierre::numeric ELSE NULL END AS exposure_clp,
-                           CASE WHEN cn.porcentaje_activos_fondo ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                           CASE WHEN cn.porcentaje_activos_fondo ~ '^-?[0-9]*\\.?[0-9]+$'
                                 THEN cn.porcentaje_activos_fondo::numeric ELSE NULL END AS pct_activo_fondo,
                            cn.tipo_instrumento, cn.periodo
                     FROM cartera_naci cn
@@ -427,9 +427,9 @@ def get_emisor_funds(
         parts.append(f"""
             SELECT 'fm' AS fund_type, cn.run_fondo,
                    fm.nombre_fondo, fm.razon_social_administradora AS administrador,
-                   CASE WHEN cn.valorizacion_cierre ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                   CASE WHEN cn.valorizacion_cierre ~ '^-?[0-9]*\\.?[0-9]+$'
                         THEN cn.valorizacion_cierre::numeric ELSE NULL END AS exposure_clp,
-                   CASE WHEN cn.porcentaje_activos_fondo ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                   CASE WHEN cn.porcentaje_activos_fondo ~ '^-?[0-9]*\\.?[0-9]+$'
                         THEN cn.porcentaje_activos_fondo::numeric ELSE NULL END AS pct_activo_fondo,
                    cn.tipo_instrumento, cn.periodo
             FROM cartera_naci cn
@@ -524,24 +524,24 @@ def get_emisor_positions(
                 cn.nemotecnico,
                 cn.situacion_instrumento,
                 cn.clasificacion_riesgo,
-                CASE WHEN cn.valorizacion_cierre ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                CASE WHEN cn.valorizacion_cierre ~ '^-?[0-9]*\\.?[0-9]+$'
                      THEN cn.valorizacion_cierre::numeric ELSE NULL END     AS valorizacion_cierre,
                 cn.moneda_liquidacion,
-                CASE WHEN cn.porcentaje_activos_fondo ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                CASE WHEN cn.porcentaje_activos_fondo ~ '^-?[0-9]*\\.?[0-9]+$'
                      THEN cn.porcentaje_activos_fondo::numeric ELSE NULL END AS pct_activo_fondo,
-                CASE WHEN cn.tir ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                CASE WHEN cn.tir ~ '^-?[0-9]*\\.?[0-9]+$'
                      THEN cn.tir::numeric ELSE NULL END                     AS tir,
                 cn.fecha_vencimiento,
                 cn.tipo_interes,
                 cn.base_tasa,
-                CASE WHEN cn.porcentaje_valor_par ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                CASE WHEN cn.porcentaje_valor_par ~ '^-?[0-9]*\\.?[0-9]+$'
                      THEN cn.porcentaje_valor_par::numeric ELSE NULL END    AS porcentaje_valor_par,
-                CASE WHEN cn.cantidad_unidades ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                CASE WHEN cn.cantidad_unidades ~ '^-?[0-9]*\\.?[0-9]+$'
                      THEN cn.cantidad_unidades::numeric ELSE NULL END       AS cantidad_unidades,
                 cn.tipo_unidades,
-                CASE WHEN cn.porcentaje_capital_emisor ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                CASE WHEN cn.porcentaje_capital_emisor ~ '^-?[0-9]*\\.?[0-9]+$'
                      THEN cn.porcentaje_capital_emisor::numeric ELSE NULL END AS porcentaje_capital_emisor,
-                CASE WHEN cn.porcentaje_activos_emisor ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                CASE WHEN cn.porcentaje_activos_emisor ~ '^-?[0-9]*\\.?[0-9]+$'
                      THEN cn.porcentaje_activos_emisor::numeric ELSE NULL END AS porcentaje_activos_emisor
             FROM cartera_naci cn
             JOIN fondo_mutuo fm ON fm.run_fondo = cn.run_fondo
@@ -640,7 +640,7 @@ def get_emisor_history(
             SELECT
                 cn.periodo,
                 'fm'                                                           AS fund_type,
-                SUM(CASE WHEN cn.valorizacion_cierre ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                SUM(CASE WHEN cn.valorizacion_cierre ~ '^-?[0-9]*\\.?[0-9]+$'
                          THEN cn.valorizacion_cierre::numeric ELSE 0 END)      AS exposure_clp,
                 COUNT(DISTINCT cn.run_fondo)::int                              AS funds_count,
                 COUNT(DISTINCT fm.rut_administradora)::int                     AS agfs_count
@@ -709,9 +709,9 @@ def get_emisor_fund_history(
                 cn.run_fondo,
                 fm.nombre_fondo,
                 fm.razon_social_administradora AS administrador,
-                CASE WHEN cn.valorizacion_cierre ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                CASE WHEN cn.valorizacion_cierre ~ '^-?[0-9]*\\.?[0-9]+$'
                      THEN cn.valorizacion_cierre::numeric ELSE NULL END AS exposure_clp,
-                CASE WHEN cn.porcentaje_activos_fondo ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                CASE WHEN cn.porcentaje_activos_fondo ~ '^-?[0-9]*\\.?[0-9]+$'
                      THEN cn.porcentaje_activos_fondo::numeric ELSE NULL END AS pct_activo_fondo,
                 cn.tipo_instrumento
             FROM cartera_naci cn
@@ -785,7 +785,7 @@ def get_emisor_concentration(rut: str, _: CacheHook) -> ConcentrationResult:
                     SELECT fm.rut_administradora AS rut_admin,
                            fm.razon_social_administradora AS administrador,
                            'fm' AS fund_type,
-                           SUM(CASE WHEN cn.valorizacion_cierre ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                           SUM(CASE WHEN cn.valorizacion_cierre ~ '^-?[0-9]*\\.?[0-9]+$'
                                     THEN cn.valorizacion_cierre::numeric ELSE 0 END) AS clp,
                            COUNT(DISTINCT cn.run_fondo)::int AS funds_count
                     FROM cartera_naci cn
