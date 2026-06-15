@@ -11,7 +11,7 @@ router = APIRouter(prefix="/admins", tags=["admins"])
 
 
 class AdminItem(BaseModel):
-    rut: str
+    rut: str | None
     nombre: str | None
     funds_fm: int
     funds_fm_vigente: int

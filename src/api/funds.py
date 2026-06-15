@@ -9,7 +9,7 @@ from sqlalchemy import text
 from src.db.engine import SessionLocal
 from .deps import CacheHook, Pagination
 
-router = APIRouter(prefix="/funds", tags=["mutual-funds"])
+router = APIRouter(prefix="/mutual-funds", tags=["mutual-funds"])
 
 _VALID_SORT = {"r_1d", "r_1w", "r_1m", "r_1y", "r_5y", "r_ytd"}
 
@@ -79,15 +79,14 @@ class TACInfo(BaseModel):
 
 class FlowPoint(BaseModel):
     fecha: date
-    serie: str | None
-    monto_aportado: float | None
-    monto_rescatado: float | None
+    aportes: float | None
+    rescates: float | None
     nnm: float | None
 
 
 class FundFMDetail(FundFMItem):
     fecha_termino_operaciones: date | None
-    nav: list[NavSerie]
+    series: list[NavSerie]
     rentability: list[RentFM]
     category: CategoryInfo | None
     geo_breakdown: list[GeoPct]
@@ -132,7 +131,7 @@ def list_funds(
     tipo_fondo: str | None = Query(None),
     vigente: bool | None = Query(None),
     categoria: str | None = Query(None, description="Category code from categoria_fm"),
-    tipo: str | None = Query(None, description="Category type (e.g. 'Renta Fija', 'Renta Variable')"),
+    tipo: str | None = Query(None, description="Category type (e.g. 'Accionario', 'Deuda')"),
 ) -> list[FundFMItem]:
     limit, offset = pagination
     conditions: list[str] = []
@@ -208,7 +207,7 @@ def get_fund(run: str, _: CacheHook) -> FundFMDetail:
         if not fund_row:
             raise HTTPException(404, "Fund not found")
 
-        nav_rows = session.execute(
+        series_rows = session.execute(
             text("""
                 SELECT DISTINCT ON (serie) serie, moneda, fecha, valor_cuota,
                        patrimonio_neto, num_participes
@@ -240,7 +239,6 @@ def get_fund(run: str, _: CacheHook) -> FundFMDetail:
             {"run": run},
         ).mappings().one_or_none()
 
-        # Geographic breakdown from latest portfolio quarter
         latest_period = session.execute(
             text("SELECT MAX(periodo) FROM cartera_naci WHERE run_fondo = :run"),
             {"run": run},
@@ -286,7 +284,7 @@ def get_fund(run: str, _: CacheHook) -> FundFMDetail:
 
     return FundFMDetail(
         **dict(fund_row),
-        nav=[NavSerie(**dict(r)) for r in nav_rows],
+        series=[NavSerie(**dict(r)) for r in series_rows],
         rentability=[RentFM(**dict(r)) for r in rent_rows],
         category=CategoryInfo(**dict(cat_row)) if cat_row else None,
         geo_breakdown=[GeoPct(**dict(r)) for r in geo_rows],
@@ -331,13 +329,74 @@ def get_fund_nav(
     return [NavPoint(**dict(r)) for r in rows]
 
 
-@router.get("/{run}/portfolio", response_model=list[PortfolioPosition])
-def get_fund_portfolio(run: str, _: CacheHook) -> list[PortfolioPosition]:
+@router.get("/{run}/tac", response_model=list[TACInfo])
+def get_fund_tac(run: str, _: CacheHook) -> list[TACInfo]:
+    """TAC history for a mutual fund — last 24 months, descending."""
+    sql = text("""
+        SELECT periodo, tac_total, tac_rem_fija, tac_rem_var, tac_gastos_op
+        FROM tac
+        WHERE run_fondo = :run
+        ORDER BY periodo DESC
+        LIMIT 24
+    """)
     with SessionLocal() as session:
-        latest = session.execute(
-            text("SELECT MAX(periodo) FROM cartera_naci WHERE run_fondo = :run"),
-            {"run": run},
-        ).scalar_one_or_none()
+        rows = session.execute(sql, {"run": run}).mappings().all()
+    return [TACInfo(**dict(r)) for r in rows]
+
+
+@router.get("/{run}/flows", response_model=list[FlowPoint])
+def get_fund_flows(
+    run: str,
+    _: CacheHook,
+    serie: str | None = Query(None),
+    from_date: date | None = Query(None),
+    to_date: date | None = Query(None),
+) -> list[FlowPoint]:
+    """Monthly aportes, rescates, and net new money — aggregated across all series unless ?serie= specified."""
+    conditions = ["run_fondo = :run"]
+    params: dict = {"run": run}
+
+    if serie:
+        conditions.append("serie = :serie")
+        params["serie"] = serie
+    if from_date:
+        conditions.append("fecha >= :from_date")
+        params["from_date"] = from_date
+    if to_date:
+        conditions.append("fecha <= :to_date")
+        params["to_date"] = to_date
+
+    where = "WHERE " + " AND ".join(conditions)
+    sql = text(f"""
+        SELECT DATE_TRUNC('month', fecha)::date AS fecha,
+               SUM(monto_aportado) AS aportes,
+               SUM(monto_rescatado) AS rescates,
+               SUM(monto_aportado - monto_rescatado) AS nnm
+        FROM cartola_diaria
+        {where}
+        GROUP BY DATE_TRUNC('month', fecha)
+        ORDER BY fecha DESC
+    """)
+
+    with SessionLocal() as session:
+        rows = session.execute(sql, params).mappings().all()
+    return [FlowPoint(**dict(r)) for r in rows]
+
+
+@router.get("/{run}/portfolio", response_model=list[PortfolioPosition])
+def get_fund_portfolio(
+    run: str,
+    _: CacheHook,
+    period: str | None = Query(None, description="Month period YYYY-MM-DD, defaults to latest"),
+) -> list[PortfolioPosition]:
+    with SessionLocal() as session:
+        if period:
+            latest = period
+        else:
+            latest = session.execute(
+                text("SELECT MAX(periodo) FROM cartera_naci WHERE run_fondo = :run"),
+                {"run": run},
+            ).scalar_one_or_none()
 
         if not latest:
             return []
@@ -388,43 +447,3 @@ def get_fund_portfolio(run: str, _: CacheHook) -> list[PortfolioPosition]:
         ).mappings().all()
 
     return [PortfolioPosition(**dict(r)) for r in naci] + [PortfolioPosition(**dict(r)) for r in extr]
-
-
-@router.get("/{run}/flows", response_model=list[FlowPoint])
-def get_fund_flows(
-    run: str,
-    pagination: Pagination,
-    _: CacheHook,
-    serie: str | None = Query(None),
-    from_date: date | None = Query(None),
-    to_date: date | None = Query(None),
-) -> list[FlowPoint]:
-    """Daily aportes, rescates, and net new money for a mutual fund series."""
-    limit, offset = pagination
-    conditions = ["run_fondo = :run"]
-    params: dict = {"run": run, "limit": limit, "offset": offset}
-
-    if serie:
-        conditions.append("serie = :serie")
-        params["serie"] = serie
-    if from_date:
-        conditions.append("fecha >= :from_date")
-        params["from_date"] = from_date
-    if to_date:
-        conditions.append("fecha <= :to_date")
-        params["to_date"] = to_date
-
-    where = "WHERE " + " AND ".join(conditions)
-    sql = text(f"""
-        SELECT fecha, serie,
-               monto_aportado, monto_rescatado,
-               monto_aportado - monto_rescatado AS nnm
-        FROM cartola_diaria
-        {where}
-        ORDER BY fecha DESC, serie
-        LIMIT :limit OFFSET :offset
-    """)
-
-    with SessionLocal() as session:
-        rows = session.execute(sql, params).mappings().all()
-    return [FlowPoint(**dict(r)) for r in rows]

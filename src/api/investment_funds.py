@@ -64,7 +64,7 @@ class NavFI(BaseModel):
     serie: str | None
     moneda: str | None
     fecha: date
-    valor_libro: float | None
+    valor_cuota: float | None   # valor_libro aliased for consistency with FM
     patrimonio_neto: float | None
     num_aportantes: int | None
 
@@ -85,7 +85,7 @@ class RentFI(BaseModel):
 
 
 class FundFIDetail(FundFIItem):
-    nav: list[NavFI]
+    series: list[NavFI]
     rentability: list[RentFI]
     category: CategoryInfo | None
     geo_breakdown: list[GeoPct]
@@ -94,7 +94,8 @@ class FundFIDetail(FundFIItem):
 class NavPointFI(BaseModel):
     fecha: date
     serie: str | None
-    valor_libro: float | None
+    valor_cuota: float | None   # valor_libro aliased for consistency with FM
+    patrimonio_neto: float | None
 
 
 @router.get("", response_model=list[FundFIItem])
@@ -172,10 +173,10 @@ def get_investment_fund(run: str, _: CacheHook) -> FundFIDetail:
         if not fund_row:
             raise HTTPException(404, "Investment fund not found")
 
-        nav_rows = session.execute(
+        series_rows = session.execute(
             text("""
-                SELECT DISTINCT ON (serie) serie, moneda, fecha, valor_libro,
-                       patrimonio_neto, num_aportantes
+                SELECT DISTINCT ON (serie) serie, moneda, fecha,
+                       valor_libro AS valor_cuota, patrimonio_neto, num_aportantes
                 FROM valores_cuota_fi
                 WHERE run_fondo = :run
                 ORDER BY serie, fecha DESC
@@ -206,7 +207,6 @@ def get_investment_fund(run: str, _: CacheHook) -> FundFIDetail:
             {"run": run},
         ).mappings().one_or_none()
 
-        # Geographic breakdown from latest portfolio quarter
         latest_period = session.execute(
             text("SELECT MAX(periodo) FROM cartera_fi_nac WHERE run_fondo = :run"),
             {"run": run},
@@ -235,7 +235,7 @@ def get_investment_fund(run: str, _: CacheHook) -> FundFIDetail:
 
     return FundFIDetail(
         **dict(fund_row),
-        nav=[NavFI(**dict(r)) for r in nav_rows],
+        series=[NavFI(**dict(r)) for r in series_rows],
         rentability=[RentFI(**dict(r)) for r in rent_rows],
         category=CategoryInfo(**dict(cat_row)) if cat_row else None,
         geo_breakdown=[GeoPct(**dict(r)) for r in geo_rows],
@@ -267,7 +267,7 @@ def get_investment_fund_nav(
 
     where = "WHERE " + " AND ".join(conditions)
     sql = text(f"""
-        SELECT fecha, serie, valor_libro
+        SELECT fecha, serie, valor_libro AS valor_cuota, patrimonio_neto
         FROM valores_cuota_fi
         {where}
         ORDER BY fecha DESC, serie
@@ -280,13 +280,20 @@ def get_investment_fund_nav(
 
 
 @router.get("/{run}/portfolio", response_model=list[FIPortfolioPosition])
-def get_investment_fund_portfolio(run: str, _: CacheHook) -> list[FIPortfolioPosition]:
-    """Latest quarter portfolio positions for an investment fund, enriched with SII company names."""
+def get_investment_fund_portfolio(
+    run: str,
+    _: CacheHook,
+    period: str | None = Query(None, description="Quarter period YYYY-MM-DD, defaults to latest"),
+) -> list[FIPortfolioPosition]:
+    """Quarter portfolio positions for an investment fund, enriched with SII company names."""
     with SessionLocal() as session:
-        latest = session.execute(
-            text("SELECT MAX(periodo) FROM cartera_fi_nac WHERE run_fondo = :run"),
-            {"run": run},
-        ).scalar_one_or_none()
+        if period:
+            latest = period
+        else:
+            latest = session.execute(
+                text("SELECT MAX(periodo) FROM cartera_fi_nac WHERE run_fondo = :run"),
+                {"run": run},
+            ).scalar_one_or_none()
 
         if not latest:
             return []

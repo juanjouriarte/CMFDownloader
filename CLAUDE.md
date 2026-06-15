@@ -334,15 +334,16 @@ All public endpoints return `Cache-Control: public, max-age=3600` and allow all 
 
 | Endpoint | Description |
 |---|---|
-| `GET /funds` | List FM funds. Filters: `admin`, `tipo_fondo`, `vigente`, `categoria`, `tipo`. Each item includes `categoria`, `tipo`, `nombre_cat` from `categoria_fm` |
-| `GET /funds/{run}` | FM fund detail: identity + latest NAV per serie + rentability + `category` (full object: `categoria`, `tipo`, `grupo`, `nombre_cat`, `confianza`, `periodo`) + `geo_breakdown` (`[{pais, pct_peso}]` from latest portfolio) + `latest_tac` (`tac_total`, `tac_rem_fija`, `tac_rem_var`, `tac_gastos_op`, `periodo`) |
-| `GET /funds/{run}/nav` | FM NAV history for charts. Filters: `serie`, `from_date`, `to_date` |
-| `GET /funds/{run}/flows` | Daily `monto_aportado`, `monto_rescatado`, `nnm` per serie. Filters: `serie`, `from_date`, `to_date` |
-| `GET /funds/{run}/portfolio` | FM latest quarter portfolio (naci + extr), SII-enriched. Fields per position: `tir`, `fecha_vencimiento`, `cantidad_unidades`, `tipo_unidades`, `moneda_liquidacion`, `porcentaje_valor_par`, `tipo_interes`, `codigo_pais_emisor`, `situacion_instrumento`, `porcentaje_capital_emisor`, `porcentaje_activos_emisor`, `codigo_grupo_empresarial` |
+| `GET /mutual-funds` | List FM funds. Filters: `admin`, `tipo_fondo`, `vigente`, `categoria`, `tipo`. Each item includes `categoria`, `tipo`, `nombre_cat` from `categoria_fm` |
+| `GET /mutual-funds/{run}` | FM fund detail: identity + latest NAV per serie (field: `series[]`) + rentability + `category` (full object: `categoria`, `tipo`, `grupo`, `nombre_cat`, `confianza`, `periodo`) + `geo_breakdown` (`[{pais, pct_peso}]` from latest portfolio) + `latest_tac` (`tac_total`, `tac_rem_fija`, `tac_rem_var`, `tac_gastos_op`, `periodo`) |
+| `GET /mutual-funds/{run}/nav` | FM NAV history for charts. Filters: `serie`, `from_date`, `to_date`. Field: `valor_cuota` |
+| `GET /mutual-funds/{run}/tac` | FM TAC history — last 24 months descending (`periodo`, `tac_total`, `tac_rem_fija`, `tac_rem_var`, `tac_gastos_op`) |
+| `GET /mutual-funds/{run}/flows` | Monthly aportes/rescates/nnm aggregated across all series. Filters: `serie`, `from_date`, `to_date`. Fields: `aportes`, `rescates`, `nnm` |
+| `GET /mutual-funds/{run}/portfolio` | FM portfolio (naci + extr), SII-enriched. Optional `?period=YYYY-MM-DD` (defaults to latest). Fields per position: `tir`, `fecha_vencimiento`, `cantidad_unidades`, `tipo_unidades`, `moneda_liquidacion`, `porcentaje_valor_par`, `tipo_interes`, `codigo_pais_emisor`, `situacion_instrumento`, `porcentaje_capital_emisor`, `porcentaje_activos_emisor`, `codigo_grupo_empresarial` |
 | `GET /investment-funds` | List FI funds. Filters: `admin`, `rescatable`, `vigente`, `categoria`, `tipo`. Each item includes `categoria`, `tipo`, `nombre_cat` from `categoria_fi` |
-| `GET /investment-funds/{run}` | FI fund detail: identity + latest NAV + rentability + `category` (full object) + `geo_breakdown` (`[{pais, pct_peso}]` from latest quarterly portfolio). No TAC (FI not covered by CMF TAC) |
-| `GET /investment-funds/{run}/nav` | FI NAV history |
-| `GET /investment-funds/{run}/portfolio` | FI latest quarter portfolio (nac + ext), SII-enriched, sorted by weight. Fields per position: `tir_val_par_precio`, `fecha_vencimiento`, `cant_unidades`, `tipo_unidades`, `cod_moneda_liquidacion`, `tipo_interes`, `pct_capital_emisor`, `pct_activo_emisor`, `situacion_instrumento`, `clasif_esf`, `cod_pais` |
+| `GET /investment-funds/{run}` | FI fund detail: identity + latest NAV per serie (field: `series[]`, `valor_cuota` aliased from `valor_libro`) + rentability + `category` (full object) + `geo_breakdown` (`[{pais, pct_peso}]` from latest quarterly portfolio). No TAC (FI not covered by CMF TAC) |
+| `GET /investment-funds/{run}/nav` | FI NAV history. Fields: `valor_cuota` (aliased from `valor_libro`), `patrimonio_neto` |
+| `GET /investment-funds/{run}/portfolio` | FI portfolio (nac + ext), SII-enriched, sorted by weight. Optional `?period=YYYY-MM-DD`. Fields per position: `tir_val_par_precio`, `fecha_vencimiento`, `cant_unidades`, `tipo_unidades`, `cod_moneda_liquidacion`, `tipo_interes`, `pct_capital_emisor`, `pct_activo_emisor`, `situacion_instrumento`, `clasif_esf`, `cod_pais` |
 | `GET /rentability/fm` | FM return rankings. Sort: `r_1d/r_1w/r_1m/r_1y/r_5y/r_ytd`. Filters: `admin`, `categoria`, `tipo` |
 | `GET /rentability/fi` | FI return rankings. Same sort options. Filters: `admin`, `categoria`, `tipo` |
 | `GET /categories/fi` | FI fund classifications. Filters: `categoria`, `tipo`, `admin` |
