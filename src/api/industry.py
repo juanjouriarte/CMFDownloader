@@ -65,7 +65,11 @@ fm AS (
            NULL::boolean AS rescatable,
            c.tipo AS category_type, c.grupo AS category_group,
            c.categoria AS category, c.nombre_cat AS category_name,
-           a.aum_clp, a.data_date, r.r_1y, r.r_ytd,
+           a.aum_clp,
+           NULL::numeric AS aum_usd,
+           NULL::numeric AS aum_eur,
+           NULL::numeric AS aum_other,
+           a.data_date, r.r_1y, r.r_ytd,
            COALESCE(fl.nnm_month_clp, 0) AS nnm_month_clp,
            COALESCE(fl.nnm_ytd_clp, 0) AS nnm_ytd_clp
     FROM fondo_mutuo f
@@ -87,12 +91,18 @@ fi_ref AS (
     LIMIT 1
 ),
 fi_nav AS (
-    SELECT v.run_fondo, v.serie, v.fecha, v.patrimonio_neto
+    SELECT v.run_fondo, v.serie, v.fecha, v.patrimonio_neto, v.moneda
     FROM valores_cuota_fi v
     WHERE v.fecha = (SELECT fecha FROM fi_ref)
 ),
 fi_aum AS (
-    SELECT run_fondo, SUM(patrimonio_neto) AS aum_clp, MAX(fecha) AS data_date
+    SELECT run_fondo,
+           SUM(CASE WHEN moneda IN ('$$') OR moneda IS NULL THEN patrimonio_neto ELSE 0 END) AS aum_clp,
+           SUM(CASE WHEN moneda = 'PROM' THEN patrimonio_neto ELSE 0 END) AS aum_usd,
+           SUM(CASE WHEN moneda = 'EUR'  THEN patrimonio_neto ELSE 0 END) AS aum_eur,
+           SUM(CASE WHEN moneda NOT IN ('$$', 'PROM', 'EUR', '0') AND moneda IS NOT NULL
+                    THEN patrimonio_neto ELSE 0 END)                       AS aum_other,
+           MAX(fecha) AS data_date
     FROM fi_nav GROUP BY run_fondo
 ),
 fi_series AS (
@@ -138,7 +148,11 @@ fi AS (
            f.administrador AS administrator, COALESCE(f.vigente, false) AS vigente,
            f.rescatable, c.tipo AS category_type, c.grupo AS category_group,
            c.categoria AS category, c.nombre_cat AS category_name,
-           a.aum_clp, a.data_date, r.r_1y, r.r_ytd,
+           NULLIF(a.aum_clp, 0) AS aum_clp,
+           NULLIF(a.aum_usd, 0) AS aum_usd,
+           NULLIF(a.aum_eur, 0) AS aum_eur,
+           NULLIF(a.aum_other, 0) AS aum_other,
+           a.data_date, r.r_1y, r.r_ytd,
            COALESCE(fl.nnm_month_clp, 0) AS nnm_month_clp,
            COALESCE(fl.nnm_ytd_clp, 0) AS nnm_ytd_clp
     FROM fondos_inversion f
@@ -241,7 +255,10 @@ def industry_overview(
 
     summary = _rows(f"""
         {_SNAPSHOT_CTE}
-        SELECT SUM(aum_clp) AS total_aum_clp,
+        SELECT SUM(aum_clp)   AS total_aum_clp,
+               SUM(aum_usd)   AS total_aum_usd,
+               SUM(aum_eur)   AS total_aum_eur,
+               SUM(aum_other) AS total_aum_other,
                COUNT(*) FILTER (WHERE vigente) AS active_funds,
                COUNT(DISTINCT administrator) FILTER (WHERE vigente) AS administrators,
                MAX(data_date) AS latest_data_date,
