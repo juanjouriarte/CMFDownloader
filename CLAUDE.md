@@ -386,6 +386,8 @@ All public endpoints return `Cache-Control: public, max-age=3600` and allow all 
 
 **Shareholder AUM formula**: `pct_propiedad / 100 × fund_aum`. Fund AUM is estimated as the median of `valorizacion_cierre × 100 / pct_activo_fondo` across all `cartera_fi_nac` + `cartera_fi_ext` positions for that fund/quarter.
 
+**Shareholder `tipo_persona` API alias**: CMF source data uses letter codes such as `A/B/C/E/F/G` for entity types. Public shareholder endpoints expose/filter the simplified frontend contract: `J` means any non-natural/entity code, `N` means natural person.
+
 **Numeric TEXT casting**: `cartera_naci` stores all numeric fields as TEXT. The regex `'^-?[0-9]*\.?[0-9]+$'` guards all CAST operations — it handles values with no leading zero (e.g. `.143` stored as-is by CMF). Non-matching values cast to NULL rather than erroring.
 
 #### Internal / authenticated

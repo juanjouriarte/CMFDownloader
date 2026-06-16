@@ -36,6 +36,23 @@ fund_aum AS (
 """
 
 
+def _tipo_persona_filter(column: str, value: str | None) -> tuple[str, dict[str, str]]:
+    """Frontend-facing alias: J means any non-natural CMF entity code."""
+    if not value:
+        return "", {}
+
+    normalized = value.upper()
+    if normalized == "J":
+        return f"AND ({column} IS NULL OR {column} <> 'N')", {}
+    if normalized == "N":
+        return f"AND {column} = :tipo_persona", {"tipo_persona": "N"}
+    return f"AND {column} = :tipo_persona", {"tipo_persona": normalized}
+
+
+def _tipo_persona_public(column: str) -> str:
+    return f"CASE WHEN {column} = 'N' THEN 'N' WHEN {column} IS NULL THEN NULL ELSE 'J' END"
+
+
 # ── Schemas ────────────────────────────────────────────────────────────────────
 
 class ShareholderInFund(BaseModel):
@@ -597,20 +614,19 @@ def top_shareholders(
 
     period_clause = "AND a.periodo = :period" if period else \
         "AND a.periodo = (SELECT MAX(periodo) FROM aportantes_fi)"
-    tipo_clause = "AND a.tipo_persona = :tipo_persona" if tipo_persona else ""
+    tipo_clause, tipo_params = _tipo_persona_filter("a.tipo_persona", tipo_persona)
+    tipo_expr = _tipo_persona_public("a.tipo_persona")
 
-    params: dict = {"limit": limit, "offset": offset}
+    params: dict = {"limit": limit, "offset": offset, **tipo_params}
     if period:
         params["period"] = period
-    if tipo_persona:
-        params["tipo_persona"] = tipo_persona
 
     sql = text(f"""
         WITH {aum_cte}
         SELECT
             a.rut,
             COALESCE(a.nombre_canonical, a.nombre)  AS nombre,
-            a.tipo_persona,
+            {tipo_expr}                              AS tipo_persona,
             COUNT(DISTINCT a.run_fondo)::int         AS funds_count,
             COUNT(DISTINCT f.administrador)::int     AS agfs_count,
             ROUND(SUM(a.pct_propiedad / 100.0 * fa.aum_clp)::numeric, 0) AS total_aum_clp,
@@ -621,7 +637,7 @@ def top_shareholders(
         WHERE a.rut IS NOT NULL
           {period_clause}
           {tipo_clause}
-        GROUP BY a.rut, COALESCE(a.nombre_canonical, a.nombre), a.tipo_persona
+        GROUP BY a.rut, COALESCE(a.nombre_canonical, a.nombre), {tipo_expr}
         ORDER BY total_aum_clp DESC NULLS LAST
         LIMIT :limit OFFSET :offset
     """)
@@ -1030,17 +1046,15 @@ def shareholder_matrix(
     period_expr = ":period" if period else "(SELECT MAX(periodo) FROM aportantes_fi)"
     having_clause = "HAVING SUM(aum_clp) >= :min_aum_clp" if min_aum_clp is not None else ""
     admin_filter = "AND EXISTS (SELECT 1 FROM by_agf bx WHERE bx.rut = t.rut AND bx.administrador ILIKE :admin)" if admin else ""
-    tipo_filter = "AND a.tipo_persona = :tipo_persona" if tipo_persona else ""
+    tipo_filter, tipo_params = _tipo_persona_filter("a.tipo_persona", tipo_persona)
 
-    params: dict = {"limit": limit}
+    params: dict = {"limit": limit, **tipo_params}
     if period:
         params["period"] = period
     if min_aum_clp is not None:
         params["min_aum_clp"] = min_aum_clp
     if admin:
         params["admin"] = f"%{admin}%"
-    if tipo_persona:
-        params["tipo_persona"] = tipo_persona
 
     sql = text(f"""
         WITH {aum_cte},
@@ -1143,12 +1157,10 @@ def shareholder_opportunities(
         extra_filter="AND c.periodo = :period" if period else "AND c.periodo = (SELECT MAX(periodo) FROM aportantes_fi)"
     )
     period_expr = ":period" if period else "(SELECT MAX(periodo) FROM aportantes_fi)"
-    tipo_filter = "AND a.tipo_persona = :tipo_persona" if tipo_persona else ""
-    params: dict = {"min_aum_clp": min_aum_clp, "limit": limit}
+    tipo_filter, tipo_params = _tipo_persona_filter("a.tipo_persona", tipo_persona)
+    params: dict = {"min_aum_clp": min_aum_clp, "limit": limit, **tipo_params}
     if period:
         params["period"] = period
-    if tipo_persona:
-        params["tipo_persona"] = tipo_persona
 
     sql = text(f"""
         WITH {aum_cte},
