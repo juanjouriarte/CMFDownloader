@@ -673,8 +673,12 @@ def investor_profile(
                 WITH {aum_cte}
                 SELECT
                     a.rut,
-                    COALESCE(a.nombre_canonical, a.nombre)  AS nombre,
-                    a.tipo_persona,
+                    MODE() WITHIN GROUP (ORDER BY COALESCE(a.nombre_canonical, a.nombre)) AS nombre,
+                    CASE
+                        WHEN BOOL_OR(a.tipo_persona = 'N') THEN 'N'
+                        WHEN BOOL_OR(a.tipo_persona IS NOT NULL) THEN 'J'
+                        ELSE NULL
+                    END AS tipo_persona,
                     COUNT(DISTINCT a.run_fondo)::int         AS funds_count,
                     COUNT(DISTINCT f.administrador)::int     AS agfs_count,
                     ROUND(SUM(a.pct_propiedad / 100.0 * fa.aum_clp)::numeric, 0) AS total_aum_clp,
@@ -683,7 +687,7 @@ def investor_profile(
                 JOIN fondos_inversion f ON f.run_fondo = a.run_fondo
                 LEFT JOIN fund_aum fa   ON fa.run_fondo = a.run_fondo AND fa.periodo = a.periodo
                 WHERE a.rut = :rut AND a.periodo = {period_expr}
-                GROUP BY a.rut, COALESCE(a.nombre_canonical, a.nombre), a.tipo_persona
+                GROUP BY a.rut
             """),
             params,
         ).mappings().one_or_none()
@@ -819,8 +823,11 @@ def investor_wallet_share(
         total AS (SELECT SUM(aum_clp) AS t FROM by_agf)
         SELECT
             b.administrador,
-            ROUND(b.aum_clp::numeric, 0)                                     AS aum_clp,
-            CASE WHEN t.t > 0 THEN ROUND((b.aum_clp / t.t * 100)::numeric, 2) ELSE 0 END AS pct_of_wallet,
+            ROUND(COALESCE(b.aum_clp, 0)::numeric, 0) AS aum_clp,
+            CASE
+                WHEN t.t > 0 THEN ROUND((COALESCE(b.aum_clp, 0) / t.t * 100)::numeric, 2)
+                ELSE 0
+            END AS pct_of_wallet,
             b.funds_count
         FROM by_agf b
         CROSS JOIN total t
