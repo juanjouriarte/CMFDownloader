@@ -95,15 +95,29 @@ fi_nav AS (
     FROM valores_cuota_fi v
     WHERE v.fecha = (SELECT fecha FROM fi_ref)
 ),
-fi_aum AS (
+fi_fund_moneda AS (
+    -- dominant non-null moneda per fund, ignoring bad '0' value
     SELECT run_fondo,
-           SUM(CASE WHEN moneda IN ('$$') OR moneda IS NULL THEN patrimonio_neto ELSE 0 END) AS aum_clp,
-           SUM(CASE WHEN moneda = 'PROM' THEN patrimonio_neto ELSE 0 END) AS aum_usd,
-           SUM(CASE WHEN moneda = 'EUR'  THEN patrimonio_neto ELSE 0 END) AS aum_eur,
-           SUM(CASE WHEN moneda NOT IN ('$$', 'PROM', 'EUR', '0') AND moneda IS NOT NULL
-                    THEN patrimonio_neto ELSE 0 END)                       AS aum_other,
-           MAX(fecha) AS data_date
-    FROM fi_nav GROUP BY run_fondo
+           MODE() WITHIN GROUP (ORDER BY moneda) AS primary_moneda
+    FROM valores_cuota_fi
+    WHERE moneda IS NOT NULL AND moneda != '0'
+    GROUP BY run_fondo
+),
+fi_aum AS (
+    SELECT n.run_fondo,
+           -- treat each row by fund's primary currency; NULL rows inherit it
+           SUM(CASE WHEN COALESCE(n.moneda, m.primary_moneda, '$$') IN ('$$')
+                    THEN n.patrimonio_neto ELSE 0 END) AS aum_clp,
+           SUM(CASE WHEN COALESCE(n.moneda, m.primary_moneda) = 'PROM'
+                    THEN n.patrimonio_neto ELSE 0 END) AS aum_usd,
+           SUM(CASE WHEN COALESCE(n.moneda, m.primary_moneda) = 'EUR'
+                    THEN n.patrimonio_neto ELSE 0 END) AS aum_eur,
+           SUM(CASE WHEN COALESCE(n.moneda, m.primary_moneda) NOT IN ('$$', 'PROM', 'EUR', '0')
+                    THEN n.patrimonio_neto ELSE 0 END) AS aum_other,
+           MAX(n.fecha) AS data_date
+    FROM fi_nav n
+    LEFT JOIN fi_fund_moneda m ON m.run_fondo = n.run_fondo
+    GROUP BY n.run_fondo
 ),
 fi_series AS (
     SELECT DISTINCT ON (run_fondo) run_fondo, serie
