@@ -435,7 +435,8 @@ def net_new_money_ranking(
     fund_type: 'fm' (mutual funds, daily) or 'fi' (investment funds).
     rescatable: FI only — True=rescatable, False=non-rescatable, None=both shown as separate rows.
     FI method differs by type:
-      - Non-rescatable: (cuotas_emitidas - cuotas_pagadas) × valor_libro from quarterly cuotas_fi.
+      - Non-rescatable: quarter-over-quarter delta of cuotas_pagadas (capital actually called
+        from investors) × valor_libro from quarterly cuotas_fi.
       - Rescatable: implied daily flows — cuotas = patrimonio_neto / valor_libro;
         NNM = (cuotas_end - cuotas_start) × valor_libro_end. Strips performance from AUM change.
     from_date / to_date (YYYY-MM-DD): custom date range — overrides period when provided.
@@ -509,32 +510,54 @@ def _fi_nnm_non_rescatable(
     to_date: str | None,
     params: dict,
 ) -> list[dict]:
-    """FI non-rescatable NNM: (cuotas_emitidas - cuotas_pagadas) × valor_libro from cuotas_fi."""
+    """
+    FI non-rescatable NNM: quarter-over-quarter delta of cuotas_pagadas (capital actually
+    paid in by investors, not just authorized via cuotas_emitidas) × valor_libro.
+    cuotas_pagadas is a cumulative STOCK, so the delta is computed via LAG() over each
+    fund's full history *before* the period filter is applied — otherwise the first quarter
+    inside the window would wrongly show its entire cumulative stock as a one-quarter inflow.
+    """
     if from_date or to_date:
-        conditions = ["cf.valor_libro IS NOT NULL", "cf.valor_libro > 0"]
+        conditions = []
         if from_date:
-            conditions.append("cf.periodo >= :from_date")
+            conditions.append("d.periodo >= :from_date")
             params["from_date"] = from_date
         if to_date:
-            conditions.append("cf.periodo <= :to_date")
+            conditions.append("d.periodo <= :to_date")
             params["to_date"] = to_date
-        period_filter = " AND ".join(conditions)
+        period_filter = " AND ".join(conditions) if conditions else "TRUE"
     else:
-        period_filter = _FI_PERIOD_SQL[period] + " AND cf.valor_libro IS NOT NULL AND cf.valor_libro > 0"
+        period_filter = _FI_PERIOD_SQL[period].replace("cf.periodo", "d.periodo")
+
+    deltas_cte = """
+        WITH history AS (
+            SELECT cf.run_fondo, cf.periodo, cf.valor_libro,
+                   COALESCE(cf.cuotas_pagadas, 0) AS cuotas_pagadas,
+                   LAG(COALESCE(cf.cuotas_pagadas, 0)) OVER (PARTITION BY cf.run_fondo ORDER BY cf.periodo) AS prev_pagadas
+            FROM cuotas_fi cf
+            WHERE cf.valor_libro IS NOT NULL AND cf.valor_libro > 0
+        ),
+        deltas AS (
+            SELECT run_fondo, periodo,
+                   (cuotas_pagadas - COALESCE(prev_pagadas, cuotas_pagadas)) * valor_libro AS capital_called_clp
+            FROM history
+        )
+    """
 
     if group_by == "agf":
         return _rows(f"""
+            {deltas_cte}
             SELECT
                 fi.administrador,
-                false::boolean                                                                           AS rescatable,
-                ROUND(SUM(cf.cuotas_emitidas * cf.valor_libro) / 1e9, 2)                                AS aportes_bn_clp,
-                ROUND(SUM(cf.cuotas_pagadas  * cf.valor_libro) / 1e9, 2)                                AS rescates_bn_clp,
-                ROUND(SUM((cf.cuotas_emitidas - cf.cuotas_pagadas) * cf.valor_libro) / 1e9, 2)          AS net_new_money_bn_clp,
-                COUNT(DISTINCT cf.run_fondo)                                                             AS num_fondos,
-                MIN(cf.periodo)                                                                          AS desde,
-                MAX(cf.periodo)                                                                          AS hasta
-            FROM cuotas_fi cf
-            JOIN fondos_inversion fi ON fi.run_fondo = cf.run_fondo
+                false::boolean                                          AS rescatable,
+                NULL::numeric                                           AS aportes_bn_clp,
+                NULL::numeric                                           AS rescates_bn_clp,
+                ROUND(SUM(d.capital_called_clp) / 1e9, 2)              AS net_new_money_bn_clp,
+                COUNT(DISTINCT d.run_fondo)                             AS num_fondos,
+                MIN(d.periodo)                                          AS desde,
+                MAX(d.periodo)                                          AS hasta
+            FROM deltas d
+            JOIN fondos_inversion fi ON fi.run_fondo = d.run_fondo
             WHERE {period_filter} AND fi.rescatable = false
             GROUP BY fi.administrador
             ORDER BY net_new_money_bn_clp DESC NULLS LAST
@@ -542,20 +565,21 @@ def _fi_nnm_non_rescatable(
         """, params)
     else:
         return _rows(f"""
+            {deltas_cte}
             SELECT
-                cf.run_fondo,
-                fi.razon_social                                                                          AS nombre_fondo,
+                d.run_fondo,
+                fi.razon_social                                         AS nombre_fondo,
                 fi.administrador,
-                false::boolean                                                                           AS rescatable,
-                ROUND(SUM(cf.cuotas_emitidas * cf.valor_libro) / 1e9, 2)                                AS aportes_bn_clp,
-                ROUND(SUM(cf.cuotas_pagadas  * cf.valor_libro) / 1e9, 2)                                AS rescates_bn_clp,
-                ROUND(SUM((cf.cuotas_emitidas - cf.cuotas_pagadas) * cf.valor_libro) / 1e9, 2)          AS net_new_money_bn_clp,
-                MIN(cf.periodo)                                                                          AS desde,
-                MAX(cf.periodo)                                                                          AS hasta
-            FROM cuotas_fi cf
-            JOIN fondos_inversion fi ON fi.run_fondo = cf.run_fondo
+                false::boolean                                          AS rescatable,
+                NULL::numeric                                           AS aportes_bn_clp,
+                NULL::numeric                                           AS rescates_bn_clp,
+                ROUND(SUM(d.capital_called_clp) / 1e9, 2)              AS net_new_money_bn_clp,
+                MIN(d.periodo)                                          AS desde,
+                MAX(d.periodo)                                          AS hasta
+            FROM deltas d
+            JOIN fondos_inversion fi ON fi.run_fondo = d.run_fondo
             WHERE {period_filter} AND fi.rescatable = false
-            GROUP BY cf.run_fondo, fi.razon_social, fi.administrador
+            GROUP BY d.run_fondo, fi.razon_social, fi.administrador
             ORDER BY net_new_money_bn_clp DESC NULLS LAST
             LIMIT :limit
         """, params)

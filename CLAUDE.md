@@ -329,7 +329,7 @@ AUM figures are CLP. FM net new money uses `cartola_diaria` generated columns (`
 
 ### API endpoints
 
-All public endpoints return `Cache-Control: public, max-age=3600` and allow all CORS origins. Pagination via `?limit=50&offset=0` (max limit 500).
+All public endpoints return `Cache-Control: public, max-age=3600` and allow all CORS origins. Pagination via `?limit=50&offset=0` (max limit 1500).
 
 #### Public read API (`src/api/`)
 
@@ -347,12 +347,14 @@ All public endpoints return `Cache-Control: public, max-age=3600` and allow all 
 | `GET /investment-funds/{run}` | FI fund detail: identity + latest NAV per serie (field: `series[]`, `valor_cuota` aliased from `valor_libro`) + rentability + `category` (full object) + `geo_breakdown` (`[{pais, pct_peso}]` from latest quarterly portfolio). No TAC (FI not covered by CMF TAC) |
 | `GET /investment-funds/{run}/nav` | FI NAV history. Fields: `valor_cuota` (aliased from `valor_libro`), `patrimonio_neto` |
 | `GET /investment-funds/{run}/portfolio` | FI portfolio (nac + ext), SII-enriched, sorted by weight. Optional `?period=YYYY-MM-DD`. Fields per position: `tir_val_par_precio`, `fecha_vencimiento`, `cant_unidades`, `tipo_unidades`, `cod_moneda_liquidacion`, `tipo_interes`, `pct_capital_emisor`, `pct_activo_emisor`, `situacion_instrumento`, `clasif_esf`, `cod_pais` |
+| `GET /investment-funds/{run}/portfolio/history` | All FI quarterly portfolio positions across every period. Flat list with `periodo` field per row. Paginated. |
+| `GET /investment-funds/{run}/equity-activity` | Quarterly equity activity history (capital calls, new authorizations, pending promesas) for a fund — primarily meaningful for non-rescatable FI funds. `cuotas_emitidas`/`cuotas_pagadas` are cumulative stocks from `cuotas_fi`; deltas computed via `LAG()` per quarter. Fields: `delta_emitidas`, `delta_pagadas`, `capital_called_clp` (delta_pagadas × valor_libro), `new_auth_clp`, `pending_formal_clp` (cuotas_suscritas_no_pagadas × valor_libro), `pending_promise_clp` (num_cuotas_promesa × valor_libro), `num_contratos_promesa`, `num_promitentes`. Ordered chronologically ascending for charting. Same methodology as the `fi_equity_activity` MCP tool |
 | `GET /investment-funds/{run}/return-series` | FI cumulative total-return time series for charting (rescatable funds only — non-rescatable funds have quarterly NAV at best). Same params and response shape as the FM endpoint (`serie`, `from_date`, `to_date`). Accounts for dividends via the `dividendos` table matched by currency — same methodology as `r_1m`/`r_1y` in the rentability endpoint. |
 | `GET /rentability/fm` | FM return rankings. Sort: `r_1d/r_1w/r_1m/r_1y/r_5y/r_ytd`. Filters: `admin`, `categoria`, `tipo` |
 | `GET /rentability/fi` | FI return rankings. Same sort options. Filters: `admin`, `categoria`, `tipo` |
 | `GET /categories/fi` | FI fund classifications. Filters: `categoria`, `tipo`, `admin` |
 | `GET /categories/fm` | FM fund classifications. Filters: `categoria`, `tipo`, `admin` |
-| `GET /categories/catalog` | Hierarchical FM/FI category catalog with fund counts |
+| `GET /categories/catalog` | Hierarchical category catalog with fund counts. Optional `?fund_type=fm\|fi` returns just that side's tree; omitted returns `{fm: [...], fi: [...]}` combined |
 | `GET /industry/overview` | Market snapshot: total AUM, active funds, admins, flows. Filters: `fund_type`, `categoria`, `tipo`. Returns `aportes_month_clp`, `rescates_month_clp`, `neto_month_clp` (FM gross flows) + `top_administrators` (with `nnm_ytd_clp`) + `category_aum_breakdown` (with `nnm_ytd_clp`) |
 | `GET /industry/funds` | Unified FM/FI screener with classification, AUM, returns, and flows. Filters: `fund_type`, `type`, `group`, `category`, `admin`, `rescatable`, `vigente` |
 | `GET /industry/evolution` | Monthly AUM history grouped by market/admin/category. Filters: `fund_type`, `categoria`, `tipo`, `from_date`, `to_date`. Returns `aportes_clp`, `rescates_clp`, `nnm_clp` per month point (FM only; FI flows are null) |
@@ -403,7 +405,7 @@ All public endpoints return `Cache-Control: public, max-age=3600` and allow all 
 | `bonos_nemotecnicos` | 1,254 | Bonds with fiscal interest rate |
 | `tac` | 230K+ | Monthly TAC costs 2020–2026 |
 | `financial_statements` | 2M+ | IFRS statements (quarterly) for all CMF companies 2009–2026 |
-| `fondos_inversion` | 1,641 | FI registry: run_fondo, administrador, rescatable, vigente, has_data |
+| `fondos_inversion` | 1,641 | FI registry: run_fondo, administrador, rescatable, vigente, has_data, moneda (dominant currency, synced from valores_cuota_fi on each load — avoids scanning 2.9M rows in overview queries) |
 | `nemotecnicos_fi` | 2,370 | FI cuota tickers |
 | `valores_cuota_fi` | 2.9M+ | FI daily NAV/AUM 2020–2026, 531 MB. `flujo_neto` = daily implied net flow in CLP: `(cuotas_t − cuotas_{t-1}) × valor_libro_t` where `cuotas = patrimonio_neto / valor_libro`. Covering index `(fecha, run_fondo, flujo_neto)` |
 | `aportantes_fi` | 176K+ | FI quarterly top-12 shareholders with ownership % (periodo = quarter-end) |

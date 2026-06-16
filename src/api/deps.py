@@ -6,7 +6,7 @@ from fastapi import Depends, Query, Response
 
 
 def _pagination(
-    limit: int = Query(50, ge=1, le=500),
+    limit: int = Query(50, ge=1, le=1500),
     offset: int = Query(0, ge=0),
 ) -> tuple[int, int]:
     return limit, offset

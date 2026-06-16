@@ -64,6 +64,34 @@ class FIPortfolioPosition(BaseModel):
     nombre_fondo_emisor: str | None
 
 
+class FIPortfolioHistoryPosition(FIPortfolioPosition):
+    periodo: date
+
+
+class EquityActivityPoint(BaseModel):
+    periodo: date
+    cuotas_emitidas: int
+    delta_emitidas: int
+    cuotas_pagadas: int
+    delta_pagadas: int
+    cuotas_suscritas_no_pagadas: int
+    num_cuotas_promesa: int
+    num_contratos_promesa: int | None
+    num_promitentes: int | None
+    valor_libro: float | None
+    capital_called_clp: float | None
+    new_auth_clp: float | None
+    pending_formal_clp: float | None
+    pending_promise_clp: float | None
+
+
+class FlowPointFI(BaseModel):
+    fecha: date
+    aportes: float | None
+    rescates: float | None
+    nnm: float | None
+
+
 class NavFI(BaseModel):
     serie: str | None
     moneda: str | None
@@ -362,6 +390,217 @@ def get_investment_fund_portfolio(
         ).mappings().all()
 
     return [FIPortfolioPosition(**dict(r)) for r in naci] + [FIPortfolioPosition(**dict(r)) for r in extr]
+
+
+@router.get("/{run}/portfolio/history", response_model=list[FIPortfolioHistoryPosition])
+def get_investment_fund_portfolio_history(
+    run: str,
+    pagination: Pagination,
+    _: CacheHook,
+) -> list[FIPortfolioHistoryPosition]:
+    """All quarterly portfolio positions for a fund across every available period.
+
+    Returns a flat list ordered by periodo DESC. Each item includes the periodo field
+    so the frontend can group by quarter. Paginate with ?limit= / ?offset=.
+    """
+    limit, offset = pagination
+    with SessionLocal() as session:
+        naci = session.execute(
+            text("""
+                SELECT c.periodo, 'naci' AS source, c.nemotecnico, c.rut_emisor,
+                       COALESCE(e.razon_social, fm.nombre_fondo, fi2.razon_social) AS nombre_emisor,
+                       c.tipo_instrumento, rc_inst.name AS nombre_instrumento,
+                       c.pct_activo_fondo, c.valorizacion_cierre, c.clasif_riesgo,
+                       c.tir_val_par_precio, c.fecha_vencimiento, c.cant_unidades,
+                       c.tipo_unidades, c.cod_moneda_liquidacion, rc_mon.name AS nombre_moneda,
+                       c.tipo_interes, c.pct_capital_emisor, c.pct_activo_emisor,
+                       c.situacion_instrumento, c.clasif_esf,
+                       c.cod_pais, rc_pais.name AS nombre_pais,
+                       COALESCE(fm.nombre_fondo, fi2.razon_social) AS nombre_fondo_emisor
+                FROM cartera_fi_nac c
+                LEFT JOIN emisores e ON e.rut = c.rut_emisor
+                LEFT JOIN nemotecnicos n ON n.nemotecnico = c.nemotecnico
+                LEFT JOIN fondo_mutuo fm ON fm.run_fondo = n.run_fondo
+                LEFT JOIN nemotecnicos_fi nfi ON nfi.nemotecnico = c.nemotecnico
+                LEFT JOIN fondos_inversion fi2 ON fi2.run_fondo = nfi.run_fondo
+                LEFT JOIN ref_codes rc_inst ON rc_inst.domain = 'instrument' AND rc_inst.code = c.tipo_instrumento
+                LEFT JOIN ref_codes rc_mon  ON rc_mon.domain  = 'currency'   AND rc_mon.code  = c.cod_moneda_liquidacion
+                LEFT JOIN ref_codes rc_pais ON rc_pais.domain = 'country'    AND rc_pais.code = c.cod_pais
+                WHERE c.run_fondo = :run
+                ORDER BY c.periodo DESC, c.pct_activo_fondo DESC NULLS LAST
+                LIMIT :limit OFFSET :offset
+            """),
+            {"run": run, "limit": limit, "offset": offset},
+        ).mappings().all()
+
+        extr = session.execute(
+            text("""
+                SELECT c.periodo, 'extr' AS source, c.nemo_isin AS nemotecnico, NULL AS rut_emisor,
+                       COALESCE(c.nombre_emisor, fm.nombre_fondo, fi2.razon_social) AS nombre_emisor,
+                       c.tipo_instrumento, rc_inst.name AS nombre_instrumento,
+                       c.pct_activo_fondo, c.valorizacion_cierre, c.clasif_riesgo,
+                       c.tir_val_par_precio, c.fecha_vencimiento, c.cant_unidades,
+                       c.tipo_unidades, c.cod_moneda_liquidacion, rc_mon.name AS nombre_moneda,
+                       c.tipo_interes, c.pct_capital_emisor, c.pct_activo_emisor,
+                       c.situacion_instrumento, c.clasif_esf,
+                       c.cod_pais, rc_pais.name AS nombre_pais,
+                       COALESCE(fm.nombre_fondo, fi2.razon_social) AS nombre_fondo_emisor
+                FROM cartera_fi_ext c
+                LEFT JOIN nemotecnicos n ON n.nemotecnico = c.nemo_isin
+                LEFT JOIN fondo_mutuo fm ON fm.run_fondo = n.run_fondo
+                LEFT JOIN nemotecnicos_fi nfi ON nfi.nemotecnico = c.nemo_isin
+                LEFT JOIN fondos_inversion fi2 ON fi2.run_fondo = nfi.run_fondo
+                LEFT JOIN ref_codes rc_inst ON rc_inst.domain = 'instrument' AND rc_inst.code = c.tipo_instrumento
+                LEFT JOIN ref_codes rc_mon  ON rc_mon.domain  = 'currency'   AND rc_mon.code  = c.cod_moneda_liquidacion
+                LEFT JOIN ref_codes rc_pais ON rc_pais.domain = 'country'    AND rc_pais.code = c.cod_pais
+                WHERE c.run_fondo = :run
+                ORDER BY c.periodo DESC, c.pct_activo_fondo DESC NULLS LAST
+                LIMIT :limit OFFSET :offset
+            """),
+            {"run": run, "limit": limit, "offset": offset},
+        ).mappings().all()
+
+    return [FIPortfolioHistoryPosition(**dict(r)) for r in naci] + [
+        FIPortfolioHistoryPosition(**dict(r)) for r in extr
+    ]
+
+
+@router.get("/{run}/equity-activity", response_model=list[EquityActivityPoint])
+def get_investment_fund_equity_activity(
+    run: str,
+    _: CacheHook,
+) -> list[EquityActivityPoint]:
+    """Quarterly equity activity history for a fund (cuotas_fi).
+
+    Primarily meaningful for non-rescatable (private equity style) FI funds, which call
+    capital over time rather than accepting/redeeming daily. cuotas_emitidas and
+    cuotas_pagadas are cumulative STOCKS — this computes quarter-over-quarter deltas via
+    LAG() to show actual activity per period:
+
+      capital_called_clp   = delta_pagadas × valor_libro (+ called in, - returned)
+      new_auth_clp         = delta_emitidas × valor_libro (authorization increase)
+      pending_formal_clp   = cuotas_suscritas_no_pagadas × valor_libro (subscribed, uncalled)
+      pending_promise_clp  = num_cuotas_promesa × valor_libro (promise-stage commitments)
+
+    Ordered chronologically (oldest first) for charting. First period's deltas are 0
+    (no prior quarter to compare against).
+    """
+    sql = text("""
+        WITH history AS (
+            SELECT
+                cf.periodo,
+                COALESCE(cf.cuotas_emitidas, 0)             AS cuotas_emitidas,
+                COALESCE(cf.cuotas_pagadas, 0)               AS cuotas_pagadas,
+                COALESCE(cf.cuotas_suscritas_no_pagadas, 0)  AS cuotas_suscritas_no_pagadas,
+                COALESCE(cf.num_cuotas_promesa, 0)           AS num_cuotas_promesa,
+                cf.num_contratos_promesa,
+                cf.num_promitentes,
+                cf.valor_libro,
+                LAG(COALESCE(cf.cuotas_emitidas, 0)) OVER (ORDER BY cf.periodo) AS prev_emitidas,
+                LAG(COALESCE(cf.cuotas_pagadas, 0))  OVER (ORDER BY cf.periodo) AS prev_pagadas
+            FROM cuotas_fi cf
+            WHERE cf.run_fondo = :run
+              AND cf.valor_libro IS NOT NULL AND cf.valor_libro > 0
+        )
+        SELECT
+            periodo,
+            cuotas_emitidas,
+            cuotas_emitidas - COALESCE(prev_emitidas, cuotas_emitidas) AS delta_emitidas,
+            cuotas_pagadas,
+            cuotas_pagadas - COALESCE(prev_pagadas, cuotas_pagadas)    AS delta_pagadas,
+            cuotas_suscritas_no_pagadas,
+            num_cuotas_promesa, num_contratos_promesa, num_promitentes,
+            valor_libro,
+            (cuotas_pagadas - COALESCE(prev_pagadas, cuotas_pagadas)) * valor_libro  AS capital_called_clp,
+            (cuotas_emitidas - COALESCE(prev_emitidas, cuotas_emitidas)) * valor_libro AS new_auth_clp,
+            cuotas_suscritas_no_pagadas * valor_libro AS pending_formal_clp,
+            num_cuotas_promesa * valor_libro          AS pending_promise_clp
+        FROM history
+        ORDER BY periodo
+    """)
+    with SessionLocal() as session:
+        rows = session.execute(sql, {"run": run}).mappings().all()
+    return [EquityActivityPoint(**dict(r)) for r in rows]
+
+
+@router.get("/{run}/flows", response_model=list[FlowPointFI])
+def get_investment_fund_flows(
+    run: str,
+    _: CacheHook,
+    from_date: date | None = Query(None),
+    to_date: date | None = Query(None),
+) -> list[FlowPointFI]:
+    """Net new money history for an investment fund.
+
+    Rescatable funds: daily implied net flow (valores_cuota_fi.flujo_neto), aggregated
+    monthly. Non-rescatable funds: quarterly net capital called — quarter-over-quarter delta
+    of cuotas_pagadas (capital actually paid in, not just authorized via cuotas_emitidas) ×
+    valor_libro, same methodology as capital_called_clp in /equity-activity. Gross
+    aportes/rescates aren't separable from this data for FI, so only nnm is populated.
+    """
+    with SessionLocal() as session:
+        rescatable = session.execute(
+            text("SELECT rescatable FROM fondos_inversion WHERE run_fondo = :run"),
+            {"run": run},
+        ).scalar_one_or_none()
+
+        if rescatable is None:
+            raise HTTPException(404, "Investment fund not found")
+
+        if rescatable:
+            conditions = ["run_fondo = :run", "flujo_neto IS NOT NULL"]
+            params: dict = {"run": run}
+            if from_date:
+                conditions.append("fecha >= :from_date")
+                params["from_date"] = from_date
+            if to_date:
+                conditions.append("fecha <= :to_date")
+                params["to_date"] = to_date
+            where = "WHERE " + " AND ".join(conditions)
+            rows = session.execute(
+                text(f"""
+                    SELECT DATE_TRUNC('month', fecha)::date AS fecha,
+                           NULL::numeric AS aportes,
+                           NULL::numeric AS rescates,
+                           SUM(flujo_neto) AS nnm
+                    FROM valores_cuota_fi
+                    {where}
+                    GROUP BY DATE_TRUNC('month', fecha)
+                    ORDER BY fecha DESC
+                """),
+                params,
+            ).mappings().all()
+        else:
+            extra = []
+            params = {"run": run}
+            if from_date:
+                extra.append("AND periodo >= :from_date")
+                params["from_date"] = from_date
+            if to_date:
+                extra.append("AND periodo <= :to_date")
+                params["to_date"] = to_date
+            rows = session.execute(
+                text(f"""
+                    WITH history AS (
+                        SELECT cf.periodo, cf.valor_libro,
+                               COALESCE(cf.cuotas_pagadas, 0) AS cuotas_pagadas,
+                               LAG(COALESCE(cf.cuotas_pagadas, 0)) OVER (ORDER BY cf.periodo) AS prev_pagadas
+                        FROM cuotas_fi cf
+                        WHERE cf.run_fondo = :run
+                          AND cf.valor_libro IS NOT NULL AND cf.valor_libro > 0
+                    )
+                    SELECT periodo AS fecha,
+                           NULL::numeric AS aportes,
+                           NULL::numeric AS rescates,
+                           (cuotas_pagadas - COALESCE(prev_pagadas, cuotas_pagadas)) * valor_libro AS nnm
+                    FROM history
+                    WHERE 1=1 {" ".join(extra)}
+                    ORDER BY fecha DESC
+                """),
+                params,
+            ).mappings().all()
+
+    return [FlowPointFI(**dict(r)) for r in rows]
 
 
 @router.get("/{run}/return-series", response_model=list[ReturnPointFI])

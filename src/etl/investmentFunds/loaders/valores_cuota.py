@@ -119,6 +119,21 @@ def load_valores_cuota(records: list[dict]) -> int:
             "from_date": min_fecha,
             "lookback":  min_fecha - timedelta(days=3),
         })
+
+        # Keep fondos_inversion.moneda in sync with the dominant non-null moneda
+        # seen in this fund's NAV rows (avoids expensive scan in overview queries).
+        session.execute(text("""
+            UPDATE fondos_inversion fi
+            SET moneda = (
+                SELECT MODE() WITHIN GROUP (ORDER BY v.moneda)
+                FROM valores_cuota_fi v
+                WHERE v.run_fondo = :run_fondo
+                  AND v.moneda IS NOT NULL
+                  AND v.moneda != '0'
+            )
+            WHERE fi.run_fondo = :run_fondo
+        """), {"run_fondo": run_fondo})
+
         session.commit()
 
     return len(records)
