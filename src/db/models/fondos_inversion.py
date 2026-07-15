@@ -20,6 +20,7 @@ class FondoInversion(Base):
     rescatable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     vigente: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     has_data: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    moneda: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
 
 class NemotecnicoFI(Base):

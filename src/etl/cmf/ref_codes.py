@@ -25,19 +25,24 @@ def _scrape(domain: str, url: str, now: datetime) -> list[dict]:
     resp = requests.get(url, headers=_HEADERS, timeout=30)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
-    table = soup.find("table")
-    if not table:
+    tables = soup.find_all("table")
+    if not tables:
         raise ValueError(f"Table not found on CMF page: {url}")
 
     records: list[dict] = []
-    for row in table.find_all("tr"):
-        cells = [c.get_text(strip=True) for c in row.find_all(["th", "td"])]
-        if len(cells) != 2:
-            continue  # section headers (1 cell) or malformed rows
-        name, code = cells
-        if not code or code.lower() in ("código", "codigo", "code"):
-            continue  # column header row
-        records.append({"domain": domain, "code": code, "name": name, "updated_at": now})
+    seen: set[str] = set()
+    for table in tables:
+        for row in table.find_all("tr"):
+            cells = [c.get_text(strip=True) for c in row.find_all(["th", "td"])]
+            if len(cells) != 2:
+                continue  # section headers (1 cell) or malformed rows
+            name, code = cells
+            if not code or code.lower() in ("código", "codigo", "code"):
+                continue  # column header row
+            if code in seen:
+                continue  # deduplicate codes that appear in multiple tables
+            seen.add(code)
+            records.append({"domain": domain, "code": code, "name": name, "updated_at": now})
 
     if not records:
         raise ValueError(f"No records parsed for domain '{domain}' from {url}")

@@ -142,12 +142,7 @@ def categories_fm(
     return [CategoriaFMItem(**dict(r)) for r in rows]
 
 
-@router.get("/catalog")
-def categories_catalog(
-    _: CacheHook,
-    fund_type: Literal["fm", "fi"] = Query(...),
-) -> list[dict]:
-    table = "categoria_fm" if fund_type == "fm" else "categoria_fi"
+def _catalog_for(table: str) -> list[dict]:
     sql = text(f"""
         WITH latest AS (
             SELECT DISTINCT ON (run_fondo)
@@ -163,5 +158,19 @@ def categories_catalog(
     """)
     with SessionLocal() as session:
         rows = session.execute(sql).mappings().all()
-
     return _build_catalog(rows)
+
+
+@router.get("/catalog")
+def categories_catalog(
+    _: CacheHook,
+    fund_type: Literal["fm", "fi"] | None = Query(None),
+) -> dict | list[dict]:
+    if fund_type == "fm":
+        return _catalog_for("categoria_fm")
+    if fund_type == "fi":
+        return _catalog_for("categoria_fi")
+    return {
+        "fm": _catalog_for("categoria_fm"),
+        "fi": _catalog_for("categoria_fi"),
+    }

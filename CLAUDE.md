@@ -103,8 +103,9 @@ src/
 │   ├── rentability.py        # /rentability/fm + /rentability/fi — rankings from MVs
 │   ├── categories.py         # /categories/fm + /fi + /catalog
 │   ├── industry.py           # Unified overview, screener, and AUM evolution
-│   ├── shareholders.py       # /shareholders — fund/entity/admin/compare endpoints
+│   ├── shareholders.py       # /shareholders — fund/entity/admin/compare + intelligence endpoints
 │   ├── admins.py             # /admins — administradora list + detail (from mv_administradores)
+│   ├── emisores.py           # /emisores — company market exposure, positions, history, concentration
 │   ├── ref_codes.py          # /ref-codes — ref_codes table (countries, currencies, instruments)
 │   └── router.py             # Assembles all sub-routers
 ├── mcp_server.py             # FastMCP server — 15 tools for fund-market intelligence (see MCP section)
@@ -328,7 +329,7 @@ AUM figures are CLP. FM net new money uses `cartola_diaria` generated columns (`
 
 ### API endpoints
 
-All public endpoints return `Cache-Control: public, max-age=3600` and allow all CORS origins. Pagination via `?limit=50&offset=0` (max limit 500).
+All public endpoints return `Cache-Control: public, max-age=3600` and allow all CORS origins. Pagination via `?limit=50&offset=0` (max limit 1500).
 
 #### Public read API (`src/api/`)
 
@@ -337,20 +338,23 @@ All public endpoints return `Cache-Control: public, max-age=3600` and allow all 
 | `GET /mutual-funds` | List FM funds. Filters: `admin`, `tipo_fondo`, `vigente`, `categoria`, `tipo`. Each item includes `categoria`, `tipo`, `nombre_cat` from `categoria_fm` |
 | `GET /mutual-funds/{run}` | FM fund detail: identity + latest NAV per serie (field: `series[]`) + rentability + `category` (full object: `categoria`, `tipo`, `grupo`, `nombre_cat`, `confianza`, `periodo`) + `geo_breakdown` (`[{pais, pct_peso}]` from latest portfolio) + `latest_tac` (`tac_total`, `tac_rem_fija`, `tac_rem_var`, `tac_gastos_op`, `periodo`) |
 | `GET /mutual-funds/{run}/nav` | FM NAV history for charts. Filters: `serie`, `from_date`, `to_date`. Field: `valor_cuota` |
-| `GET /mutual-funds/{run}/tac` | FM TAC history — last 24 months descending (`periodo`, `tac_total`, `tac_rem_fija`, `tac_rem_var`, `tac_gastos_op`) |
+| `GET /mutual-funds/{run}/tac` | FM TAC history — last 24 months descending (`periodo`, `serie`, `tac_total`, `tac_rem_fija`, `tac_rem_var`, `tac_gastos_op`). Secondary sort by `serie`. |
 | `GET /mutual-funds/{run}/flows` | Monthly aportes/rescates/nnm aggregated across all series. Filters: `serie`, `from_date`, `to_date`. Fields: `aportes`, `rescates`, `nnm` |
-| `GET /mutual-funds/{run}/portfolio` | FM portfolio (naci + extr), SII-enriched. Optional `?period=YYYY-MM-DD` (defaults to latest). Fields per position: `tir`, `fecha_vencimiento`, `cantidad_unidades`, `tipo_unidades`, `moneda_liquidacion`, `porcentaje_valor_par`, `tipo_interes`, `codigo_pais_emisor`, `situacion_instrumento`, `porcentaje_capital_emisor`, `porcentaje_activos_emisor`, `codigo_grupo_empresarial` |
-| `GET /mutual-funds/{run}/return-series` | FM cumulative total-return time series for charting. Params: `serie` (optional — defaults to serie with highest recent `patrimonio_neto`), `from_date` (optional — defaults to today − 1 year; pass further back for longer periods, e.g. today − 1825 for 5Y; data available from 2020). Response: `[{ fecha, return_pct }]` where `return_pct` is cumulative % from `from_date` (first point always `0.0`). Accounts for distributions via `factor_reparto` — same methodology as `r_1m`/`r_1y` in the rentability endpoint. Returns `[]` if no data for the range. |
+| `GET /mutual-funds/{run}/portfolio` | FM portfolio (naci + extr), SII-enriched. Optional `?period=YYYY-MM-DD` (any date in the month resolves to first-of-month). Fields per position: `tir`, `fecha_vencimiento`, `cantidad_unidades`, `tipo_unidades`, `moneda_liquidacion`, `porcentaje_valor_par`, `tipo_interes`, `codigo_pais_emisor`, `situacion_instrumento`, `porcentaje_capital_emisor`, `porcentaje_activos_emisor`, `codigo_grupo_empresarial` |
+| `GET /mutual-funds/{run}/portfolio/history` | All FM monthly portfolio positions across every period. Flat list with `periodo` field per row. Paginated. |
+| `GET /mutual-funds/{run}/return-series` | FM cumulative total-return time series for charting. Params: `serie` (optional — defaults to serie with highest recent `patrimonio_neto`), `from_date` (optional — defaults to today − 1 year; pass further back for longer periods, e.g. today − 1825 for 5Y; data available from 2020), `to_date` (optional — for exact point-in-time alignment with rentability endpoint). Response: `[{ fecha, return_pct }]` where `return_pct` is cumulative % from `from_date` (first point always `0.0`). Accounts for distributions via `factor_reparto`. Returns `[]` if no data for the range. |
 | `GET /investment-funds` | List FI funds. Filters: `admin`, `rescatable`, `vigente`, `categoria`, `tipo`. Each item includes `categoria`, `tipo`, `nombre_cat` from `categoria_fi` |
 | `GET /investment-funds/{run}` | FI fund detail: identity + latest NAV per serie (field: `series[]`, `valor_cuota` aliased from `valor_libro`) + rentability + `category` (full object) + `geo_breakdown` (`[{pais, pct_peso}]` from latest quarterly portfolio). No TAC (FI not covered by CMF TAC) |
 | `GET /investment-funds/{run}/nav` | FI NAV history. Fields: `valor_cuota` (aliased from `valor_libro`), `patrimonio_neto` |
 | `GET /investment-funds/{run}/portfolio` | FI portfolio (nac + ext), SII-enriched, sorted by weight. Optional `?period=YYYY-MM-DD`. Fields per position: `tir_val_par_precio`, `fecha_vencimiento`, `cant_unidades`, `tipo_unidades`, `cod_moneda_liquidacion`, `tipo_interes`, `pct_capital_emisor`, `pct_activo_emisor`, `situacion_instrumento`, `clasif_esf`, `cod_pais` |
-| `GET /investment-funds/{run}/return-series` | FI cumulative total-return time series for charting (rescatable funds only — non-rescatable funds have quarterly NAV at best). Same params and response shape as the FM endpoint. Accounts for dividends via the `dividendos` table matched by currency — same methodology as `r_1m`/`r_1y` in the rentability endpoint. |
+| `GET /investment-funds/{run}/portfolio/history` | All FI quarterly portfolio positions across every period. Flat list with `periodo` field per row. Paginated. |
+| `GET /investment-funds/{run}/equity-activity` | Quarterly equity activity history (capital calls, new authorizations, pending promesas) for a fund — primarily meaningful for non-rescatable FI funds. `cuotas_emitidas`/`cuotas_pagadas` are cumulative stocks from `cuotas_fi`; deltas computed via `LAG()` per quarter. Fields: `delta_emitidas`, `delta_pagadas`, `capital_called_clp` (delta_pagadas × valor_libro), `new_auth_clp`, `pending_formal_clp` (cuotas_suscritas_no_pagadas × valor_libro), `pending_promise_clp` (num_cuotas_promesa × valor_libro), `num_contratos_promesa`, `num_promitentes`. Ordered chronologically ascending for charting. Same methodology as the `fi_equity_activity` MCP tool |
+| `GET /investment-funds/{run}/return-series` | FI cumulative total-return time series for charting (rescatable funds only — non-rescatable funds have quarterly NAV at best). Same params and response shape as the FM endpoint (`serie`, `from_date`, `to_date`). Accounts for dividends via the `dividendos` table matched by currency — same methodology as `r_1m`/`r_1y` in the rentability endpoint. |
 | `GET /rentability/fm` | FM return rankings. Sort: `r_1d/r_1w/r_1m/r_1y/r_5y/r_ytd`. Filters: `admin`, `categoria`, `tipo` |
 | `GET /rentability/fi` | FI return rankings. Same sort options. Filters: `admin`, `categoria`, `tipo` |
 | `GET /categories/fi` | FI fund classifications. Filters: `categoria`, `tipo`, `admin` |
 | `GET /categories/fm` | FM fund classifications. Filters: `categoria`, `tipo`, `admin` |
-| `GET /categories/catalog` | Hierarchical FM/FI category catalog with fund counts |
+| `GET /categories/catalog` | Hierarchical category catalog with fund counts. Optional `?fund_type=fm\|fi` returns just that side's tree; omitted returns `{fm: [...], fi: [...]}` combined |
 | `GET /industry/overview` | Market snapshot: total AUM, active funds, admins, flows. Filters: `fund_type`, `categoria`, `tipo`. Returns `aportes_month_clp`, `rescates_month_clp`, `neto_month_clp` (FM gross flows) + `top_administrators` (with `nnm_ytd_clp`) + `category_aum_breakdown` (with `nnm_ytd_clp`) |
 | `GET /industry/funds` | Unified FM/FI screener with classification, AUM, returns, and flows. Filters: `fund_type`, `type`, `group`, `category`, `admin`, `rescatable`, `vigente` |
 | `GET /industry/evolution` | Monthly AUM history grouped by market/admin/category. Filters: `fund_type`, `categoria`, `tipo`, `from_date`, `to_date`. Returns `aportes_clp`, `rescates_clp`, `nnm_clp` per month point (FM only; FI flows are null) |
@@ -361,8 +365,30 @@ All public endpoints return `Cache-Control: public, max-age=3600` and allow all 
 | `GET /shareholders/entity/{rut}` | All fund positions held by a shareholder across time |
 | `GET /shareholders/admin` | Top shareholders aggregated across an admin's funds. Required: `admin` |
 | `GET /shareholders/compare` | Side-by-side admin comparison: shared holders, exclusives, merge summary. Required: `admin_a`, `admin_b` |
+| `GET /shareholders/top` | Largest institutional investors in Chile by total FI AUM across all funds. Filters: `tipo_persona` (J/N), `period` |
+| `GET /shareholders/entity/{rut}/profile` | Full investor dossier: total AUM, fund count, AGF count, AGF wallet breakdown (`agf_breakdown[]`), top 10 holdings (`top_holdings[]`). Optional `?period=` |
+| `GET /shareholders/entity/{rut}/evolution` | Quarter-by-quarter AUM + fund count + AGF count timeline since 2020. Optional `?from_date=`. Powers "is this investor growing or leaving?" chart |
+| `GET /shareholders/entity/{rut}/wallet-share` | How an investor distributes capital across AGFs — each with `aum_clp`, `pct_of_wallet`, `funds_count`. Competitive intelligence view |
+| `GET /shareholders/fund/{run}/concentration` | Ownership concentration per quarter: top-1/3/5/10 (% and CLP) + Herfindahl index. Label: `captive` (HHI>5000 or top-1>50%), `concentrated` (HHI>2500 or top-1>30%), `moderate`, `diversified` |
+| `GET /shareholders/admin/retention` | Quarter-over-quarter AUM delta per investor for an admin's funds. Status per investor: `new`, `growing` (+>5%), `stable` (±5%), `shrinking` (>-5%), `exiting`. Sorted by risk (exiting first). Required: `admin`. Optional: `current_period`, `prev_period` |
+| `GET /shareholders/matrix` | AGF × aportante wallet-share matrix for the FI market. Filters: `period`, `min_aum_clp`, `admin`, `tipo_persona`, `limit`. Includes BTG wallet share per investor plus nested AGF rows |
+| `GET /shareholders/opportunities` | BTG opportunity ranking: large investors where BTG has 0–5% wallet share. Filters: `period`, `tipo_persona`, `min_aum_clp`, `limit`. Includes main AGF, opportunity AUM, score, and reason |
+| `GET /shareholders/flows` | Market-wide quarterly movement by aportante. Filters: `admin`, `period`, `status`, `min_abs_delta_clp`, pagination. Status: `new`, `growing`, `stable`, `shrinking`, `exiting` |
+| `GET /shareholders/fund-concentration/ranking` | Funds ranked by shareholder concentration risk for the latest or selected quarter. Filters: `period`, `admin`, pagination. Includes top-1/3/5/10, HHI, label, and largest holder |
+| `GET /shareholders/merge-simulation` | Advanced AGF merger simulator. Required: `admin_a`, `admin_b`. Optional: `period`. Returns overlap AUM, HHI before/after, top-10 concentration, cross-sell targets, high-risk overlap, and exclusive/shared segments |
+| `GET /emisores` | Companies ranked by total FM+FI CLP exposure. Filters: `search` (name or RUT), `fund_type`, `tipo_instrumento`. Returns exposure split FM/FI, fund count, AGF count per company |
+| `GET /emisores/{rut}` | Full company profile: identity + aggregate FM/FI exposure + `instrument_breakdown[]` (CLP + % per instrument type with human-readable names) + `top_funds[]` (top 10 funds holding it) |
+| `GET /emisores/{rut}/funds` | Every fund currently holding this company (latest period), sorted by CLP. Filters: `fund_type`, `tipo_instrumento`. Paginated |
+| `GET /emisores/{rut}/positions` | Every **raw individual position row** for this company across all funds — not aggregated. Full field set per instrument type: bonds get `tir`, `fecha_vencimiento`, `tipo_interes`, `porcentaje_valor_par`; equities get `cantidad_unidades`, `porcentaje_capital_emisor`. Filters: `fund_type`, `tipo_instrumento`, `period` |
+| `GET /emisores/{rut}/history` | Monthly (FM) + quarterly (FI) time series of total market exposure. Filters: `fund_type`, `tipo_instrumento` (drill-down by instrument type), `from_date`. Powers exposure timeline chart |
+| `GET /emisores/{rut}/funds/{run_fondo}/history` | Time series of how much a **specific fund** has held a **specific company** — one row per period × instrument type. Filters: `fund_type`, `from_date` |
+| `GET /emisores/{rut}/concentration` | Herfindahl index of company exposure across AGFs. Label: `diversified` (<1500), `moderate` (1500-2500), `concentrated` (>2500). Returns `agfs[]` with `pct_of_total` |
 
 **Shareholder AUM formula**: `pct_propiedad / 100 × fund_aum`. Fund AUM is estimated as the median of `valorizacion_cierre × 100 / pct_activo_fondo` across all `cartera_fi_nac` + `cartera_fi_ext` positions for that fund/quarter.
+
+**Shareholder `tipo_persona` API alias**: CMF source data uses letter codes such as `A/B/C/E/F/G` for entity types. Public shareholder endpoints expose/filter the simplified frontend contract: `J` means any non-natural/entity code, `N` means natural person.
+
+**Numeric TEXT casting**: `cartera_naci` stores all numeric fields as TEXT. The regex `'^-?[0-9]*\.?[0-9]+$'` guards all CAST operations — it handles values with no leading zero (e.g. `.143` stored as-is by CMF). Non-matching values cast to NULL rather than erroring.
 
 #### Internal / authenticated
 
@@ -386,7 +412,7 @@ All public endpoints return `Cache-Control: public, max-age=3600` and allow all 
 | `bonos_nemotecnicos` | 1,254 | Bonds with fiscal interest rate |
 | `tac` | 230K+ | Monthly TAC costs 2020–2026 |
 | `financial_statements` | 2M+ | IFRS statements (quarterly) for all CMF companies 2009–2026 |
-| `fondos_inversion` | 1,641 | FI registry: run_fondo, administrador, rescatable, vigente, has_data |
+| `fondos_inversion` | 1,641 | FI registry: run_fondo, administrador, rescatable, vigente, has_data, moneda (dominant currency, synced from valores_cuota_fi on each load — avoids scanning 2.9M rows in overview queries) |
 | `nemotecnicos_fi` | 2,370 | FI cuota tickers |
 | `valores_cuota_fi` | 2.9M+ | FI daily NAV/AUM 2020–2026, 531 MB. `flujo_neto` = daily implied net flow in CLP: `(cuotas_t − cuotas_{t-1}) × valor_libro_t` where `cuotas = patrimonio_neto / valor_libro`. Covering index `(fecha, run_fondo, flujo_neto)` |
 | `aportantes_fi` | 176K+ | FI quarterly top-12 shareholders with ownership % (periodo = quarter-end) |
@@ -401,7 +427,7 @@ All public endpoints return `Cache-Control: public, max-age=3600` and allow all 
 | `job_runs` | growing | Scheduler job execution history (status, duration, rows, errors) |
 | `categoria_fi` | 851 | FI fund classifications — refreshed quarterly |
 | `categoria_fm` | growing | FM fund classifications — refreshed monthly |
-| `ref_codes` | 349 | Unified CMF reference data: `(domain, code)` unique — domains: `country` (152), `currency` (118), `instrument` (79). Scraped daily from CMF. Used to resolve country codes, currency codes, and instrument type codes across portfolio endpoints |
+| `ref_codes` | 432 | Unified CMF reference data: `(domain, code)` unique — domains: `country` (152), `currency` (118), `instrument` (162). Scraped daily from CMF across all 4 tables on the instrument page (fixed income + equities + fund units + derivatives). Used to resolve country codes, currency codes, and instrument type codes across portfolio endpoints |
 | `mv_rentabilidad_fm` (MV) | ~2,900 | FM returns 1D/1W/1M/1Y/5Y/YTD (total return via factor_reparto). Refreshed daily |
 | `mv_rentabilidad_fi` (MV) | ~380 | FI rescatable returns 1D/1W/1M/1Y/5Y/YTD (NAV + dividends). Refreshed daily |
 | `mv_administradores` (MV) | ~50 | Admin dimension: FM+FI fund counts per administradora. Refreshed daily |

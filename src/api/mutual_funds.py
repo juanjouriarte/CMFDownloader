@@ -72,6 +72,7 @@ class RentFM(BaseModel):
 
 class TACInfo(BaseModel):
     periodo: date
+    serie: str | None
     tac_total: float | None
     tac_rem_fija: float | None
     tac_rem_var: float | None
@@ -267,14 +268,14 @@ def get_fund(run: str, _: CacheHook) -> FundFMDetail:
                         FROM cartera_naci
                         WHERE run_fondo = :run AND periodo = :period
                           AND porcentaje_activos_fondo IS NOT NULL
-                          AND porcentaje_activos_fondo ~ '^-?[0-9]+(\.[0-9]+)?$'
+                          AND porcentaje_activos_fondo ~ '^-?[0-9]*\.?[0-9]+$'
                         UNION ALL
                         SELECT COALESCE(codigo_pais_emisor, 'OTHER') AS pais,
                                CAST(porcentaje_activos_fondo AS numeric) AS pct
                         FROM cartera_extr
                         WHERE run_fondo = :run AND periodo = :period
                           AND porcentaje_activos_fondo IS NOT NULL
-                          AND porcentaje_activos_fondo ~ '^-?[0-9]+(\.[0-9]+)?$'
+                          AND porcentaje_activos_fondo ~ '^-?[0-9]*\.?[0-9]+$'
                     )
                     SELECT c.pais, rc.name AS nombre_pais, SUM(c.pct) AS pct_peso
                     FROM combined c
@@ -287,10 +288,10 @@ def get_fund(run: str, _: CacheHook) -> FundFMDetail:
 
         tac_row = session.execute(
             text("""
-                SELECT periodo, tac_total, tac_rem_fija, tac_rem_var, tac_gastos_op
+                SELECT periodo, serie, tac_total, tac_rem_fija, tac_rem_var, tac_gastos_op
                 FROM tac
                 WHERE run_fondo = :run
-                ORDER BY periodo DESC
+                ORDER BY periodo DESC, serie
                 LIMIT 1
             """),
             {"run": run},
@@ -347,10 +348,10 @@ def get_fund_nav(
 def get_fund_tac(run: str, _: CacheHook) -> list[TACInfo]:
     """TAC history for a mutual fund — last 24 months, descending."""
     sql = text("""
-        SELECT periodo, tac_total, tac_rem_fija, tac_rem_var, tac_gastos_op
+        SELECT periodo, serie, tac_total, tac_rem_fija, tac_rem_var, tac_gastos_op
         FROM tac
         WHERE run_fondo = :run
-        ORDER BY periodo DESC
+        ORDER BY periodo DESC, serie
         LIMIT 24
     """)
     with SessionLocal() as session:
