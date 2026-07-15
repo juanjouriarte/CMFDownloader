@@ -967,6 +967,8 @@ def admin_retention(
         prev AS (
             SELECT
                 a.rut,
+                COALESCE(a.nombre_canonical, a.nombre) AS nombre,
+                a.tipo_persona,
                 COUNT(DISTINCT a.run_fondo)::int        AS funds_count,
                 SUM(a.pct_propiedad / 100.0 * fa.aum_clp) AS aum_clp,
                 MAX(a.periodo)                          AS periodo
@@ -976,13 +978,13 @@ def admin_retention(
             WHERE f.administrador ILIKE :admin
               AND a.rut IS NOT NULL
               AND a.periodo = {prev_expr}
-            GROUP BY a.rut
+            GROUP BY a.rut, COALESCE(a.nombre_canonical, a.nombre), a.tipo_persona
         ),
         combined AS (
             SELECT
                 COALESCE(c.rut,          p.rut)         AS rut,
-                c.nombre,
-                c.tipo_persona,
+                COALESCE(c.nombre,        p.nombre)      AS nombre,
+                COALESCE(c.tipo_persona,  p.tipo_persona) AS tipo_persona,
                 c.aum_clp                               AS current_aum_clp,
                 p.aum_clp                               AS prev_aum_clp,
                 c.aum_clp - p.aum_clp                  AS delta_clp,
