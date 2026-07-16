@@ -66,6 +66,9 @@ class DividendosDownloader:
     def run(self) -> DownloadResult:
         last_year = self._last_year_in_db() or START_YEAR - 1
         current_year = date.today().year
+        # Bolsa pre-announces some payment dates, so MAX(fec_pago) can already be in
+        # a future year — don't let that push the sync window past today.
+        last_year = min(last_year, current_year)
         # Always re-fetch the current year (dividends are added throughout the year)
         # and the previous year in case of late postings
         from_year = max(last_year, current_year - 1)
