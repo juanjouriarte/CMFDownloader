@@ -16,10 +16,14 @@ Not canonical — see `CLAUDE.md` for the durable project reference.
   `from_year`. Verified against live Bolsa API: 6273 rows upserted for 2026 with 0 errors.
   On branch `fix/dividends-future-date-bug`, not yet merged.
 
-- [ ] **Minor/latent**: `uq_dividendo (nemo, fec_pago, descrip_vc)` doesn't dedupe rows where
-  any of those 3 columns is NULL (Postgres NULL-inequality semantics) — found one pre-existing
-  duplicate pair (`CHILE-T`, 2013-01-03), unrelated to today's fix. Not actively growing right
-  now; not fixed.
+- [ ] **Not fixing for now (user decision)**: `uq_dividendo (nemo, fec_pago, descrip_vc)` has
+  268 duplicate groups / 559 rows where `fec_pago IS NULL`. Turned out bigger than first
+  thought — most are NOT bugs, they're legitimate distinct historical capital-change events
+  (e.g. recurring "EMISION 1 X 8 LIB." actions on different dates) only correctly
+  distinguished by `fec_lim`, which isn't in the unique key. A couple of true exact duplicates
+  do exist (e.g. `CHILE-T` 2013-01-03, `UNDURRAGA`/`fec_lim=1979-04-06`). Real fix would need
+  `fec_lim` added to `uq_dividendo` plus a migration to delete true dupes first — data-integrity
+  risk, deliberately not doing this right now.
 
 ## Daily job smoke test (2026-07-15, against live CMF/Bolsa)
 
@@ -34,8 +38,10 @@ Ran manually against local dev DB — no CMF page-structure breakage found:
 | `fi_tickers` | ✅ 2372 upserted |
 | `fi_identity` | ✅ 1657 upserted |
 | `fi_daily_nav` | ✅ 11790 upserted (984 funds) |
-| `dividends` | ⚠️ ran, 0 errors, but see bug above — false green |
-| `mf_daily_nav` (cartola) | ⏳ untested — needs `GEMINI_API_KEY` for CAPTCHA solving |
+| `dividends` | ⚠️ ran, 0 errors, but see bug above — false green (fixed, see above) |
+| `mf_daily_nav` (cartola) | ✅ CAPTCHA solved via Gemini, 120175 rows upserted, data through 2026-07-16 across 444 funds |
+
+**All 9 scheduled daily/incremental jobs now confirmed working against live CMF/Bolsa. No sign of breakage from any CMF page change.**
 
 ## New endpoints
 
