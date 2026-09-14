@@ -3,7 +3,7 @@ services:
     build: .
     restart: always
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - /tmp:/tmp
     environment:
@@ -12,7 +12,20 @@ services:
       - DOWNLOADS_DIR=${DOWNLOADS_DIR:-/app/downloads}
       - BOLSA_COOKIES=${BOLSA_COOKIES}
       - BOLSA_CSRF=${BOLSA_CSRF}
-      - API_TOKEN=${API_TOKEN}
+      - API_TOKEN=${API_TOKEN:-}
+      - DB_CONNECT_TIMEOUT_SECONDS=${DB_CONNECT_TIMEOUT_SECONDS:-5}
+      - DB_POOL_TIMEOUT_SECONDS=${DB_POOL_TIMEOUT_SECONDS:-10}
+      - DB_POOL_RECYCLE_SECONDS=${DB_POOL_RECYCLE_SECONDS:-1800}
+      - DB_POOL_SIZE=${DB_POOL_SIZE:-3}
+      - DB_MAX_OVERFLOW=${DB_MAX_OVERFLOW:-2}
+      - DB_STATEMENT_TIMEOUT_MS=${WEB_DB_STATEMENT_TIMEOUT_MS:-30000}
+      - DB_APPLICATION_NAME=cmfdownloader-web
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8080/ready', timeout=5).raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
   worker:
     build: .
@@ -24,12 +37,32 @@ services:
       - DOWNLOADS_DIR=${DOWNLOADS_DIR:-/app/downloads}
       - BOLSA_COOKIES=${BOLSA_COOKIES}
       - BOLSA_CSRF=${BOLSA_CSRF}
+      - DB_CONNECT_TIMEOUT_SECONDS=${DB_CONNECT_TIMEOUT_SECONDS:-5}
+      - DB_POOL_TIMEOUT_SECONDS=${DB_POOL_TIMEOUT_SECONDS:-10}
+      - DB_POOL_RECYCLE_SECONDS=${DB_POOL_RECYCLE_SECONDS:-1800}
+      - DB_POOL_SIZE=${DB_POOL_SIZE:-3}
+      - DB_MAX_OVERFLOW=${DB_MAX_OVERFLOW:-2}
+      - DB_STATEMENT_TIMEOUT_MS=0
+      - DB_APPLICATION_NAME=cmfdownloader-worker
 
   mcp:
     build: .
     command: python mcp_worker.py
     restart: always
     ports:
-      - "8081:8081"
+      - "127.0.0.1:8081:8081"
     environment:
       - DATABASE_URL=${DATABASE_URL}
+      - DB_CONNECT_TIMEOUT_SECONDS=${DB_CONNECT_TIMEOUT_SECONDS:-5}
+      - DB_POOL_TIMEOUT_SECONDS=${DB_POOL_TIMEOUT_SECONDS:-10}
+      - DB_POOL_RECYCLE_SECONDS=${DB_POOL_RECYCLE_SECONDS:-1800}
+      - DB_POOL_SIZE=${DB_POOL_SIZE:-3}
+      - DB_MAX_OVERFLOW=${DB_MAX_OVERFLOW:-2}
+      - DB_STATEMENT_TIMEOUT_MS=${MCP_DB_STATEMENT_TIMEOUT_MS:-60000}
+      - DB_APPLICATION_NAME=cmfdownloader-mcp
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 8081), timeout=5).close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
