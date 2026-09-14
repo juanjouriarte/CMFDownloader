@@ -11,4 +11,5 @@ google-genai
 beautifulsoup4
 xlrd
 pytest
-mcp[cli]
+# The server uses the FastMCP 1.x API. MCP 2.x renamed FastMCP to MCPServer.
+mcp[cli]>=1.28,<2
