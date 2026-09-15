@@ -107,6 +107,7 @@ src/
 │   ├── admins.py             # /admins — administradora list + detail (from mv_administradores)
 │   ├── emisores.py           # /emisores — company market exposure, positions, history, concentration
 │   ├── ref_codes.py          # /ref-codes — ref_codes table (countries, currencies, instruments)
+│   ├── bolsa.py              # /bolsa/quotes/{nemotecnico} — live best bid/ask (no-store)
 │   └── router.py             # Assembles all sub-routers
 ├── mcp_server.py             # FastMCP server — 15 tools for fund-market intelligence (see MCP section)
 ├── etl/                      # All ETL domain packages (extract + load per data source)
@@ -153,6 +154,7 @@ src/
 │   │   │   └── utils.py          # mark_has_data() helper
 │   │   └── investmentFundsCategories.py  # FI classifier — 20 subcategories, IPSA-based size detection
 │   └── bolsaSantiago/        # Bolsa de Santiago data sources
+│       ├── client.py         # Authenticated read-only client for live market quotes
 │       ├── downloaders/
 │       │   └── dividendosDownloader.py   # Dividends + capital changes 1973→today
 │       └── loaders/
@@ -330,12 +332,13 @@ AUM figures are CLP. FM net new money uses `cartola_diaria` generated columns (`
 
 ### API endpoints
 
-All public endpoints return `Cache-Control: public, max-age=3600` and allow all CORS origins. Pagination via `?limit=50&offset=0` (max limit 1500).
+Public database endpoints return `Cache-Control: public, max-age=3600` and all endpoints allow all CORS origins. The live Bolsa quote endpoint returns `Cache-Control: no-store`. Pagination via `?limit=50&offset=0` (max limit 1500).
 
 #### Public read API (`src/api/`)
 
 | Endpoint | Description |
 |---|---|
+| `GET /bolsa/quotes/{nemotecnico}` | Current best bid/ask from Bolsa de Santiago. Returns prices, quantities, midpoint, absolute/percentage spread, quote status, and retrieval timestamp. Not cached. Requires valid `BOLSA_COOKIES` + `BOLSA_CSRF` on the web service. |
 | `GET /mutual-funds` | List FM funds. Filters: `admin`, `tipo_fondo`, `vigente`, `categoria`, `tipo`. Each item includes `categoria`, `tipo`, `nombre_cat` from `categoria_fm` |
 | `GET /mutual-funds/{run}` | FM fund detail: identity + latest NAV per serie (field: `series[]`) + rentability + `category` (full object: `categoria`, `tipo`, `grupo`, `nombre_cat`, `confianza`, `periodo`) + `geo_breakdown` (`[{pais, pct_peso}]` from latest portfolio) + `latest_tac` (`tac_total`, `tac_rem_fija`, `tac_rem_var`, `tac_gastos_op`, `periodo`) |
 | `GET /mutual-funds/{run}/nav` | FM NAV history for charts. Filters: `serie`, `from_date`, `to_date`. Field: `valor_cuota` |
@@ -519,8 +522,8 @@ print(DividendosDownloader().backfill())
 | `API_TOKEN` | Bearer token for `POST /financial-statements/download`. If unset, auth is skipped (dev mode) |
 | `GEMINI_API_KEY` | Google Gemini key — used for CAPTCHA solving in cartola downloader |
 | `DOWNLOADS_DIR` | Local path for downloaded raw files (default: `./downloads`) |
-| `BOLSA_COOKIES` | Session cookies for Bolsa de Santiago API (expires periodically) |
-| `BOLSA_CSRF` | CSRF token for Bolsa de Santiago API (expires with cookies) |
+| `BOLSA_COOKIES` | Session cookies for Bolsa de Santiago dividend and live-quote APIs (expires periodically) |
+| `BOLSA_CSRF` | CSRF token for Bolsa de Santiago dividend and live-quote APIs (expires with cookies) |
 | `NNM_EMAIL_ENABLED` | Enable scheduled mutual-fund net-new-money emails (`true`/`false`) |
 | `NNM_EMAIL_FROM` | Resend sender identity (test default: `CMF Reports <onboarding@resend.dev>`) |
 | `NNM_EMAIL_RECIPIENTS` | Comma-separated report recipients |

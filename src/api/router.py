@@ -11,6 +11,7 @@ from .admins import router as admins_router
 from .industry import router as industry_router
 from .ref_codes import router as ref_codes_router
 from .emisores import router as emisores_router
+from .bolsa import router as bolsa_router
 
 router = APIRouter()
 router.include_router(mutual_funds_router)
@@ -22,3 +23,4 @@ router.include_router(admins_router)
 router.include_router(industry_router)
 router.include_router(ref_codes_router)
 router.include_router(emisores_router)
+router.include_router(bolsa_router)
