@@ -288,23 +288,29 @@ def _summary_rows(snapshot: ReportSnapshot) -> str:
     return "".join(rendered)
 
 
-def _detail_rows(snapshot: ReportSnapshot) -> str:
-    rendered = []
+def _detail_sections(snapshot: ReportSnapshot) -> str:
+    sections = []
     for tipo in _active_types(snapshot):
         rows = [row for row in snapshot.rows if row.tipo == tipo]
-        rendered.extend(
+        body = "".join(
             "<tr>"
-                f'<td class="label"><span class="type muted">{html.escape(tipo)}</span>'
-                f'<div class="category">{html.escape(row.nombre)}</div></td>'
-                f'<td class="funds">{row.funds}</td>'
-                f"{_money_cell(row.daily_clp, row.daily_usd)}"
-                f"{_money_cell(row.week_clp, row.week_usd)}"
-                f"{_money_cell(row.mtd_clp, row.mtd_usd)}"
-                f"{_money_cell(row.ytd_clp, row.ytd_usd)}"
-                "</tr>"
+            f'<td class="label"><div class="category">{html.escape(row.nombre)}</div></td>'
+            f'<td class="funds">{row.funds}</td>'
+            f"{_money_cell(row.daily_clp, row.daily_usd)}"
+            f"{_money_cell(row.week_clp, row.week_usd)}"
+            f"{_money_cell(row.mtd_clp, row.mtd_usd)}"
+            f"{_money_cell(row.ytd_clp, row.ytd_usd)}"
+            "</tr>"
             for row in rows
         )
-    return "".join(rendered)
+        sections.append(f"""
+<div class="card detail-card">
+<div class="card-title"><span>{html.escape(tipo)}</span><span class="count">{sum(row.funds for row in rows)} fondos</span></div>
+<table role="presentation">
+<thead><tr><th>Clasificación</th><th>Fondos</th><th>Día</th><th>1W</th><th>MTD</th><th>YTD</th></tr></thead>
+<tbody>{body}</tbody>
+</table></div>""")
+    return "".join(sections)
 
 
 def _html_report(snapshot: ReportSnapshot) -> str:
@@ -319,6 +325,8 @@ body{{margin:0;padding:32px 12px;background:#f8fafc;font-family:Inter,-apple-sys
 h1{{font-size:24px;line-height:1.25;margin:13px 0 0;letter-spacing:-.02em}}
 .card{{background:#fff;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin-bottom:20px}}
 .card-title{{font-size:14px;font-weight:600;color:#001e62;padding:15px 18px;border-bottom:1px solid #e2e8f0}}
+.card-title .count{{float:right;color:#64748b;font-size:11px;font-weight:500}}
+.detail-label{{font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin:28px 2px 10px}}
 table{{border-collapse:collapse;width:100%;font-size:12px}}
 th{{background:#f3f6fb;color:#38537a;text-align:right;padding:9px 12px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid #dce5f2}}
 th:first-child{{text-align:left}}
@@ -339,9 +347,8 @@ tr:last-child td{{border-bottom:0}}
 <div class="card"><div class="card-title">Clasificación general</div><table role="presentation">
 <thead><tr><th>Clasificación</th><th>Fondos</th><th>Día</th><th>1W</th><th>MTD</th><th>YTD</th></tr></thead>
 <tbody>{_summary_rows(snapshot)}</tbody></table></div>
-<div class="card"><div class="card-title">Detalle por clasificación</div><table role="presentation">
-<thead><tr><th>Clasificación</th><th>Fondos</th><th>Día</th><th>1W</th><th>MTD</th><th>YTD</th></tr></thead>
-<tbody>{_detail_rows(snapshot)}</tbody></table></div>
+<div class="detail-label">Detalle por clasificación</div>
+{_detail_sections(snapshot)}
 <div class="note">NNM = aportes − rescates · CLP y USD por separado · Sin conversión FX · Fuente: CMF</div>
 </div></body></html>"""
 
@@ -355,7 +362,7 @@ def send_report(
         "Authorization": f"Bearer {settings.api_key}",
         "Content-Type": "application/json",
         "Idempotency-Key": (
-            f"mf-nnm-summary-v4-{delivery_date.isoformat()}-"
+            f"mf-nnm-summary-v5-{delivery_date.isoformat()}-"
             f"data-{snapshot.report_date.isoformat()}"
         ),
     })

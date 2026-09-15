@@ -64,6 +64,8 @@ def test_report_renders_plain_text_and_escaped_html(snapshot):
     assert "Clasificación general" in rendered_html
     assert "Detalle por clasificación" in rendered_html
     assert ">1W<" in rendered_html
+    assert rendered_html.count('class="card detail-card"') == 1
+    assert "4 fondos" in rendered_html
 
 
 def test_inactive_high_level_types_are_omitted(snapshot):
@@ -94,7 +96,7 @@ def test_send_report_uses_resend_and_idempotency(snapshot):
     headers = factory.call_args.kwargs["headers"]
     assert headers["Authorization"] == "Bearer test-key"
     assert headers["Idempotency-Key"] == (
-        "mf-nnm-summary-v4-2026-09-15-data-2026-09-14"
+        "mf-nnm-summary-v5-2026-09-15-data-2026-09-14"
     )
     request = session.post.call_args
     assert request.kwargs["json"]["to"] == ["recipient@example.com"]
