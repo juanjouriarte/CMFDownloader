@@ -8,6 +8,7 @@ import pytest
 
 from src.reports.mf_nnm_email import (
     CategoryFlow,
+    CurrencyFlow,
     ReportSettings,
     ReportSnapshot,
     _html_report,
@@ -27,14 +28,71 @@ def snapshot():
                 categoria="FDOACCNACLC",
                 nombre="Accionario Nacional <Large Cap>",
                 funds=4,
-                daily_clp=Decimal("1500000000"),
-                daily_usd=Decimal("2500000"),
-                week_clp=Decimal("1750000000"),
-                week_usd=Decimal("3000000"),
-                mtd_clp=Decimal("2000000000"),
-                mtd_usd=Decimal("4000000"),
-                ytd_clp=Decimal("-3000000000"),
-                ytd_usd=Decimal("5000000"),
+                currencies=(
+                    CurrencyFlow(
+                        currency="CLP",
+                        daily=Decimal("1500000000"),
+                        week=Decimal("1750000000"),
+                        mtd=Decimal("2000000000"),
+                        ytd=Decimal("-3000000000"),
+                    ),
+                    CurrencyFlow(
+                        currency="USD",
+                        daily=Decimal("2500000"),
+                        week=Decimal("3000000"),
+                        mtd=Decimal("4000000"),
+                        ytd=Decimal("5000000"),
+                    ),
+                ),
+                unsupported_currency_rows=0,
+            ),
+        ),
+        fi_report_date=date(2026, 9, 13),
+        fi_rows=(
+            CategoryFlow(
+                tipo="Alternativo",
+                categoria="FI_DEUDA_PRIVADA",
+                nombre="Deuda Privada",
+                funds=2,
+                currencies=(
+                    CurrencyFlow(
+                        currency="CLP",
+                        daily=Decimal("500000000"),
+                        week=Decimal("750000000"),
+                        mtd=Decimal("900000000"),
+                        ytd=Decimal("1200000000"),
+                    ),
+                    CurrencyFlow(
+                        currency="COP",
+                        daily=Decimal("2500000"),
+                        week=Decimal("3000000"),
+                        mtd=Decimal("4000000"),
+                        ytd=Decimal("5000000"),
+                    ),
+                ),
+                unsupported_currency_rows=0,
+            ),
+            CategoryFlow(
+                tipo="Accionario",
+                categoria="FI_ACC_NAC_SC",
+                nombre="RV Nacional Small/Mid Cap",
+                funds=3,
+                currencies=(
+                    CurrencyFlow(
+                        currency="CLP",
+                        daily=Decimal("800000000"),
+                        week=Decimal("1100000000"),
+                        mtd=Decimal("1400000000"),
+                        ytd=Decimal("2100000000"),
+                    ),
+                    CurrencyFlow(
+                        currency="EUR",
+                        daily=Decimal("1000000"),
+                        week=Decimal("1200000"),
+                        mtd=Decimal("1500000"),
+                        ytd=Decimal("2000000"),
+                    ),
+                ),
                 unsupported_currency_rows=0,
             ),
         ),
@@ -60,11 +118,17 @@ def test_report_renders_plain_text_and_escaped_html(snapshot):
     assert "Accionario Nacional &lt;Large Cap&gt;" in rendered_html
     assert "Accionario Nacional <Large Cap>" not in rendered_html
     assert "BTG Pactual" in rendered_html
-    assert "Fondos Mutuos · Net New Money" in rendered_html
+    assert "Net New Money · Fondos" in rendered_html
+    assert "Fondos de Inversión" in rendered_html
+    assert "Fondos de Inversión Rescatables" not in rendered_html
+    assert "Fondos de Inversión No Rescatables" not in rendered_html
+    assert "2.50 mm COP" in rendered_html
+    assert "1.00 mm EUR" in rendered_html
+    assert "Datos al 2026-09-13" in rendered_html
     assert "Clasificación general" in rendered_html
     assert "Detalle por clasificación" in rendered_html
     assert ">1W<" in rendered_html
-    assert rendered_html.count('class="card detail-card"') == 1
+    assert rendered_html.count('class="card detail-card"') == 3
     assert "4 fondos" in rendered_html
 
 
@@ -96,11 +160,13 @@ def test_send_report_uses_resend_and_idempotency(snapshot):
     headers = factory.call_args.kwargs["headers"]
     assert headers["Authorization"] == "Bearer test-key"
     assert headers["Idempotency-Key"] == (
-        "mf-nnm-summary-v5-2026-09-15-data-2026-09-14"
+        "fund-nnm-summary-v8-2026-09-15-fm-2026-09-14-fi-2026-09-13"
     )
     request = session.post.call_args
     assert request.kwargs["json"]["to"] == ["recipient@example.com"]
-    assert request.kwargs["json"]["subject"] == "BTG | Fondos Mutuos NNM | 2026-09-14"
+    assert request.kwargs["json"]["subject"] == (
+        "BTG | Net New Money Fondos | 2026-09-15"
+    )
     session.close.assert_called_once_with()
 
 

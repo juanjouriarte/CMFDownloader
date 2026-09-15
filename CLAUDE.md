@@ -250,7 +250,7 @@ Classifies all FI funds based on IFRS quarterly cartera positions using `pct_act
 | Deuda | Deuda Nacional, Deuda Internacional |
 | Fondo de Fondos | Fondo de Fondos |
 
-Large/Small Cap detection uses `rut_emisor` overlap with IPSA ETF (run_fondo `10748`) — dynamic, no hardcoded tickers. FI results persist to `categoria_fi`; FM Circular No. 7 classifications persist to `categoria_fm`. Both refresh after their portfolio jobs.
+Large/Small Cap detection uses `rut_emisor` overlap with IPSA ETF (run_fondo `10748`) — dynamic, no hardcoded tickers. National-equity funds with IPSA overlap ≤35% are Small/Mid Cap, ≥65% are Large Cap, and the remainder are general RV Nacional. FI results persist to `categoria_fi`; FM Circular No. 7 classifications persist to `categoria_fm`. Both refresh after their portfolio jobs.
 
 ### Rentability materialized views
 
@@ -321,7 +321,7 @@ AUM figures are CLP. FM net new money uses `cartola_diaria` generated columns (`
 | `mf_categories` | Day 5 of month 09:15 | FM fund classification → categoria_fm |
 | `mf_costs` | Day 5 of month 09:30 | MF monthly TAC costs |
 | `dividends` | Daily 09:00 | Dividends + capital changes (Bolsa de Santiago) |
-| `mf_nnm_email_report` | Daily 09:00 | Consolidated BTG-styled FM net-new-money email: high-level overview + detailed categories, daily/MTD/YTD split by CLP/USD |
+| `mf_nnm_email_report` | Daily 11:15 | Consolidated BTG-styled flow email for mutual funds plus all investment funds with daily NAV; FI categories aggregate rescatable and non-rescatable funds together. Includes high-level overview + detailed categories, daily/1W/MTD/YTD split by reported currency |
 | `fi_daily_nav` | Daily 09:30 | FI daily NAV/AUM (vigente funds only) |
 | `fi_rentabilidad` | Daily 10:00 | Refresh `mv_rentabilidad_fi` (FI returns) |
 | `fi_shareholders` | Day 5 of month 10:00 | FI quarterly shareholders + cuotas (vigente only) |

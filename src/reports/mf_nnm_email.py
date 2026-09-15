@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 
 RESEND_URL = "https://api.resend.com/emails"
 REPORT_TYPES = tuple(tipo.value for tipo in TipoFondo)
+FI_REPORT_TYPES = (
+    "Alternativo", "Accionario", "Deuda", "Fondo de Fondos", "Balanceado", "Otro",
+)
+CURRENCY_ORDER = ("CLP", "USD", "EUR", "COP", "PEN")
 SANTIAGO_TZ = ZoneInfo("America/Santiago")
 
 
@@ -64,19 +68,21 @@ class ReportSettings:
 
 
 @dataclass(frozen=True)
+class CurrencyFlow:
+    currency: str
+    daily: Decimal
+    week: Decimal
+    mtd: Decimal
+    ytd: Decimal
+
+
+@dataclass(frozen=True)
 class CategoryFlow:
     tipo: str
     categoria: str
     nombre: str
     funds: int
-    daily_clp: Decimal
-    daily_usd: Decimal
-    week_clp: Decimal
-    week_usd: Decimal
-    mtd_clp: Decimal
-    mtd_usd: Decimal
-    ytd_clp: Decimal
-    ytd_usd: Decimal
+    currencies: tuple[CurrencyFlow, ...]
     unsupported_currency_rows: int
 
 
@@ -84,6 +90,8 @@ class CategoryFlow:
 class ReportSnapshot:
     report_date: date
     rows: tuple[CategoryFlow, ...]
+    fi_report_date: date | None = None
+    fi_rows: tuple[CategoryFlow, ...] = ()
 
 
 _REPORT_SQL = text("""
@@ -145,9 +153,138 @@ ORDER BY lc.tipo, lc.nombre_cat
 """)
 
 
+_FI_REPORT_SQL = text("""
+WITH daily_counts AS (
+    SELECT v.fecha, COUNT(DISTINCT v.run_fondo) AS fund_count
+    FROM valores_cuota_fi v
+    JOIN fondos_inversion fi ON fi.run_fondo = v.run_fondo
+    WHERE fi.rescatable IS NOT NULL
+      AND v.flujo_neto IS NOT NULL
+      AND v.fecha >= (
+          SELECT MAX(v2.fecha) - INTERVAL '6 days'
+          FROM valores_cuota_fi v2
+          JOIN fondos_inversion fi2 ON fi2.run_fondo = v2.run_fondo
+          WHERE fi2.rescatable IS NOT NULL AND v2.flujo_neto IS NOT NULL
+      )
+    GROUP BY v.fecha
+),
+eligible_dates AS (
+    SELECT fecha, fund_count, MAX(fund_count) OVER () AS max_fund_count
+    FROM daily_counts
+),
+reference_date AS (
+    SELECT MAX(fecha) AS fecha
+    FROM eligible_dates
+    WHERE fund_count >= max_fund_count * 0.90
+),
+latest_categories AS (
+    SELECT DISTINCT ON (run_fondo)
+           run_fondo, categoria, tipo, nombre_cat
+    FROM categoria_fi
+    ORDER BY run_fondo, periodo DESC
+),
+flows AS (
+    SELECT
+        v.*,
+        CASE
+            WHEN v.moneda IS NULL OR v.moneda = '0' THEN fi.moneda
+            ELSE v.moneda
+        END AS effective_currency
+    FROM valores_cuota_fi v
+    JOIN fondos_inversion fi ON fi.run_fondo = v.run_fondo
+    WHERE fi.rescatable IS NOT NULL AND v.flujo_neto IS NOT NULL
+)
+SELECT
+    rd.fecha AS report_date,
+    COALESCE(lc.tipo, 'Otro') AS tipo,
+    COALESCE(lc.categoria, 'FI_OTRO') AS categoria,
+    COALESCE(lc.nombre_cat, 'Sin clasificar') AS nombre_cat,
+    COUNT(DISTINCT v.run_fondo) AS funds,
+    COALESCE(SUM(v.flujo_neto)
+        FILTER (WHERE v.fecha = rd.fecha AND v.effective_currency = '$$'), 0) AS daily_clp,
+    COALESCE(SUM(v.flujo_neto)
+        FILTER (WHERE v.fecha = rd.fecha AND v.effective_currency = 'PROM'), 0) AS daily_usd,
+    COALESCE(SUM(v.flujo_neto)
+        FILTER (WHERE v.fecha = rd.fecha AND v.effective_currency = 'EUR'), 0) AS daily_eur,
+    COALESCE(SUM(v.flujo_neto)
+        FILTER (WHERE v.fecha = rd.fecha AND v.effective_currency = 'COP'), 0) AS daily_cop,
+    COALESCE(SUM(v.flujo_neto)
+        FILTER (WHERE v.fecha = rd.fecha AND v.effective_currency = 'PEN'), 0) AS daily_pen,
+    COALESCE(SUM(v.flujo_neto)
+        FILTER (WHERE v.fecha >= rd.fecha - INTERVAL '6 days' AND v.effective_currency = '$$'), 0) AS week_clp,
+    COALESCE(SUM(v.flujo_neto)
+        FILTER (WHERE v.fecha >= rd.fecha - INTERVAL '6 days' AND v.effective_currency = 'PROM'), 0) AS week_usd,
+    COALESCE(SUM(v.flujo_neto)
+        FILTER (WHERE v.fecha >= rd.fecha - INTERVAL '6 days' AND v.effective_currency = 'EUR'), 0) AS week_eur,
+    COALESCE(SUM(v.flujo_neto)
+        FILTER (WHERE v.fecha >= rd.fecha - INTERVAL '6 days' AND v.effective_currency = 'COP'), 0) AS week_cop,
+    COALESCE(SUM(v.flujo_neto)
+        FILTER (WHERE v.fecha >= rd.fecha - INTERVAL '6 days' AND v.effective_currency = 'PEN'), 0) AS week_pen,
+    COALESCE(SUM(v.flujo_neto)
+        FILTER (WHERE v.fecha >= DATE_TRUNC('month', rd.fecha) AND v.effective_currency = '$$'), 0) AS mtd_clp,
+    COALESCE(SUM(v.flujo_neto)
+        FILTER (WHERE v.fecha >= DATE_TRUNC('month', rd.fecha) AND v.effective_currency = 'PROM'), 0) AS mtd_usd,
+    COALESCE(SUM(v.flujo_neto)
+        FILTER (WHERE v.fecha >= DATE_TRUNC('month', rd.fecha) AND v.effective_currency = 'EUR'), 0) AS mtd_eur,
+    COALESCE(SUM(v.flujo_neto)
+        FILTER (WHERE v.fecha >= DATE_TRUNC('month', rd.fecha) AND v.effective_currency = 'COP'), 0) AS mtd_cop,
+    COALESCE(SUM(v.flujo_neto)
+        FILTER (WHERE v.fecha >= DATE_TRUNC('month', rd.fecha) AND v.effective_currency = 'PEN'), 0) AS mtd_pen,
+    COALESCE(SUM(v.flujo_neto)
+        FILTER (WHERE v.effective_currency = '$$'), 0) AS ytd_clp,
+    COALESCE(SUM(v.flujo_neto)
+        FILTER (WHERE v.effective_currency = 'PROM'), 0) AS ytd_usd,
+    COALESCE(SUM(v.flujo_neto)
+        FILTER (WHERE v.effective_currency = 'EUR'), 0) AS ytd_eur,
+    COALESCE(SUM(v.flujo_neto)
+        FILTER (WHERE v.effective_currency = 'COP'), 0) AS ytd_cop,
+    COALESCE(SUM(v.flujo_neto)
+        FILTER (WHERE v.effective_currency = 'PEN'), 0) AS ytd_pen,
+    COUNT(*) FILTER (
+        WHERE v.effective_currency IS NULL
+           OR v.effective_currency NOT IN ('$$', 'PROM', 'EUR', 'COP', 'PEN')
+    ) AS unsupported_currency_rows
+FROM reference_date rd
+JOIN flows v
+  ON v.fecha >= DATE_TRUNC('year', rd.fecha)
+ AND v.fecha <= rd.fecha
+LEFT JOIN latest_categories lc ON lc.run_fondo = v.run_fondo
+GROUP BY rd.fecha,
+         COALESCE(lc.tipo, 'Otro'),
+         COALESCE(lc.categoria, 'FI_OTRO'),
+         COALESCE(lc.nombre_cat, 'Sin clasificar')
+ORDER BY tipo, nombre_cat
+""")
+
+
+def _currency_flow(row, currency: str, suffix: str) -> CurrencyFlow:
+    return CurrencyFlow(
+        currency=currency,
+        daily=Decimal(row[f"daily_{suffix}"]),
+        week=Decimal(row[f"week_{suffix}"]),
+        mtd=Decimal(row[f"mtd_{suffix}"]),
+        ytd=Decimal(row[f"ytd_{suffix}"]),
+    )
+
+
+def _category_flow(row, currencies: tuple[tuple[str, str], ...]) -> CategoryFlow:
+    return CategoryFlow(
+        tipo=row["tipo"],
+        categoria=row["categoria"],
+        nombre=row["nombre_cat"],
+        funds=int(row["funds"]),
+        currencies=tuple(
+            _currency_flow(row, currency, suffix)
+            for currency, suffix in currencies
+        ),
+        unsupported_currency_rows=int(row["unsupported_currency_rows"]),
+    )
+
+
 def load_snapshot() -> ReportSnapshot:
     with SessionLocal() as session:
         rows = session.execute(_REPORT_SQL).mappings().all()
+        fi_rows = session.execute(_FI_REPORT_SQL).mappings().all()
 
     if not rows:
         raise RuntimeError(
@@ -158,28 +295,32 @@ def load_snapshot() -> ReportSnapshot:
     if report_date is None:
         raise RuntimeError("No mutual-fund flow date is available.")
 
+    if not fi_rows or fi_rows[0]["report_date"] is None:
+        raise RuntimeError(
+            "No investment-fund daily flows or classifications are available."
+        )
+
+    fi_currencies = (
+        ("CLP", "clp"), ("USD", "usd"), ("EUR", "eur"),
+        ("COP", "cop"), ("PEN", "pen"),
+    )
+
     snapshot = ReportSnapshot(
         report_date=report_date,
         rows=tuple(
-            CategoryFlow(
-                tipo=row["tipo"],
-                categoria=row["categoria"],
-                nombre=row["nombre_cat"],
-                funds=int(row["funds"]),
-                daily_clp=Decimal(row["daily_clp"]),
-                daily_usd=Decimal(row["daily_usd"]),
-                week_clp=Decimal(row["week_clp"]),
-                week_usd=Decimal(row["week_usd"]),
-                mtd_clp=Decimal(row["mtd_clp"]),
-                mtd_usd=Decimal(row["mtd_usd"]),
-                ytd_clp=Decimal(row["ytd_clp"]),
-                ytd_usd=Decimal(row["ytd_usd"]),
-                unsupported_currency_rows=int(row["unsupported_currency_rows"]),
-            )
+            _category_flow(row, (("CLP", "clp"), ("USD", "usd")))
             for row in rows
         ),
+        fi_report_date=fi_rows[0]["report_date"],
+        fi_rows=tuple(
+            _category_flow(row, fi_currencies)
+            for row in fi_rows
+        ),
     )
-    unsupported = sum(row.unsupported_currency_rows for row in snapshot.rows)
+    unsupported = sum(
+        row.unsupported_currency_rows
+        for row in (*snapshot.rows, *snapshot.fi_rows)
+    )
     if unsupported:
         raise RuntimeError(
             f"Cannot build currency-safe report: {unsupported} flow rows use an unsupported currency"
@@ -190,116 +331,153 @@ def load_snapshot() -> ReportSnapshot:
 def _format_amount(value: Decimal, currency: str) -> str:
     if currency == "CLP":
         return f"{value / Decimal('1000000000'):,.2f} bn CLP"
-    return f"{value / Decimal('1000000'):,.2f} mm USD"
+    return f"{value / Decimal('1000000'):,.2f} mm {currency}"
 
 
-def _totals(rows: list[CategoryFlow]) -> dict[str, Decimal]:
-    return {
-        field: sum((getattr(row, field) for row in rows), Decimal(0))
-        for field in (
-            "daily_clp", "daily_usd", "week_clp", "week_usd",
-            "mtd_clp", "mtd_usd", "ytd_clp", "ytd_usd"
-        )
-    }
+def _amounts(row: CategoryFlow, period: str) -> dict[str, Decimal]:
+    return {flow.currency: getattr(flow, period) for flow in row.currencies}
 
 
-def _plain_pair(totals: dict[str, Decimal], period: str) -> str:
-    return (
-        f"{_format_amount(totals[f'{period}_clp'], 'CLP')} / "
-        f"{_format_amount(totals[f'{period}_usd'], 'USD')}"
-    )
+def _totals(rows: list[CategoryFlow], period: str) -> dict[str, Decimal]:
+    totals: dict[str, Decimal] = {}
+    for row in rows:
+        for currency, value in _amounts(row, period).items():
+            totals[currency] = totals.get(currency, Decimal(0)) + value
+    return totals
 
 
-def _active_types(snapshot: ReportSnapshot) -> tuple[str, ...]:
-    present = {row.tipo for row in snapshot.rows}
-    return tuple(tipo for tipo in REPORT_TYPES if tipo in present)
+def _ordered_amounts(amounts: dict[str, Decimal]) -> list[tuple[str, Decimal]]:
+    return [
+        (currency, amounts.get(currency, Decimal(0)))
+        for currency in CURRENCY_ORDER
+        if amounts.get(currency, Decimal(0))
+    ]
 
 
-def _plain_report(snapshot: ReportSnapshot) -> str:
+def _plain_amounts(amounts: dict[str, Decimal]) -> str:
+    values = [
+        _format_amount(value, currency)
+        for currency, value in _ordered_amounts(amounts)
+    ]
+    return " / ".join(values) if values else "—"
+
+
+def _active_types(
+    rows: tuple[CategoryFlow, ...],
+    preferred_order: tuple[str, ...],
+) -> tuple[str, ...]:
+    present = {row.tipo for row in rows}
+    ordered = [tipo for tipo in preferred_order if tipo in present]
+    ordered.extend(sorted(present.difference(ordered)))
+    return tuple(ordered)
+
+
+def _plain_section(
+    title: str,
+    report_date: date,
+    section_rows: tuple[CategoryFlow, ...],
+    type_order: tuple[str, ...],
+) -> list[str]:
     lines = [
-        "Fondos Mutuos — Net New Money",
-        snapshot.report_date.isoformat(),
+        title,
+        f"Datos al {report_date.isoformat()}",
         "",
         "CLASIFICACIÓN GENERAL",
         "Clasificación | Fondos | Día | 1W | MTD | YTD",
     ]
-    for tipo in _active_types(snapshot):
-        rows = [row for row in snapshot.rows if row.tipo == tipo]
-        totals = _totals(rows)
+    for tipo in _active_types(section_rows, type_order):
+        rows = [row for row in section_rows if row.tipo == tipo]
         lines.append(
             f"{tipo} | {sum(row.funds for row in rows)} | "
-            f"{_plain_pair(totals, 'daily')} | {_plain_pair(totals, 'week')} | "
-            f"{_plain_pair(totals, 'mtd')} | "
-            f"{_plain_pair(totals, 'ytd')}"
+            f"{_plain_amounts(_totals(rows, 'daily'))} | "
+            f"{_plain_amounts(_totals(rows, 'week'))} | "
+            f"{_plain_amounts(_totals(rows, 'mtd'))} | "
+            f"{_plain_amounts(_totals(rows, 'ytd'))}"
         )
     lines.extend(["", "DETALLE", "Clasificación | Fondos | Día | 1W | MTD | YTD"])
-    for tipo in _active_types(snapshot):
-        rows = [row for row in snapshot.rows if row.tipo == tipo]
-        for row in rows:
-            totals = {
-                field: getattr(row, field)
-                for field in (
-                    "daily_clp", "daily_usd", "week_clp", "week_usd",
-                    "mtd_clp", "mtd_usd", "ytd_clp", "ytd_usd"
-                )
-            }
+    for tipo in _active_types(section_rows, type_order):
+        for row in (row for row in section_rows if row.tipo == tipo):
             lines.append(
-                f"{tipo} / {row.nombre} | {row.funds} | {_plain_pair(totals, 'daily')} | "
-                f"{_plain_pair(totals, 'week')} | {_plain_pair(totals, 'mtd')} | "
-                f"{_plain_pair(totals, 'ytd')}"
+                f"{tipo} / {row.nombre} | {row.funds} | "
+                f"{_plain_amounts(_amounts(row, 'daily'))} | "
+                f"{_plain_amounts(_amounts(row, 'week'))} | "
+                f"{_plain_amounts(_amounts(row, 'mtd'))} | "
+                f"{_plain_amounts(_amounts(row, 'ytd'))}"
             )
+    return lines
+
+
+def _plain_report(snapshot: ReportSnapshot) -> str:
+    lines = _plain_section(
+        "Fondos Mutuos — Net New Money",
+        snapshot.report_date,
+        snapshot.rows,
+        REPORT_TYPES,
+    )
+    if snapshot.fi_report_date and snapshot.fi_rows:
+        lines.extend([""])
+        lines.extend(_plain_section(
+            "Fondos de Inversión — Flujo Neto",
+            snapshot.fi_report_date,
+            snapshot.fi_rows,
+            FI_REPORT_TYPES,
+        ))
     lines.extend([
         "",
-        "NNM = aportes − rescates. CLP y USD por separado; sin conversión FX.",
+        "Fondos Mutuos: NNM = aportes − rescates.",
+        "Fondos de Inversión: flujo implícito por variación de cuotas.",
+        "En fondos no rescatables, las salidas representan reducciones de cuotas, no rescates contractuales.",
+        "Monedas informadas por separado; sin conversión FX.",
     ])
     return "\n".join(lines)
 
 
-def _money_cell(clp: Decimal, usd: Decimal) -> str:
+def _money_cell(amounts: dict[str, Decimal]) -> str:
     def line(value: Decimal, currency: str) -> str:
         color = "#15803d" if value > 0 else "#b91c1c"
         return (
             f'<div class="amount" style="color:{color}">'
             f"{html.escape(_format_amount(value, currency))}</div>"
         )
-    values = []
-    if clp:
-        values.append(line(clp, "CLP"))
-    if usd:
-        values.append(line(usd, "USD"))
+    values = [line(value, currency) for currency, value in _ordered_amounts(amounts)]
     return f'<td class="money">{"".join(values) if values else "—"}</td>'
 
 
-def _summary_rows(snapshot: ReportSnapshot) -> str:
+def _summary_rows(
+    section_rows: tuple[CategoryFlow, ...],
+    type_order: tuple[str, ...],
+) -> str:
     rendered = []
-    for tipo in _active_types(snapshot):
-        rows = [row for row in snapshot.rows if row.tipo == tipo]
-        totals = _totals(rows)
+    for tipo in _active_types(section_rows, type_order):
+        rows = [row for row in section_rows if row.tipo == tipo]
         rendered.append(
             "<tr>"
             f'<td class="label"><span class="type">{html.escape(tipo)}</span></td>'
             f'<td class="funds">{sum(row.funds for row in rows)}</td>'
-            f"{_money_cell(totals['daily_clp'], totals['daily_usd'])}"
-            f"{_money_cell(totals['week_clp'], totals['week_usd'])}"
-            f"{_money_cell(totals['mtd_clp'], totals['mtd_usd'])}"
-            f"{_money_cell(totals['ytd_clp'], totals['ytd_usd'])}"
+            f"{_money_cell(_totals(rows, 'daily'))}"
+            f"{_money_cell(_totals(rows, 'week'))}"
+            f"{_money_cell(_totals(rows, 'mtd'))}"
+            f"{_money_cell(_totals(rows, 'ytd'))}"
             "</tr>"
         )
     return "".join(rendered)
 
 
-def _detail_sections(snapshot: ReportSnapshot) -> str:
+def _detail_sections(
+    section_rows: tuple[CategoryFlow, ...],
+    type_order: tuple[str, ...],
+) -> str:
     sections = []
-    for tipo in _active_types(snapshot):
-        rows = [row for row in snapshot.rows if row.tipo == tipo]
+    for tipo in _active_types(section_rows, type_order):
+        rows = [row for row in section_rows if row.tipo == tipo]
         body = "".join(
             "<tr>"
             f'<td class="label"><div class="category">{html.escape(row.nombre)}</div></td>'
             f'<td class="funds">{row.funds}</td>'
-            f"{_money_cell(row.daily_clp, row.daily_usd)}"
-            f"{_money_cell(row.week_clp, row.week_usd)}"
-            f"{_money_cell(row.mtd_clp, row.mtd_usd)}"
-            f"{_money_cell(row.ytd_clp, row.ytd_usd)}"
+            f"{_money_cell(_amounts(row, 'daily'))}"
+            f"{_money_cell(_amounts(row, 'week'))}"
+            f"{_money_cell(_amounts(row, 'mtd'))}"
+            f"{_money_cell(_amounts(row, 'ytd'))}"
             "</tr>"
             for row in rows
         )
@@ -313,6 +491,21 @@ def _detail_sections(snapshot: ReportSnapshot) -> str:
     return "".join(sections)
 
 
+def _html_section(
+    title: str,
+    report_date: date,
+    section_rows: tuple[CategoryFlow, ...],
+    type_order: tuple[str, ...],
+) -> str:
+    return f"""
+<div class="section-head"><h2>{html.escape(title)}</h2><span>Datos al {report_date.isoformat()}</span></div>
+<div class="card"><div class="card-title">Clasificación general</div><table role="presentation">
+<thead><tr><th>Clasificación</th><th>Fondos</th><th>Día</th><th>1W</th><th>MTD</th><th>YTD</th></tr></thead>
+<tbody>{_summary_rows(section_rows, type_order)}</tbody></table></div>
+<div class="detail-label">Detalle por clasificación</div>
+{_detail_sections(section_rows, type_order)}"""
+
+
 def _html_report(snapshot: ReportSnapshot) -> str:
     return f"""<!doctype html>
 <html><head><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -323,6 +516,9 @@ body{{margin:0;padding:32px 12px;background:#f8fafc;font-family:Inter,-apple-sys
 .brand{{font-size:12px;font-weight:700;letter-spacing:.08em;color:#001e62;text-transform:uppercase}}
 .date{{float:right;color:#64748b;font-size:12px;font-weight:500}}
 h1{{font-size:24px;line-height:1.25;margin:13px 0 0;letter-spacing:-.02em}}
+h2{{font-size:17px;line-height:1.3;margin:0;color:#0f172a;letter-spacing:-.01em}}
+.section-head{{display:flex;align-items:baseline;justify-content:space-between;margin:26px 2px 11px}}
+.section-head span{{color:#64748b;font-size:11px;font-weight:500}}
 .card{{background:#fff;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin-bottom:20px}}
 .card-title{{font-size:14px;font-weight:600;color:#001e62;padding:15px 18px;border-bottom:1px solid #e2e8f0}}
 .card-title .count{{float:right;color:#64748b;font-size:11px;font-weight:500}}
@@ -342,14 +538,11 @@ tr:last-child td{{border-bottom:0}}
 @media(max-width:640px){{body{{padding:12px 4px}}h1{{font-size:20px}}th,td{{padding:8px 5px}}table{{font-size:10px}}.category{{font-size:10px}}}}
 </style></head>
 <body><div class="wrap"><div class="top">
-<span class="brand">BTG Pactual</span><span class="date">Datos al {snapshot.report_date.isoformat()}</span>
-<h1>Fondos Mutuos · Net New Money</h1></div>
-<div class="card"><div class="card-title">Clasificación general</div><table role="presentation">
-<thead><tr><th>Clasificación</th><th>Fondos</th><th>Día</th><th>1W</th><th>MTD</th><th>YTD</th></tr></thead>
-<tbody>{_summary_rows(snapshot)}</tbody></table></div>
-<div class="detail-label">Detalle por clasificación</div>
-{_detail_sections(snapshot)}
-<div class="note">NNM = aportes − rescates · CLP y USD por separado · Sin conversión FX · Fuente: CMF</div>
+<span class="brand">BTG Pactual</span><span class="date">Reporte diario</span>
+<h1>Net New Money · Fondos</h1></div>
+{_html_section("Fondos Mutuos", snapshot.report_date, snapshot.rows, REPORT_TYPES)}
+{_html_section("Fondos de Inversión", snapshot.fi_report_date, snapshot.fi_rows, FI_REPORT_TYPES) if snapshot.fi_report_date and snapshot.fi_rows else ""}
+<div class="note">FM: aportes − rescates · FI: flujo implícito por variación de cuotas · En FI no rescatables, las salidas son reducciones de cuotas, no rescates contractuales · Monedas por separado · Sin conversión FX · Fuente: CMF</div>
 </div></body></html>"""
 
 
@@ -358,12 +551,14 @@ def send_report(
     settings: ReportSettings,
 ) -> str:
     delivery_date = datetime.now(SANTIAGO_TZ).date()
+    fi_data_date = snapshot.fi_report_date or snapshot.report_date
     session = make_session(headers={
         "Authorization": f"Bearer {settings.api_key}",
         "Content-Type": "application/json",
         "Idempotency-Key": (
-            f"mf-nnm-summary-v5-{delivery_date.isoformat()}-"
-            f"data-{snapshot.report_date.isoformat()}"
+            f"fund-nnm-summary-v8-{delivery_date.isoformat()}-"
+            f"fm-{snapshot.report_date.isoformat()}-"
+            f"fi-{fi_data_date.isoformat()}"
         ),
     })
     try:
@@ -372,7 +567,7 @@ def send_report(
             json={
                 "from": settings.sender,
                 "to": list(settings.recipients),
-                "subject": f"BTG | Fondos Mutuos NNM | {snapshot.report_date.isoformat()}",
+                "subject": f"BTG | Net New Money Fondos | {delivery_date.isoformat()}",
                 "text": _plain_report(snapshot),
                 "html": _html_report(snapshot),
             },
@@ -390,10 +585,10 @@ def send_report(
 def run() -> DownloadResult:
     settings = ReportSettings.from_env()
     if not settings.enabled:
-        logger.info("Mutual-fund NNM emails are disabled")
+        logger.info("Fund NNM emails are disabled")
         return DownloadResult(skipped=1)
 
     snapshot = load_snapshot()
     message_id = send_report(snapshot, settings)
-    logger.info("Sent consolidated mutual-fund NNM report id=%s", message_id)
+    logger.info("Sent consolidated fund NNM report id=%s", message_id)
     return DownloadResult(downloaded=1)

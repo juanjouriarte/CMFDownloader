@@ -52,7 +52,7 @@ IPSA_PROXY_RUN_FONDO = "10748"  # ETF SINGULAR IPSA
 
 # IPSA size thresholds (ratio of equity portfolio in IPSA stocks)
 IPSA_LC_THRESHOLD = 0.65   # >= 65% of equity is IPSA → Large Cap
-IPSA_SC_THRESHOLD = 0.25   # <= 25% of equity is IPSA → Small Cap
+IPSA_SC_THRESHOLD = 0.35   # <= 35% of equity is IPSA → Small/Mid Cap
 
 # ---------------------------------------------------------------------------
 # Instrument type → asset group

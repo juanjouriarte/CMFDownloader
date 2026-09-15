@@ -5,6 +5,7 @@ from src.etl.mutualFunds.mutualFundsCategories import (
     _classify_debt,
     _classify_equity_geography,
 )
+from src.etl.investmentFunds.investmentFundsCategories import _equity_sub
 
 
 # ---------------------------------------------------------------------------
@@ -60,6 +61,18 @@ def test_fund_domicile_not_counted_as_market():
     # USA 76% weight → should classify as FDOACCEEUU when domicile rows excluded
     df = _make_extr([("USA", 76), (None, 14), ("Canada", 10)])
     assert _classify_equity_geography(df) == "FDOACCEEUU"
+
+
+def test_fi_national_equity_35_pct_ipsa_is_small_mid_cap():
+    assert _equity_sub(True, "Fondo Nacional", 0.35) == "FI_ACC_NAC_SC"
+
+
+def test_fi_national_equity_above_35_pct_ipsa_is_general():
+    assert _equity_sub(True, "Fondo Nacional", 0.351) == "FI_ACC_NAC"
+
+
+def test_fi_national_equity_65_pct_ipsa_is_large_cap():
+    assert _equity_sub(True, "Fondo Nacional", 0.65) == "FI_ACC_NAC_LC"
 
 
 # ---------------------------------------------------------------------------

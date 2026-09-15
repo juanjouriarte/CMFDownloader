@@ -5,6 +5,12 @@ Not canonical — see `CLAUDE.md` for the durable project reference.
 
 ## Bugs found (fix locally first)
 
+- [ ] **Investigate the 164 unmatched fund identifiers in the TAC import.**
+  The July and August 2026 TAC refreshes each reported 164 `run_fondo` values that
+  could not be matched to the local mutual-fund identity data. Determine whether
+  these are obsolete funds, identifier-format differences, or missing identities,
+  then document and implement the appropriate reconciliation.
+
 - [x] **`dividends` job silently no-ops when a future-dated dividend exists in DB.** — FIXED
   `DividendosDownloader.run()` (`src/etl/bolsaSantiago/downloaders/dividendosDownloader.py:66-73`)
   computed `from_year = max(last_year_in_db, current_year - 1)` and `to_year = current_year`.
