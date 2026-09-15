@@ -14,6 +14,7 @@ from src.etl.bolsaSantiago.client import (
     BolsaUpstreamError,
     get_live_quote,
 )
+from src.etl.bolsaSantiago.quote_buffer import btg_fixed_income_quote_buffer
 
 router = APIRouter(prefix="/bolsa", tags=["Bolsa de Santiago"])
 
@@ -32,6 +33,42 @@ class LiveQuote(BaseModel):
     spread_pct: float | None
     retrieved_at: datetime
     source: str
+
+
+class BufferedQuote(BaseModel):
+    nemotecnico: str
+    status: Literal[
+        "two_sided", "bid_only", "ask_only", "no_quotes", "pending", "error"
+    ]
+    bid_price: float | None
+    bid_quantity: int
+    ask_price: float | None
+    ask_quantity: int
+    midpoint: float | None
+    spread: float | None
+    spread_pct: float | None
+    retrieved_at: datetime | None
+    last_attempted_at: datetime | None
+    last_error: str | None
+    source: str
+
+
+class BufferedFund(BaseModel):
+    name: str
+    instruments: list[BufferedQuote]
+
+
+class BTGFixedIncomeQuotes(BaseModel):
+    status: Literal["warming", "partial", "ready"]
+    refreshing: bool
+    total_instruments: int
+    available_quotes: int
+    pace_seconds: float
+    cycle_seconds: float
+    cycle_started_at: datetime | None
+    last_completed_at: datetime | None
+    last_cycle_error: str | None
+    funds: list[BufferedFund]
 
 
 @router.get(
@@ -64,3 +101,15 @@ def live_quote(nemotecnico: str, response: Response) -> dict:
             status_code=502,
             detail="Bolsa de Santiago market data is unavailable",
         ) from exc
+
+
+@router.get(
+    "/btg-fixed-income",
+    response_model=BTGFixedIncomeQuotes,
+    summary="Buffered live quotes for BTG fixed-income funds",
+)
+def btg_fixed_income_quotes(response: Response) -> dict:
+    """Read the server buffer without making Bolsa requests in the HTTP path."""
+    response.headers["Cache-Control"] = "no-store"
+    btg_fixed_income_quote_buffer.start()
+    return btg_fixed_income_quote_buffer.snapshot()

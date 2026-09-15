@@ -40,6 +40,7 @@ ETL pipeline that downloads public fund datasets from the Chilean CMF (Comisión
 ### Bolsa de Santiago
 - [x] **Dividendos** — dividends + capital changes for all instruments 1973–2026 (75k rows)
 - [x] **Live best bid/ask** — `GET /bolsa/quotes/{nemotecnico}` proxies the current Bolsa de Santiago market quote with bid/ask quantities, midpoint, and spread
+- [x] **Buffered BTG fixed income** — `GET /bolsa/btg-fixed-income` serves 14 configured fund-series quotes from memory while one background thread refreshes them sequentially
 
 ### Analysis
 - [x] **FM Fund classifier** — classifies FM funds per Circular No. 7 (AFM 2025). Results persisted to `categoria_fm`
@@ -55,6 +56,7 @@ ETL pipeline that downloads public fund datasets from the Chilean CMF (Comisión
 ### Public API (`src/api/`)
 - [x] **CORS + caching** — all endpoints open (`allow_origins=["*"]`), `Cache-Control: public, max-age=3600` for edge caching
 - [x] **Live Bolsa quote** — `GET /bolsa/quotes/{nemotecnico}` returns current best bid/ask and uses `Cache-Control: no-store`
+- [x] **Buffered BTG fixed-income quotes** — `GET /bolsa/btg-fixed-income` returns all configured funds without making Bolsa requests in the HTTP request path
 - [x] **Fund endpoints** — `GET /funds` (list + filter), `/funds/{run}` (detail), `/funds/{run}/nav` (chart data), `/funds/{run}/portfolio` (full holdings enriched with SII names + fund names from nemotecnicos — includes `tir`, `fecha_vencimiento`, `cantidad_unidades`, `tipo_unidades`, `moneda_liquidacion`, `porcentaje_valor_par`, `tipo_interes`, `codigo_pais_emisor`, `situacion_instrumento`, `porcentaje_capital_emisor`, `porcentaje_activos_emisor`, `codigo_grupo_empresarial`, `nombre_fondo_emisor`)
 - [x] **Investment fund endpoints** — `GET /investment-funds`, `/investment-funds/{run}`, `/investment-funds/{run}/nav`, `/investment-funds/{run}/portfolio` (full holdings enriched with SII names + fund names — includes `tir_val_par_precio`, `fecha_vencimiento`, `cant_unidades`, `tipo_unidades`, `cod_moneda_liquidacion`, `tipo_interes`, `pct_capital_emisor`, `pct_activo_emisor`, `situacion_instrumento`, `clasif_esf`, `cod_pais`, `nombre_fondo_emisor`)
 - [x] **Rentability rankings** — `GET /rentability/fm` + `/rentability/fi` from materialized views, sortable by 1D/1W/1M/1Y/5Y/YTD

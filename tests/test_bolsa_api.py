@@ -4,11 +4,16 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi import HTTPException, Response
 
-from src.api.bolsa import live_quote
+from src.api.bolsa import btg_fixed_income_quotes, live_quote
 from src.etl.bolsaSantiago.client import (
     BolsaAuthenticationError,
     BolsaQuoteNotFoundError,
     get_live_quote,
+)
+from src.etl.bolsaSantiago.quote_buffer import (
+    BTG_FIXED_INCOME_FUNDS,
+    BTGFixedIncomeQuoteBuffer,
+    btg_fixed_income_quote_buffer,
 )
 
 
@@ -133,3 +138,67 @@ def test_api_maps_missing_quote_to_404():
             live_quote("UNKNOWN", Response())
 
     assert exc.value.status_code == 404
+
+
+def test_fixed_income_buffer_refreshes_all_tickers_sequentially():
+    calls = []
+
+    def fetcher(ticker):
+        calls.append(ticker)
+        return _quote(nemotecnico=ticker)
+
+    buffer = BTGFixedIncomeQuoteBuffer(
+        fetcher=fetcher,
+        pace_seconds=0,
+        cycle_seconds=60,
+    )
+    buffer.refresh_once()
+    snapshot = buffer.snapshot()
+
+    expected = [
+        ticker
+        for _, tickers in BTG_FIXED_INCOME_FUNDS
+        for ticker in tickers
+    ]
+    assert calls == expected
+    assert snapshot["status"] == "ready"
+    assert snapshot["total_instruments"] == 14
+    assert snapshot["available_quotes"] == 14
+    assert snapshot["last_completed_at"] is not None
+    assert [fund["name"] for fund in snapshot["funds"]] == [
+        name for name, _ in BTG_FIXED_INCOME_FUNDS
+    ]
+
+
+def test_fixed_income_endpoint_only_reads_buffer():
+    response = Response()
+    buffered = {
+        "status": "warming",
+        "refreshing": True,
+        "total_instruments": 14,
+        "available_quotes": 0,
+        "pace_seconds": 5.0,
+        "cycle_seconds": 900.0,
+        "cycle_started_at": None,
+        "last_completed_at": None,
+        "last_cycle_error": None,
+        "funds": [],
+    }
+    with (
+        patch.object(btg_fixed_income_quote_buffer, "start") as start,
+        patch.object(
+            btg_fixed_income_quote_buffer, "snapshot", return_value=buffered
+        ) as snapshot,
+    ):
+        result = btg_fixed_income_quotes(response)
+
+    start.assert_called_once_with()
+    snapshot.assert_called_once_with()
+    assert result is buffered
+    assert response.headers["Cache-Control"] == "no-store"
+
+
+def test_fixed_income_endpoint_is_registered_in_openapi():
+    from main import app
+
+    assert "/bolsa/btg-fixed-income" in app.openapi()["paths"]

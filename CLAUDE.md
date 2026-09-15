@@ -107,7 +107,7 @@ src/
 │   ├── admins.py             # /admins — administradora list + detail (from mv_administradores)
 │   ├── emisores.py           # /emisores — company market exposure, positions, history, concentration
 │   ├── ref_codes.py          # /ref-codes — ref_codes table (countries, currencies, instruments)
-│   ├── bolsa.py              # /bolsa/quotes/{nemotecnico} — live best bid/ask (no-store)
+│   ├── bolsa.py              # /bolsa/quotes/{nemo} live + /bolsa/btg-fixed-income buffered quotes
 │   └── router.py             # Assembles all sub-routers
 ├── mcp_server.py             # FastMCP server — 15 tools for fund-market intelligence (see MCP section)
 ├── etl/                      # All ETL domain packages (extract + load per data source)
@@ -155,6 +155,7 @@ src/
 │   │   └── investmentFundsCategories.py  # FI classifier — 20 subcategories, IPSA-based size detection
 │   └── bolsaSantiago/        # Bolsa de Santiago data sources
 │       ├── client.py         # Authenticated read-only client for live market quotes
+│       ├── quote_buffer.py   # Rate-limited in-memory buffer for BTG fixed-income quotes
 │       ├── downloaders/
 │       │   └── dividendosDownloader.py   # Dividends + capital changes 1973→today
 │       └── loaders/
@@ -339,6 +340,7 @@ Public database endpoints return `Cache-Control: public, max-age=3600` and all e
 | Endpoint | Description |
 |---|---|
 | `GET /bolsa/quotes/{nemotecnico}` | Current best bid/ask from Bolsa de Santiago. Returns prices, quantities, midpoint, absolute/percentage spread, quote status, and retrieval timestamp. Not cached. Requires valid `BOLSA_COOKIES` + `BOLSA_CSRF` on the web service. |
+| `GET /bolsa/btg-fixed-income` | In-memory snapshot of 14 BTG fixed-income fund-series quotes, grouped into 6 funds. The HTTP request never calls Bolsa; one background thread refreshes tickers sequentially (default 5 seconds apart, then 15 minutes between cycles). Returns buffer/freshness/error metadata. Not cached. |
 | `GET /mutual-funds` | List FM funds. Filters: `admin`, `tipo_fondo`, `vigente`, `categoria`, `tipo`. Each item includes `categoria`, `tipo`, `nombre_cat` from `categoria_fm` |
 | `GET /mutual-funds/{run}` | FM fund detail: identity + latest NAV per serie (field: `series[]`) + rentability + `category` (full object: `categoria`, `tipo`, `grupo`, `nombre_cat`, `confianza`, `periodo`) + `geo_breakdown` (`[{pais, pct_peso}]` from latest portfolio) + `latest_tac` (`tac_total`, `tac_rem_fija`, `tac_rem_var`, `tac_gastos_op`, `periodo`) |
 | `GET /mutual-funds/{run}/nav` | FM NAV history for charts. Filters: `serie`, `from_date`, `to_date`. Field: `valor_cuota` |
@@ -524,6 +526,8 @@ print(DividendosDownloader().backfill())
 | `DOWNLOADS_DIR` | Local path for downloaded raw files (default: `./downloads`) |
 | `BOLSA_COOKIES` | Session cookies for Bolsa de Santiago dividend and live-quote APIs (expires periodically) |
 | `BOLSA_CSRF` | CSRF token for Bolsa de Santiago dividend and live-quote APIs (expires with cookies) |
+| `BOLSA_QUOTE_PACE_SECONDS` | Delay between individual Bolsa requests in the BTG fixed-income buffer (default `5`) |
+| `BOLSA_QUOTE_CYCLE_SECONDS` | Delay after a full BTG fixed-income refresh cycle (default `900`) |
 | `NNM_EMAIL_ENABLED` | Enable scheduled mutual-fund net-new-money emails (`true`/`false`) |
 | `NNM_EMAIL_FROM` | Resend sender identity (test default: `CMF Reports <onboarding@resend.dev>`) |
 | `NNM_EMAIL_RECIPIENTS` | Comma-separated report recipients |
