@@ -26,8 +26,8 @@ Two Oracle Cloud Always Free VMs (VM.Standard.E2.1.Micro — 1 OCPU, 1 GB RAM ea
 | `cmf-btg-db` | — | `146.181.47.236` | `10.0.0.42` | PostgreSQL 16 (port 5433) |
 | `cmf-btg-app` | — | `146.181.34.54` | `10.0.0.10` | web + worker (Docker, port 8080) |
 
-**API base URL**: `https://financial-cmf.ddns.net` (nginx + Let's Encrypt SSL, DuckDNS-style domain via No-IP)
-**MCP endpoint**: `https://financial-cmf.ddns.net/mcp/sse` (add in Claude.ai → Settings → Integrations)
+**API base URL**: `https://api-cmf-146-181-34-54.sslip.io` (nginx + Let's Encrypt SSL)
+**MCP endpoint**: `https://api-cmf-146-181-34-54.sslip.io/mcp/sse` (add in Claude.ai → Settings → Integrations)
 
 ### SSH access
 ```bash
@@ -209,7 +209,7 @@ The app runs as **three independent containers** on the `cmf-btg-app` VM (`docke
 - `mcp` — `python mcp_worker.py` (port 8081) — FastMCP SSE server for Claude
 
 All three have `restart: always`. A crash in one does not affect the others. nginx on the
-host terminates HTTPS (`financial-cmf.ddns.net`) and reverse-proxies `/` → 8080 and
+host terminates HTTPS (`api-cmf-146-181-34-54.sslip.io`) and reverse-proxies `/` → 8080 and
 `/mcp/` + `/messages/` → 8081.
 
 ### Downloader interface
@@ -340,7 +340,7 @@ Public database endpoints return `Cache-Control: public, max-age=3600` and all e
 | Endpoint | Description |
 |---|---|
 | `GET /bolsa/quotes/{nemotecnico}` | Current best bid/ask from Bolsa de Santiago. Returns prices, quantities, midpoint, absolute/percentage spread, quote status, and retrieval timestamp. Not cached. Requires valid `BOLSA_COOKIES` + `BOLSA_CSRF` on the web service. |
-| `GET /bolsa/btg-fixed-income` | In-memory snapshot of 14 BTG fixed-income fund-series quotes, grouped into 6 funds. The HTTP request never calls Bolsa; one background thread refreshes tickers sequentially (default 3 seconds apart, then 15 minutes between cycles). Returns buffer/freshness/error metadata. Not cached. |
+| `GET /bolsa/btg-fixed-income` | One-minute in-memory cache of 14 BTG fixed-income fund-series quotes, grouped into 6 funds. A request within the TTL returns immediately; the first request after expiry refreshes every ticker synchronously and sequentially (default 3 seconds apart). Concurrent callers share the same refresh. Returns cache/freshness/error metadata. |
 | `GET /mutual-funds` | List FM funds. Filters: `admin`, `tipo_fondo`, `vigente`, `categoria`, `tipo`. Each item includes `categoria`, `tipo`, `nombre_cat` from `categoria_fm` |
 | `GET /mutual-funds/{run}` | FM fund detail: identity + latest NAV per serie (field: `series[]`) + rentability + `category` (full object: `categoria`, `tipo`, `grupo`, `nombre_cat`, `confianza`, `periodo`) + `geo_breakdown` (`[{pais, pct_peso}]` from latest portfolio) + `latest_tac` (`tac_total`, `tac_rem_fija`, `tac_rem_var`, `tac_gastos_op`, `periodo`) |
 | `GET /mutual-funds/{run}/nav` | FM NAV history for charts. Filters: `serie`, `from_date`, `to_date`. Field: `valor_cuota` |
@@ -527,7 +527,7 @@ print(DividendosDownloader().backfill())
 | `BOLSA_COOKIES` | Session cookies for Bolsa de Santiago dividend and live-quote APIs (expires periodically) |
 | `BOLSA_CSRF` | CSRF token for Bolsa de Santiago dividend and live-quote APIs (expires with cookies) |
 | `BOLSA_QUOTE_PACE_SECONDS` | Delay between individual Bolsa requests in the BTG fixed-income buffer (default `3`) |
-| `BOLSA_QUOTE_CYCLE_SECONDS` | Delay after a full BTG fixed-income refresh cycle (default `900`) |
+| `BOLSA_QUOTE_CACHE_SECONDS` | TTL for the on-demand BTG fixed-income quote snapshot (default `60`) |
 | `NNM_EMAIL_ENABLED` | Enable scheduled mutual-fund net-new-money emails (`true`/`false`) |
 | `NNM_EMAIL_FROM` | Resend sender identity (test default: `CMF Reports <onboarding@resend.dev>`) |
 | `NNM_EMAIL_RECIPIENTS` | Comma-separated report recipients |

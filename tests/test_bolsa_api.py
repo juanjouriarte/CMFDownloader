@@ -1,4 +1,6 @@
-from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -150,7 +152,7 @@ def test_fixed_income_buffer_refreshes_all_tickers_sequentially():
     buffer = BTGFixedIncomeQuoteBuffer(
         fetcher=fetcher,
         pace_seconds=0,
-        cycle_seconds=60,
+        cache_seconds=60,
     )
     buffer.refresh_once()
     snapshot = buffer.snapshot()
@@ -170,30 +172,83 @@ def test_fixed_income_buffer_refreshes_all_tickers_sequentially():
     ]
 
 
-def test_fixed_income_endpoint_only_reads_buffer():
+def test_fixed_income_buffer_reuses_snapshot_until_cache_expires():
+    calls = []
+
+    def fetcher(ticker):
+        calls.append(ticker)
+        return _quote(nemotecnico=ticker)
+
+    buffer = BTGFixedIncomeQuoteBuffer(
+        fetcher=fetcher,
+        pace_seconds=0,
+        cache_seconds=60,
+    )
+
+    first = buffer.get_or_refresh()
+    second = buffer.get_or_refresh()
+
+    assert len(calls) == 14
+    assert second["last_completed_at"] == first["last_completed_at"]
+
+    buffer._last_completed_at -= timedelta(seconds=61)
+    buffer.get_or_refresh()
+
+    assert len(calls) == 28
+
+
+def test_fixed_income_buffer_coalesces_concurrent_refreshes():
+    calls = []
+    first_fetch_started = threading.Event()
+    release_fetch = threading.Event()
+
+    def fetcher(ticker):
+        calls.append(ticker)
+        if len(calls) == 1:
+            first_fetch_started.set()
+            assert release_fetch.wait(timeout=2)
+        return _quote(nemotecnico=ticker)
+
+    buffer = BTGFixedIncomeQuoteBuffer(
+        fetcher=fetcher,
+        pace_seconds=0,
+        cache_seconds=60,
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(buffer.get_or_refresh)
+        assert first_fetch_started.wait(timeout=2)
+        second = executor.submit(buffer.get_or_refresh)
+        release_fetch.set()
+        first.result(timeout=2)
+        second.result(timeout=2)
+
+    assert len(calls) == 14
+
+
+def test_fixed_income_endpoint_gets_or_refreshes_buffer():
     response = Response()
     buffered = {
-        "status": "warming",
-        "refreshing": True,
+        "status": "partial",
+        "refreshing": False,
         "total_instruments": 14,
-        "available_quotes": 0,
-        "pace_seconds": 5.0,
-        "cycle_seconds": 900.0,
+        "available_quotes": 13,
+        "pace_seconds": 3.0,
+        "cache_seconds": 60.0,
+        "cache_expires_at": None,
         "cycle_started_at": None,
         "last_completed_at": None,
         "last_cycle_error": None,
         "funds": [],
     }
-    with (
-        patch.object(btg_fixed_income_quote_buffer, "start") as start,
-        patch.object(
-            btg_fixed_income_quote_buffer, "snapshot", return_value=buffered
-        ) as snapshot,
-    ):
+    with patch.object(
+        btg_fixed_income_quote_buffer,
+        "get_or_refresh",
+        return_value=buffered,
+    ) as get_or_refresh:
         result = btg_fixed_income_quotes(response)
 
-    start.assert_called_once_with()
-    snapshot.assert_called_once_with()
+    get_or_refresh.assert_called_once_with()
     assert result is buffered
     assert response.headers["Cache-Control"] == "no-store"
 

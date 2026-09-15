@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 import os
 import threading
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from src.etl.bolsaSantiago.client import (
@@ -51,14 +52,14 @@ def _error_code(exc: BolsaError) -> str:
 
 
 class BTGFixedIncomeQuoteBuffer:
-    """Single-threaded, rate-limited in-memory quote cache."""
+    """On-demand, rate-limited in-memory quote cache."""
 
     def __init__(
         self,
         *,
         fetcher: Callable[[str], dict[str, Any]] = get_live_quote,
         pace_seconds: float | None = None,
-        cycle_seconds: float | None = None,
+        cache_seconds: float | None = None,
     ) -> None:
         self._fetcher = fetcher
         self.pace_seconds = (
@@ -66,14 +67,12 @@ class BTGFixedIncomeQuoteBuffer:
             if pace_seconds is not None
             else _seconds_from_env("BOLSA_QUOTE_PACE_SECONDS", 3.0, 1.0)
         )
-        self.cycle_seconds = (
-            cycle_seconds
-            if cycle_seconds is not None
-            else _seconds_from_env("BOLSA_QUOTE_CYCLE_SECONDS", 900.0, 60.0)
+        self.cache_seconds = (
+            cache_seconds
+            if cache_seconds is not None
+            else _seconds_from_env("BOLSA_QUOTE_CACHE_SECONDS", 60.0, 1.0)
         )
-        self._lock = threading.Lock()
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
+        self._condition = threading.Condition()
         self._entries: dict[str, dict[str, Any]] = {}
         self._refreshing = False
         self._cycle_started_at: datetime | None = None
@@ -88,56 +87,55 @@ class BTGFixedIncomeQuoteBuffer:
             for ticker in tickers
         )
 
-    def start(self) -> None:
-        with self._lock:
-            if self._thread and self._thread.is_alive():
-                return
-            self._stop.clear()
-            self._thread = threading.Thread(
-                target=self._run,
-                name="btg-fixed-income-quotes",
-                daemon=True,
-            )
-            self._thread.start()
-        logger.info(
-            "Started BTG fixed-income quote buffer: %d tickers, %.1fs pace, %.1fs cycle",
-            len(self.tickers),
-            self.pace_seconds,
-            self.cycle_seconds,
-        )
+    def get_or_refresh(self) -> dict[str, Any]:
+        """Return a fresh snapshot, refreshing synchronously when expired.
 
-    def stop(self) -> None:
-        self._stop.set()
-        thread = self._thread
-        if thread and thread.is_alive():
-            thread.join(timeout=min(self.pace_seconds + 1, 10))
+        Only one caller performs the refresh. Other callers arriving while that
+        refresh is running wait for it and receive the same cached result.
+        """
+        with self._condition:
+            while self._refreshing:
+                self._condition.wait()
+            if self._is_fresh(datetime.now(timezone.utc)):
+                return self._snapshot_locked()
+            self._begin_refresh_locked()
 
-    def _run(self) -> None:
-        while not self._stop.is_set():
-            self.refresh_once()
-            self._stop.wait(self.cycle_seconds)
+        self._perform_refresh()
+        return self.snapshot()
 
     def refresh_once(self) -> None:
-        with self._lock:
-            if self._refreshing:
-                return
-            self._refreshing = True
-            self._cycle_started_at = datetime.now(timezone.utc)
-            self._last_cycle_error = None
+        """Force one synchronized refresh, primarily for operations and tests."""
+        with self._condition:
+            while self._refreshing:
+                self._condition.wait()
+            self._begin_refresh_locked()
 
-        completed = True
+        self._perform_refresh()
+
+    def _is_fresh(self, now: datetime) -> bool:
+        return bool(
+            self._last_completed_at
+            and now
+            < self._last_completed_at + timedelta(seconds=self.cache_seconds)
+        )
+
+    def _begin_refresh_locked(self) -> None:
+        self._refreshing = True
+        self._cycle_started_at = datetime.now(timezone.utc)
+        self._last_cycle_error = None
+
+    def _perform_refresh(self) -> None:
+        """Fetch every ticker sequentially and release all waiting callers."""
+
         try:
             for index, ticker in enumerate(self.tickers):
-                if self._stop.is_set():
-                    completed = False
-                    break
                 attempted_at = datetime.now(timezone.utc)
                 try:
                     quote = self._fetcher(ticker)
                 except BolsaError as exc:
                     error = _error_code(exc)
                     logger.warning("Bolsa quote %s failed: %s", ticker, error)
-                    with self._lock:
+                    with self._condition:
                         previous = self._entries.get(ticker, {})
                         self._entries[ticker] = {
                             "quote": previous.get("quote"),
@@ -148,11 +146,10 @@ class BTGFixedIncomeQuoteBuffer:
                     if isinstance(
                         exc, (BolsaNotConfiguredError, BolsaAuthenticationError)
                     ):
-                        completed = False
                         break
                 except Exception:
                     logger.exception("Unexpected Bolsa quote failure for %s", ticker)
-                    with self._lock:
+                    with self._condition:
                         previous = self._entries.get(ticker, {})
                         self._entries[ticker] = {
                             "quote": previous.get("quote"),
@@ -161,38 +158,45 @@ class BTGFixedIncomeQuoteBuffer:
                         }
                         self._last_cycle_error = "internal_error"
                 else:
-                    with self._lock:
+                    with self._condition:
                         self._entries[ticker] = {
                             "quote": quote,
                             "last_attempted_at": attempted_at,
                             "last_error": None,
                         }
 
-                if index < len(self.tickers) - 1 and self._stop.wait(
-                    self.pace_seconds
-                ):
-                    completed = False
-                    break
+                if index < len(self.tickers) - 1:
+                    time.sleep(self.pace_seconds)
         finally:
-            with self._lock:
-                if completed:
-                    self._last_completed_at = datetime.now(timezone.utc)
+            with self._condition:
+                # Cache unsuccessful attempts too, preventing repeated calls when
+                # credentials expire or Bolsa is temporarily unavailable.
+                self._last_completed_at = datetime.now(timezone.utc)
                 self._refreshing = False
+                self._condition.notify_all()
 
     def snapshot(self) -> dict[str, Any]:
-        with self._lock:
-            entries = {
-                ticker: {
-                    "quote": entry.get("quote"),
-                    "last_attempted_at": entry.get("last_attempted_at"),
-                    "last_error": entry.get("last_error"),
-                }
-                for ticker, entry in self._entries.items()
+        with self._condition:
+            return self._snapshot_locked()
+
+    def _snapshot_locked(self) -> dict[str, Any]:
+        entries = {
+            ticker: {
+                "quote": entry.get("quote"),
+                "last_attempted_at": entry.get("last_attempted_at"),
+                "last_error": entry.get("last_error"),
             }
-            refreshing = self._refreshing
-            cycle_started_at = self._cycle_started_at
-            last_completed_at = self._last_completed_at
-            last_cycle_error = self._last_cycle_error
+            for ticker, entry in self._entries.items()
+        }
+        refreshing = self._refreshing
+        cycle_started_at = self._cycle_started_at
+        last_completed_at = self._last_completed_at
+        last_cycle_error = self._last_cycle_error
+        cache_expires_at = (
+            last_completed_at + timedelta(seconds=self.cache_seconds)
+            if last_completed_at
+            else None
+        )
 
         available = sum(1 for entry in entries.values() if entry.get("quote"))
         total = len(self.tickers)
@@ -236,7 +240,8 @@ class BTGFixedIncomeQuoteBuffer:
             "total_instruments": total,
             "available_quotes": available,
             "pace_seconds": self.pace_seconds,
-            "cycle_seconds": self.cycle_seconds,
+            "cache_seconds": self.cache_seconds,
+            "cache_expires_at": cache_expires_at,
             "cycle_started_at": cycle_started_at,
             "last_completed_at": last_completed_at,
             "last_cycle_error": last_cycle_error,

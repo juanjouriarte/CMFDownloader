@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 import logging
 import sys
 
@@ -19,19 +18,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from src.etl.financialStatements.api import router as financial_statements_router
 from src.api import router as public_api_router
 from src.db.engine import engine
-from src.etl.bolsaSantiago.quote_buffer import btg_fixed_income_quote_buffer
 
-
-@asynccontextmanager
-async def lifespan(_app: FastAPI):
-    btg_fixed_income_quote_buffer.start()
-    try:
-        yield
-    finally:
-        btg_fixed_income_quote_buffer.stop()
-
-
-app = FastAPI(title="CMF Downloader", lifespan=lifespan)
+app = FastAPI(title="CMF Downloader")
 
 app.add_middleware(
     CORSMiddleware,

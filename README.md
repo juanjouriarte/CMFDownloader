@@ -79,7 +79,7 @@ ETL pipeline that downloads public fund datasets from the Chilean CMF (Comisión
   - `cmf-btg-db` (`146.181.47.236`) — PostgreSQL 16 on port 5433, system install (no Docker)
   - `cmf-btg-app` (`146.181.34.54`) — web + worker + mcp via `docker-compose`
 - [x] **DB restored** — 386 MB dump (6.9M rows in `cartola_diaria`) loaded via `pg_restore`
-- [x] **HTTPS live** at `https://financial-cmf.ddns.net` — No-IP domain + nginx + Let's Encrypt
+- [x] **HTTPS live** at `https://api-cmf-146-181-34-54.sslip.io` — sslip.io + nginx + Let's Encrypt
 - [x] **nginx reverse proxy** — `/` → web (8080), `/mcp/` + `/messages/` → mcp (8081)
 - [x] **`docker-compose.yml`** — web + worker + mcp as separate containers with `restart: always`
 

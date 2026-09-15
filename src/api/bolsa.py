@@ -64,7 +64,8 @@ class BTGFixedIncomeQuotes(BaseModel):
     total_instruments: int
     available_quotes: int
     pace_seconds: float
-    cycle_seconds: float
+    cache_seconds: float
+    cache_expires_at: datetime | None
     cycle_started_at: datetime | None
     last_completed_at: datetime | None
     last_cycle_error: str | None
@@ -109,7 +110,6 @@ def live_quote(nemotecnico: str, response: Response) -> dict:
     summary="Buffered live quotes for BTG fixed-income funds",
 )
 def btg_fixed_income_quotes(response: Response) -> dict:
-    """Read the server buffer without making Bolsa requests in the HTTP path."""
+    """Return the one-minute cache, refreshing synchronously when expired."""
     response.headers["Cache-Control"] = "no-store"
-    btg_fixed_income_quote_buffer.start()
-    return btg_fixed_income_quote_buffer.snapshot()
+    return btg_fixed_income_quote_buffer.get_or_refresh()
