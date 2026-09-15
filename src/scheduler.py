@@ -88,6 +88,7 @@ def register_jobs(scheduler: BaseScheduler) -> None:
     from src.etl.investmentFunds.investmentFundsCategories import run_and_save as fi_categorize
     from src.etl.mutualFunds.mutualFundsCategories import run_and_save as fm_categorize
     from src.etl.cmf.ref_codes import run as refresh_ref_codes
+    from src.reports.mf_nnm_email import run as send_mf_nnm_reports
 
 
     def _job(job_id: str, fn):
@@ -149,6 +150,10 @@ def register_jobs(scheduler: BaseScheduler) -> None:
     scheduler.add_job(
         _job("dividends", lambda: DividendosDownloader().run()),
         "cron", hour=9, minute=0, id="dividends",
+    )
+    scheduler.add_job(
+        _job("mf_nnm_email_reports", send_mf_nnm_reports),
+        "cron", hour=9, minute=0, id="mf_nnm_email_reports",
     )
     scheduler.add_job(
         _job("fi_daily_nav", lambda: ValoresCuotaFIDownloader().run()),
