@@ -152,8 +152,8 @@ def register_jobs(scheduler: BaseScheduler) -> None:
         "cron", hour=9, minute=0, id="dividends",
     )
     scheduler.add_job(
-        _job("mf_nnm_email_reports", send_mf_nnm_reports),
-        "cron", hour=9, minute=0, id="mf_nnm_email_reports",
+        _job("mf_nnm_email_report", send_mf_nnm_reports),
+        "cron", hour=9, minute=0, id="mf_nnm_email_report",
     )
     scheduler.add_job(
         _job("fi_daily_nav", lambda: ValoresCuotaFIDownloader().run()),

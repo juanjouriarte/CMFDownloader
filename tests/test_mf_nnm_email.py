@@ -11,7 +11,6 @@ from src.reports.mf_nnm_email import (
     ReportSettings,
     ReportSnapshot,
     _html_report,
-    _idempotency_key,
     _plain_report,
     run,
     send_report,
@@ -28,9 +27,13 @@ def snapshot():
                 categoria="FDOACCNACLC",
                 nombre="Accionario Nacional <Large Cap>",
                 funds=4,
-                daily=Decimal("1500000000"),
-                mtd=Decimal("2000000000"),
-                ytd=Decimal("-3000000000"),
+                daily_clp=Decimal("1500000000"),
+                daily_usd=Decimal("2500000"),
+                mtd_clp=Decimal("2000000000"),
+                mtd_usd=Decimal("4000000"),
+                ytd_clp=Decimal("-3000000000"),
+                ytd_usd=Decimal("5000000"),
+                unsupported_currency_rows=0,
             ),
         ),
     )
@@ -46,18 +49,22 @@ def test_settings_validate_enabled_configuration(monkeypatch):
 
 
 def test_report_renders_plain_text_and_escaped_html(snapshot):
-    plain = _plain_report("Accionario", snapshot)
-    rendered_html = _html_report("Accionario", snapshot)
+    plain = _plain_report(snapshot)
+    rendered_html = _html_report(snapshot)
 
     assert "1.50 bn CLP" in plain
+    assert "2.50 mm USD" in plain
     assert "-3.00 bn CLP" in plain
     assert "Accionario Nacional &lt;Large Cap&gt;" in rendered_html
     assert "Accionario Nacional <Large Cap>" not in rendered_html
+    assert "BTG PACTUAL" in rendered_html
+    assert "High-level overview" in rendered_html
+    assert "Detailed classifications" in rendered_html
 
 
 def test_empty_high_level_report_is_explicit(snapshot):
-    assert "No funds are currently assigned" in _plain_report("Estructurado", snapshot)
-    assert "No funds are currently assigned" in _html_report("Estructurado", snapshot)
+    assert "No funds are currently assigned" in _plain_report(snapshot)
+    assert "No funds are currently assigned" in _html_report(snapshot)
 
 
 def test_send_report_uses_resend_and_idempotency(snapshot):
@@ -73,14 +80,15 @@ def test_send_report_uses_resend_and_idempotency(snapshot):
     session = MagicMock()
     session.post.return_value = response
     with patch("src.reports.mf_nnm_email.make_session", return_value=session) as factory:
-        assert send_report("Accionario", snapshot, settings) == "email-123"
+        assert send_report(snapshot, settings) == "email-123"
 
     response.raise_for_status.assert_called_once_with()
     headers = factory.call_args.kwargs["headers"]
     assert headers["Authorization"] == "Bearer test-key"
-    assert headers["Idempotency-Key"] == "mf-nnm-2026-09-14-accionario"
+    assert headers["Idempotency-Key"] == "mf-nnm-summary-v2-2026-09-14"
     request = session.post.call_args
     assert request.kwargs["json"]["to"] == ["recipient@example.com"]
+    assert request.kwargs["json"]["subject"] == "BTG | Mutual Funds NNM | 2026-09-14"
     session.close.assert_called_once_with()
 
 
@@ -90,10 +98,4 @@ def test_disabled_job_does_not_query_or_send(monkeypatch):
         result = run()
 
     load.assert_not_called()
-    assert result.skipped == 5
-
-
-def test_idempotency_key_is_stable():
-    assert _idempotency_key("Inversionistas Calificados", date(2026, 9, 14)) == (
-        "mf-nnm-2026-09-14-inversionistas-calificados"
-    )
+    assert result.skipped == 1
