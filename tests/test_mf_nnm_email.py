@@ -29,6 +29,8 @@ def snapshot():
                 funds=4,
                 daily_clp=Decimal("1500000000"),
                 daily_usd=Decimal("2500000"),
+                week_clp=Decimal("1750000000"),
+                week_usd=Decimal("3000000"),
                 mtd_clp=Decimal("2000000000"),
                 mtd_usd=Decimal("4000000"),
                 ytd_clp=Decimal("-3000000000"),
@@ -57,14 +59,16 @@ def test_report_renders_plain_text_and_escaped_html(snapshot):
     assert "-3.00 bn CLP" in plain
     assert "Accionario Nacional &lt;Large Cap&gt;" in rendered_html
     assert "Accionario Nacional <Large Cap>" not in rendered_html
-    assert "BTG PACTUAL" in rendered_html
-    assert "High-level overview" in rendered_html
-    assert "Detailed classifications" in rendered_html
+    assert "BTG Pactual" in rendered_html
+    assert "Fondos Mutuos · Net New Money" in rendered_html
+    assert "Clasificación general" in rendered_html
+    assert "Detalle por clasificación" in rendered_html
+    assert ">1W<" in rendered_html
 
 
-def test_empty_high_level_report_is_explicit(snapshot):
-    assert "No funds are currently assigned" in _plain_report(snapshot)
-    assert "No funds are currently assigned" in _html_report(snapshot)
+def test_inactive_high_level_types_are_omitted(snapshot):
+    assert "Estructurado" not in _plain_report(snapshot)
+    assert "Estructurado" not in _html_report(snapshot)
 
 
 def test_send_report_uses_resend_and_idempotency(snapshot):
@@ -85,10 +89,10 @@ def test_send_report_uses_resend_and_idempotency(snapshot):
     response.raise_for_status.assert_called_once_with()
     headers = factory.call_args.kwargs["headers"]
     assert headers["Authorization"] == "Bearer test-key"
-    assert headers["Idempotency-Key"] == "mf-nnm-summary-v2-2026-09-14"
+    assert headers["Idempotency-Key"] == "mf-nnm-summary-v4-2026-09-14"
     request = session.post.call_args
     assert request.kwargs["json"]["to"] == ["recipient@example.com"]
-    assert request.kwargs["json"]["subject"] == "BTG | Mutual Funds NNM | 2026-09-14"
+    assert request.kwargs["json"]["subject"] == "BTG | Fondos Mutuos NNM | 2026-09-14"
     session.close.assert_called_once_with()
 
 
