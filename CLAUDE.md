@@ -321,6 +321,7 @@ AUM figures are CLP. FM net new money uses `cartola_diaria` generated columns (`
 | `mf_categories` | Day 5 of month 09:15 | FM fund classification → categoria_fm |
 | `mf_costs` | Day 5 of month 09:30 | MF monthly TAC costs |
 | `dividends` | Daily 09:00 | Dividends + capital changes (Bolsa de Santiago) |
+| `mf_nnm_email_reports` | Daily 09:00 | Five FM net-new-money emails by high-level classification (daily/MTD/YTD) |
 | `fi_daily_nav` | Daily 09:30 | FI daily NAV/AUM (vigente funds only) |
 | `fi_rentabilidad` | Daily 10:00 | Refresh `mv_rentabilidad_fi` (FI returns) |
 | `fi_shareholders` | Day 5 of month 10:00 | FI quarterly shareholders + cuotas (vigente only) |
@@ -520,6 +521,10 @@ print(DividendosDownloader().backfill())
 | `DOWNLOADS_DIR` | Local path for downloaded raw files (default: `./downloads`) |
 | `BOLSA_COOKIES` | Session cookies for Bolsa de Santiago API (expires periodically) |
 | `BOLSA_CSRF` | CSRF token for Bolsa de Santiago API (expires with cookies) |
+| `NNM_EMAIL_ENABLED` | Enable scheduled mutual-fund net-new-money emails (`true`/`false`) |
+| `NNM_EMAIL_FROM` | Resend sender identity (test default: `CMF Reports <onboarding@resend.dev>`) |
+| `NNM_EMAIL_RECIPIENTS` | Comma-separated report recipients |
+| `RESEND_API_KEY` | Resend API key used only by the worker; never commit it |
 
 Set locally via `.env`. Production environment variables are configured for the
 Oracle-hosted Docker Compose services.

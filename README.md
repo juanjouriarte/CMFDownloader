@@ -9,7 +9,7 @@ ETL pipeline that downloads public fund datasets from the Chilean CMF (Comisión
 ### Infrastructure
 - [x] Project structure: domain packages with `downloaders/`, `loaders/`, `db/models/`
 - [x] `BaseDownloader` with incremental `run()` + historical `backfill()`
-- [x] APScheduler (16 jobs) — daily + monthly + quarterly
+- [x] APScheduler — daily + monthly + quarterly ETL and reporting jobs
 - [x] **Decoupled processes** — `web` (FastAPI), `worker` (BlockingScheduler), and `mcp` (FastMCP SSE) run as independent containers via `docker-compose`
 - [x] **Job run tracking** — every scheduler execution recorded in `job_runs` (status, duration, rows, errors)
 - [x] **Retry logic** — all downloaders use `make_session()` with a `Retry` transport adapter (3 attempts, exponential backoff, 429/5xx)

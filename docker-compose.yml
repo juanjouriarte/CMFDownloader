@@ -44,6 +44,10 @@ services:
       - DB_MAX_OVERFLOW=${DB_MAX_OVERFLOW:-2}
       - DB_STATEMENT_TIMEOUT_MS=0
       - DB_APPLICATION_NAME=cmfdownloader-worker
+      - NNM_EMAIL_ENABLED=${NNM_EMAIL_ENABLED:-false}
+      - NNM_EMAIL_FROM=${NNM_EMAIL_FROM:-CMF Reports <onboarding@resend.dev>}
+      - NNM_EMAIL_RECIPIENTS=${NNM_EMAIL_RECIPIENTS:-}
+      - RESEND_API_KEY=${RESEND_API_KEY:-}
 
   mcp:
     build: .
