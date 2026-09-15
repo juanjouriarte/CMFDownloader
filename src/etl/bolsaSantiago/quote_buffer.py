@@ -64,7 +64,7 @@ class BTGFixedIncomeQuoteBuffer:
         self.pace_seconds = (
             pace_seconds
             if pace_seconds is not None
-            else _seconds_from_env("BOLSA_QUOTE_PACE_SECONDS", 5.0, 1.0)
+            else _seconds_from_env("BOLSA_QUOTE_PACE_SECONDS", 3.0, 1.0)
         )
         self.cycle_seconds = (
             cycle_seconds
