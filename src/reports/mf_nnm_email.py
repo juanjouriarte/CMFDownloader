@@ -3,7 +3,6 @@ from __future__ import annotations
 import html
 import logging
 import os
-import re
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -68,9 +67,13 @@ class CategoryFlow:
     categoria: str
     nombre: str
     funds: int
-    daily: Decimal
-    mtd: Decimal
-    ytd: Decimal
+    daily_clp: Decimal
+    daily_usd: Decimal
+    mtd_clp: Decimal
+    mtd_usd: Decimal
+    ytd_clp: Decimal
+    ytd_usd: Decimal
+    unsupported_currency_rows: int
 
 
 @dataclass(frozen=True)
@@ -109,10 +112,20 @@ SELECT
     lc.nombre_cat,
     COUNT(DISTINCT cd.run_fondo) AS funds,
     COALESCE(SUM(cd.monto_aportado - cd.monto_rescatado)
-        FILTER (WHERE cd.fecha = rd.fecha), 0) AS daily,
+        FILTER (WHERE cd.fecha = rd.fecha AND cd.moneda = '$$'), 0) AS daily_clp,
     COALESCE(SUM(cd.monto_aportado - cd.monto_rescatado)
-        FILTER (WHERE cd.fecha >= DATE_TRUNC('month', rd.fecha)), 0) AS mtd,
-    COALESCE(SUM(cd.monto_aportado - cd.monto_rescatado), 0) AS ytd
+        FILTER (WHERE cd.fecha = rd.fecha AND cd.moneda = 'PROM'), 0) AS daily_usd,
+    COALESCE(SUM(cd.monto_aportado - cd.monto_rescatado)
+        FILTER (WHERE cd.fecha >= DATE_TRUNC('month', rd.fecha) AND cd.moneda = '$$'), 0) AS mtd_clp,
+    COALESCE(SUM(cd.monto_aportado - cd.monto_rescatado)
+        FILTER (WHERE cd.fecha >= DATE_TRUNC('month', rd.fecha) AND cd.moneda = 'PROM'), 0) AS mtd_usd,
+    COALESCE(SUM(cd.monto_aportado - cd.monto_rescatado)
+        FILTER (WHERE cd.moneda = '$$'), 0) AS ytd_clp,
+    COALESCE(SUM(cd.monto_aportado - cd.monto_rescatado)
+        FILTER (WHERE cd.moneda = 'PROM'), 0) AS ytd_usd,
+    COUNT(*) FILTER (
+        WHERE cd.moneda IS NULL OR cd.moneda NOT IN ('$$', 'PROM')
+    ) AS unsupported_currency_rows
 FROM reference_date rd
 JOIN cartola_diaria cd
   ON cd.fecha >= DATE_TRUNC('year', rd.fecha)
@@ -137,7 +150,7 @@ def load_snapshot() -> ReportSnapshot:
     if report_date is None:
         raise RuntimeError("No mutual-fund flow date is available.")
 
-    return ReportSnapshot(
+    snapshot = ReportSnapshot(
         report_date=report_date,
         rows=tuple(
             CategoryFlow(
@@ -145,113 +158,195 @@ def load_snapshot() -> ReportSnapshot:
                 categoria=row["categoria"],
                 nombre=row["nombre_cat"],
                 funds=int(row["funds"]),
-                daily=Decimal(row["daily"]),
-                mtd=Decimal(row["mtd"]),
-                ytd=Decimal(row["ytd"]),
+                daily_clp=Decimal(row["daily_clp"]),
+                daily_usd=Decimal(row["daily_usd"]),
+                mtd_clp=Decimal(row["mtd_clp"]),
+                mtd_usd=Decimal(row["mtd_usd"]),
+                ytd_clp=Decimal(row["ytd_clp"]),
+                ytd_usd=Decimal(row["ytd_usd"]),
+                unsupported_currency_rows=int(row["unsupported_currency_rows"]),
             )
             for row in rows
         ),
     )
+    unsupported = sum(row.unsupported_currency_rows for row in snapshot.rows)
+    if unsupported:
+        raise RuntimeError(
+            f"Cannot build currency-safe report: {unsupported} flow rows use an unsupported currency"
+        )
+    return snapshot
 
 
-def _format_clp(value: Decimal) -> str:
-    billions = value / Decimal("1000000000")
-    return f"{billions:,.2f} bn CLP"
+def _format_amount(value: Decimal, currency: str) -> str:
+    if currency == "CLP":
+        return f"{value / Decimal('1000000000'):,.2f} bn CLP"
+    return f"{value / Decimal('1000000'):,.2f} mm USD"
 
 
-def _plain_report(tipo: str, snapshot: ReportSnapshot) -> str:
-    rows = [row for row in snapshot.rows if row.tipo == tipo]
+def _totals(rows: list[CategoryFlow]) -> dict[str, Decimal]:
+    return {
+        field: sum((getattr(row, field) for row in rows), Decimal(0))
+        for field in (
+            "daily_clp", "daily_usd", "mtd_clp", "mtd_usd", "ytd_clp", "ytd_usd"
+        )
+    }
+
+
+def _plain_pair(totals: dict[str, Decimal], period: str) -> str:
+    return (
+        f"{_format_amount(totals[f'{period}_clp'], 'CLP')} / "
+        f"{_format_amount(totals[f'{period}_usd'], 'USD')}"
+    )
+
+
+def _plain_report(snapshot: ReportSnapshot) -> str:
     lines = [
-        f"CMF Mutual Funds — Net New Money — {tipo}",
+        "BTG Pactual — CMF Mutual Funds — Net New Money",
         f"Data through {snapshot.report_date.isoformat()}",
         "",
+        "HIGH-LEVEL SUMMARY",
         "Classification | Funds | Daily | MTD | YTD",
     ]
-    if not rows:
-        lines.append("No funds are currently assigned to this classification.")
-    for row in rows:
+    for tipo in REPORT_TYPES:
+        rows = [row for row in snapshot.rows if row.tipo == tipo]
+        totals = _totals(rows)
         lines.append(
-            f"{row.nombre} | {row.funds} | {_format_clp(row.daily)} | "
-            f"{_format_clp(row.mtd)} | {_format_clp(row.ytd)}"
+            f"{tipo} | {sum(row.funds for row in rows)} | "
+            f"{_plain_pair(totals, 'daily')} | {_plain_pair(totals, 'mtd')} | "
+            f"{_plain_pair(totals, 'ytd')}"
         )
-    if rows:
-        lines.extend([
-            "",
-            "Total | "
-            + str(sum(row.funds for row in rows))
-            + " | "
-            + " | ".join(
-                _format_clp(sum((getattr(row, period) for row in rows), Decimal(0)))
-                for period in ("daily", "mtd", "ytd")
-            ),
-        ])
+    lines.extend(["", "DETAILED CLASSIFICATIONS"])
+    for tipo in REPORT_TYPES:
+        lines.extend(["", tipo, "Classification | Funds | Daily | MTD | YTD"])
+        rows = [row for row in snapshot.rows if row.tipo == tipo]
+        if not rows:
+            lines.append("No funds are currently assigned to this classification.")
+        for row in rows:
+            totals = {
+                field: getattr(row, field)
+                for field in (
+                    "daily_clp", "daily_usd", "mtd_clp", "mtd_usd", "ytd_clp", "ytd_usd"
+                )
+            }
+            lines.append(
+                f"{row.nombre} | {row.funds} | {_plain_pair(totals, 'daily')} | "
+                f"{_plain_pair(totals, 'mtd')} | {_plain_pair(totals, 'ytd')}"
+            )
+    lines.extend([
+        "",
+        "CLP and USD are reported separately; no FX conversion is applied.",
+        "Net new money = contributions − redemptions.",
+    ])
     return "\n".join(lines)
 
 
-def _html_report(tipo: str, snapshot: ReportSnapshot) -> str:
-    rows = [row for row in snapshot.rows if row.tipo == tipo]
-
-    def cell(value: Decimal) -> str:
+def _money_cell(clp: Decimal, usd: Decimal) -> str:
+    def line(value: Decimal, currency: str) -> str:
         color = "#137333" if value >= 0 else "#c5221f"
-        return f'<td style="text-align:right;color:{color}">{_format_clp(value)}</td>'
+        return (
+            f'<div style="color:{color};white-space:nowrap">'
+            f"{html.escape(_format_amount(value, currency))}</div>"
+        )
+    return f'<td class="money">{line(clp, "CLP")}{line(usd, "USD")}</td>'
 
-    body_rows = []
-    for row in rows:
-        body_rows.append(
+
+def _summary_rows(snapshot: ReportSnapshot) -> str:
+    rendered = []
+    for tipo in REPORT_TYPES:
+        rows = [row for row in snapshot.rows if row.tipo == tipo]
+        totals = _totals(rows)
+        rendered.append(
             "<tr>"
-            f"<td>{html.escape(row.nombre)}</td>"
-            f'<td style="text-align:right">{row.funds}</td>'
-            f"{cell(row.daily)}{cell(row.mtd)}{cell(row.ytd)}"
+            f'<td class="label"><strong>{html.escape(tipo)}</strong></td>'
+            f'<td class="funds">{sum(row.funds for row in rows)}</td>'
+            f"{_money_cell(totals['daily_clp'], totals['daily_usd'])}"
+            f"{_money_cell(totals['mtd_clp'], totals['mtd_usd'])}"
+            f"{_money_cell(totals['ytd_clp'], totals['ytd_usd'])}"
             "</tr>"
         )
+    return "".join(rendered)
 
-    if rows:
-        totals = {
-            period: sum((getattr(row, period) for row in rows), Decimal(0))
-            for period in ("daily", "mtd", "ytd")
-        }
-        body_rows.append(
-            '<tr style="font-weight:bold;border-top:2px solid #555">'
-            "<td>Total</td>"
-            f'<td style="text-align:right">{sum(row.funds for row in rows)}</td>'
-            f"{cell(totals['daily'])}{cell(totals['mtd'])}{cell(totals['ytd'])}"
-            "</tr>"
-        )
-    else:
-        body_rows.append(
-            '<tr><td colspan="5">No funds are currently assigned to this classification.</td></tr>'
-        )
 
+def _detail_sections(snapshot: ReportSnapshot) -> str:
+    sections = []
+    for tipo in REPORT_TYPES:
+        rows = [row for row in snapshot.rows if row.tipo == tipo]
+        if rows:
+            body = "".join(
+                "<tr>"
+                f'<td class="label">{html.escape(row.nombre)}</td>'
+                f'<td class="funds">{row.funds}</td>'
+                f"{_money_cell(row.daily_clp, row.daily_usd)}"
+                f"{_money_cell(row.mtd_clp, row.mtd_usd)}"
+                f"{_money_cell(row.ytd_clp, row.ytd_usd)}"
+                "</tr>"
+                for row in rows
+            )
+        else:
+            body = (
+                '<tr><td class="empty" colspan="5">'
+                "No funds are currently assigned to this classification.</td></tr>"
+            )
+        sections.append(f"""
+<div class="section-title">{html.escape(tipo)}</div>
+<table role="presentation">
+<thead><tr><th>Detailed classification</th><th>Funds</th><th>Daily</th><th>MTD</th><th>YTD</th></tr></thead>
+<tbody>{body}</tbody>
+</table>""")
+    return "".join(sections)
+
+
+def _html_report(snapshot: ReportSnapshot) -> str:
     return f"""<!doctype html>
-<html><body style="font-family:Arial,sans-serif;color:#202124">
-<h2>CMF Mutual Funds — Net New Money</h2>
-<p><strong>{html.escape(tipo)}</strong><br>
-Data through {snapshot.report_date.isoformat()}</p>
-<table cellpadding="8" cellspacing="0" style="border-collapse:collapse;width:100%;max-width:900px">
-<thead><tr style="background:#f1f3f4;text-align:left">
-<th>Classification</th><th style="text-align:right">Funds</th>
-<th style="text-align:right">Daily</th><th style="text-align:right">MTD</th>
-<th style="text-align:right">YTD</th></tr></thead>
-<tbody>{''.join(body_rows)}</tbody>
+<html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+body{{margin:0;background:#f3f6fa;font-family:Arial,Helvetica,sans-serif;color:#1f2a44}}
+.wrap{{max-width:920px;margin:0 auto;background:#fff}}
+.header{{background:#001e62;color:#fff;padding:30px 36px;border-bottom:6px solid #418fde}}
+.brand{{font-size:24px;font-weight:800;letter-spacing:.5px}}
+.eyebrow{{font-size:11px;letter-spacing:1.7px;color:#b8ccea;margin-top:7px}}
+.content{{padding:30px 36px}}
+.date{{display:inline-block;background:#eaf1fb;color:#001e62;padding:7px 11px;border-radius:3px;font-size:12px}}
+h1{{font-size:25px;color:#001e62;margin:18px 0 5px}}
+.subtitle{{color:#5b6780;margin:0 0 24px}}
+.section-title{{font-size:17px;font-weight:700;color:#001e62;margin:30px 0 8px;border-left:5px solid #195ab4;padding-left:10px}}
+table{{border-collapse:collapse;width:100%;font-size:13px;margin-bottom:15px}}
+th{{background:#001e62;color:#fff;text-align:right;padding:10px 8px;font-size:11px;text-transform:uppercase;letter-spacing:.3px}}
+th:first-child{{text-align:left}}
+td{{border-bottom:1px solid #dce4ef;padding:10px 8px;vertical-align:top}}
+.label{{text-align:left}} .funds{{text-align:right}} .money{{text-align:right;line-height:1.55}}
+.empty{{text-align:center;color:#6e7890;font-style:italic}}
+.note{{background:#f5f8fc;border-left:4px solid #418fde;padding:13px 15px;color:#526079;font-size:12px;line-height:1.5;margin-top:25px}}
+.footer{{background:#001e62;color:#b8ccea;padding:18px 36px;font-size:11px}}
+@media(max-width:640px){{.content,.header{{padding-left:16px;padding-right:16px}}table{{font-size:11px}}td,th{{padding:8px 4px}}}}
+</style></head>
+<body><div class="wrap">
+<div class="header"><div class="brand">BTG PACTUAL</div><div class="eyebrow">ASSET MANAGEMENT INTELLIGENCE</div></div>
+<div class="content">
+<span class="date">DATA THROUGH {snapshot.report_date.isoformat()}</span>
+<h1>Mutual Funds — Net New Money</h1>
+<p class="subtitle">Daily market flows with month-to-date and year-to-date context.</p>
+<div class="section-title">High-level overview</div>
+<table role="presentation">
+<thead><tr><th>Classification</th><th>Funds</th><th>Daily</th><th>MTD</th><th>YTD</th></tr></thead>
+<tbody>{_summary_rows(snapshot)}</tbody>
 </table>
-<p style="color:#5f6368;font-size:12px">Net new money = contributions − redemptions. Source: CMF cartola diaria.</p>
-</body></html>"""
-
-
-def _idempotency_key(tipo: str, report_date: date) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", tipo.lower()).strip("-")
-    return f"mf-nnm-{report_date.isoformat()}-{slug}"
+<div class="section-title">Detailed classifications</div>
+{_detail_sections(snapshot)}
+<div class="note"><strong>Currency methodology:</strong> CLP and USD flows are shown separately. No FX conversion is applied. CMF code <strong>$$</strong> is reported as CLP and <strong>PROM</strong> as USD.<br><strong>Net new money</strong> = contributions − redemptions.</div>
+</div>
+<div class="footer">Source: Comisión para el Mercado Financiero (CMF) · Automated market report</div>
+</div></body></html>"""
 
 
 def send_report(
-    tipo: str,
     snapshot: ReportSnapshot,
     settings: ReportSettings,
 ) -> str:
     session = make_session(headers={
         "Authorization": f"Bearer {settings.api_key}",
         "Content-Type": "application/json",
-        "Idempotency-Key": _idempotency_key(tipo, snapshot.report_date),
+        "Idempotency-Key": f"mf-nnm-summary-v2-{snapshot.report_date.isoformat()}",
     })
     try:
         response = session.post(
@@ -259,11 +354,9 @@ def send_report(
             json={
                 "from": settings.sender,
                 "to": list(settings.recipients),
-                "subject": (
-                    f"CMF NNM — {tipo} — {snapshot.report_date.isoformat()}"
-                ),
-                "text": _plain_report(tipo, snapshot),
-                "html": _html_report(tipo, snapshot),
+                "subject": f"BTG | Mutual Funds NNM | {snapshot.report_date.isoformat()}",
+                "text": _plain_report(snapshot),
+                "html": _html_report(snapshot),
             },
             timeout=30,
         )
@@ -280,12 +373,9 @@ def run() -> DownloadResult:
     settings = ReportSettings.from_env()
     if not settings.enabled:
         logger.info("Mutual-fund NNM emails are disabled")
-        return DownloadResult(skipped=len(REPORT_TYPES))
+        return DownloadResult(skipped=1)
 
     snapshot = load_snapshot()
-    sent = 0
-    for tipo in REPORT_TYPES:
-        message_id = send_report(tipo, snapshot, settings)
-        sent += 1
-        logger.info("Sent mutual-fund NNM report tipo=%s id=%s", tipo, message_id)
-    return DownloadResult(downloaded=sent)
+    message_id = send_report(snapshot, settings)
+    logger.info("Sent consolidated mutual-fund NNM report id=%s", message_id)
+    return DownloadResult(downloaded=1)

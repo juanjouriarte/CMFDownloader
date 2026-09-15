@@ -321,7 +321,7 @@ AUM figures are CLP. FM net new money uses `cartola_diaria` generated columns (`
 | `mf_categories` | Day 5 of month 09:15 | FM fund classification → categoria_fm |
 | `mf_costs` | Day 5 of month 09:30 | MF monthly TAC costs |
 | `dividends` | Daily 09:00 | Dividends + capital changes (Bolsa de Santiago) |
-| `mf_nnm_email_reports` | Daily 09:00 | Five FM net-new-money emails by high-level classification (daily/MTD/YTD) |
+| `mf_nnm_email_report` | Daily 09:00 | Consolidated BTG-styled FM net-new-money email: high-level overview + detailed categories, daily/MTD/YTD split by CLP/USD |
 | `fi_daily_nav` | Daily 09:30 | FI daily NAV/AUM (vigente funds only) |
 | `fi_rentabilidad` | Daily 10:00 | Refresh `mv_rentabilidad_fi` (FI returns) |
 | `fi_shareholders` | Day 5 of month 10:00 | FI quarterly shareholders + cuotas (vigente only) |
