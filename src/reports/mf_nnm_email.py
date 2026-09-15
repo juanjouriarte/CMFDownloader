@@ -4,8 +4,9 @@ import html
 import logging
 import os
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 RESEND_URL = "https://api.resend.com/emails"
 REPORT_TYPES = tuple(tipo.value for tipo in TipoFondo)
+SANTIAGO_TZ = ZoneInfo("America/Santiago")
 
 
 @dataclass(frozen=True)
@@ -348,10 +350,14 @@ def send_report(
     snapshot: ReportSnapshot,
     settings: ReportSettings,
 ) -> str:
+    delivery_date = datetime.now(SANTIAGO_TZ).date()
     session = make_session(headers={
         "Authorization": f"Bearer {settings.api_key}",
         "Content-Type": "application/json",
-        "Idempotency-Key": f"mf-nnm-summary-v4-{snapshot.report_date.isoformat()}",
+        "Idempotency-Key": (
+            f"mf-nnm-summary-v4-{delivery_date.isoformat()}-"
+            f"data-{snapshot.report_date.isoformat()}"
+        ),
     })
     try:
         response = session.post(
