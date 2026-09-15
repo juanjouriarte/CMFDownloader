@@ -83,13 +83,19 @@ def test_send_report_uses_resend_and_idempotency(snapshot):
 
     session = MagicMock()
     session.post.return_value = response
-    with patch("src.reports.mf_nnm_email.make_session", return_value=session) as factory:
+    with (
+        patch("src.reports.mf_nnm_email.make_session", return_value=session) as factory,
+        patch("src.reports.mf_nnm_email.datetime") as clock,
+    ):
+        clock.now.return_value.date.return_value = date(2026, 9, 15)
         assert send_report(snapshot, settings) == "email-123"
 
     response.raise_for_status.assert_called_once_with()
     headers = factory.call_args.kwargs["headers"]
     assert headers["Authorization"] == "Bearer test-key"
-    assert headers["Idempotency-Key"] == "mf-nnm-summary-v4-2026-09-14"
+    assert headers["Idempotency-Key"] == (
+        "mf-nnm-summary-v4-2026-09-15-data-2026-09-14"
+    )
     request = session.post.call_args
     assert request.kwargs["json"]["to"] == ["recipient@example.com"]
     assert request.kwargs["json"]["subject"] == "BTG | Fondos Mutuos NNM | 2026-09-14"
