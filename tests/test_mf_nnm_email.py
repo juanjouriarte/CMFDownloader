@@ -7,10 +7,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.reports.mf_nnm_email import (
+    AdminAssetFlow,
     CategoryFlow,
     CurrencyFlow,
     ReportSettings,
     ReportSnapshot,
+    _admin_asset_flows,
+    _category_flows,
     _html_report,
     _plain_report,
     run,
@@ -96,6 +99,40 @@ def snapshot():
                 unsupported_currency_rows=0,
             ),
         ),
+        admin_rows=(
+            AdminAssetFlow(
+                administrador="BTG Pactual AGF",
+                tipo="Accionario",
+                funds=2,
+                currencies=(
+                    CurrencyFlow(
+                        currency="CLP",
+                        daily=Decimal("1000000000"),
+                        week=Decimal("1250000000"),
+                        mtd=Decimal("1500000000"),
+                        ytd=Decimal("2000000000"),
+                    ),
+                ),
+                unsupported_currency_rows=0,
+            ),
+        ),
+        fi_admin_rows=(
+            AdminAssetFlow(
+                administrador="LarrainVial Activos AGF",
+                tipo="Alternativo",
+                funds=1,
+                currencies=(
+                    CurrencyFlow(
+                        currency="CLP",
+                        daily=Decimal("200000000"),
+                        week=Decimal("300000000"),
+                        mtd=Decimal("400000000"),
+                        ytd=Decimal("500000000"),
+                    ),
+                ),
+                unsupported_currency_rows=0,
+            ),
+        ),
     )
 
 
@@ -130,11 +167,45 @@ def test_report_renders_plain_text_and_escaped_html(snapshot):
     assert ">1W<" in rendered_html
     assert rendered_html.count('class="card detail-card"') == 3
     assert "4 fondos" in rendered_html
+    assert "AGFs por clase de activo" in rendered_html
+    assert "BTG Pactual AGF" in rendered_html
+    assert "LarrainVial Activos AGF" in rendered_html
+    assert "AGFs POR CLASE DE ACTIVO" in plain
 
 
 def test_inactive_high_level_types_are_omitted(snapshot):
     assert "Estructurado" not in _plain_report(snapshot)
     assert "Estructurado" not in _html_report(snapshot)
+
+
+def test_granular_rows_aggregate_by_category_and_admin():
+    def row(admin, funds, daily):
+        return {
+            "tipo": "Deuda",
+            "categoria": "DEUDA_NACIONAL",
+            "nombre_cat": "Deuda Nacional",
+            "administrador": admin,
+            "funds": funds,
+            "daily_clp": Decimal(daily),
+            "week_clp": Decimal(daily) * 2,
+            "mtd_clp": Decimal(daily) * 3,
+            "ytd_clp": Decimal(daily) * 4,
+            "unsupported_currency_rows": 0,
+        }
+
+    rows = [row("AGF Uno", 2, "100"), row("AGF Dos", 3, "250")]
+    currencies = (("CLP", "clp"),)
+
+    categories = _category_flows(rows, currencies)
+    admins = _admin_asset_flows(rows, currencies)
+
+    assert len(categories) == 1
+    assert categories[0].funds == 5
+    assert categories[0].currencies[0].daily == Decimal("350")
+    assert [(item.tipo, item.administrador, item.funds) for item in admins] == [
+        ("Deuda", "AGF Dos", 3),
+        ("Deuda", "AGF Uno", 2),
+    ]
 
 
 def test_send_report_uses_resend_and_idempotency(snapshot):
@@ -160,7 +231,7 @@ def test_send_report_uses_resend_and_idempotency(snapshot):
     headers = factory.call_args.kwargs["headers"]
     assert headers["Authorization"] == "Bearer test-key"
     assert headers["Idempotency-Key"] == (
-        "fund-nnm-summary-v8-2026-09-15-fm-2026-09-14-fi-2026-09-13"
+        "fund-nnm-summary-v9-2026-09-15-fm-2026-09-14-fi-2026-09-13"
     )
     request = session.post.call_args
     assert request.kwargs["json"]["to"] == ["recipient@example.com"]

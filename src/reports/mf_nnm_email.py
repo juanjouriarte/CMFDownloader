@@ -87,11 +87,22 @@ class CategoryFlow:
 
 
 @dataclass(frozen=True)
+class AdminAssetFlow:
+    administrador: str
+    tipo: str
+    funds: int
+    currencies: tuple[CurrencyFlow, ...]
+    unsupported_currency_rows: int
+
+
+@dataclass(frozen=True)
 class ReportSnapshot:
     report_date: date
     rows: tuple[CategoryFlow, ...]
     fi_report_date: date | None = None
     fi_rows: tuple[CategoryFlow, ...] = ()
+    admin_rows: tuple[AdminAssetFlow, ...] = ()
+    fi_admin_rows: tuple[AdminAssetFlow, ...] = ()
 
 
 _REPORT_SQL = text("""
@@ -119,6 +130,7 @@ latest_categories AS (
 )
 SELECT
     rd.fecha AS report_date,
+    COALESCE(fm.razon_social_administradora, 'Sin administradora') AS administrador,
     lc.tipo,
     lc.categoria,
     lc.nombre_cat,
@@ -147,9 +159,12 @@ JOIN cartola_diaria cd
   ON cd.fecha >= DATE_TRUNC('year', rd.fecha)
  AND cd.fecha <= rd.fecha
 JOIN latest_categories lc ON lc.run_fondo = cd.run_fondo
+JOIN fondo_mutuo fm ON fm.run_fondo = cd.run_fondo
 WHERE cd.monto_aportado IS NOT NULL
-GROUP BY rd.fecha, lc.tipo, lc.categoria, lc.nombre_cat
-ORDER BY lc.tipo, lc.nombre_cat
+GROUP BY rd.fecha,
+         COALESCE(fm.razon_social_administradora, 'Sin administradora'),
+         lc.tipo, lc.categoria, lc.nombre_cat
+ORDER BY lc.tipo, lc.nombre_cat, administrador
 """)
 
 
@@ -186,6 +201,7 @@ latest_categories AS (
 flows AS (
     SELECT
         v.*,
+        COALESCE(fi.administrador, 'Sin administradora') AS administrador,
         CASE
             WHEN v.moneda IS NULL OR v.moneda = '0' THEN fi.moneda
             ELSE v.moneda
@@ -196,6 +212,7 @@ flows AS (
 )
 SELECT
     rd.fecha AS report_date,
+    v.administrador,
     COALESCE(lc.tipo, 'Otro') AS tipo,
     COALESCE(lc.categoria, 'FI_OTRO') AS categoria,
     COALESCE(lc.nombre_cat, 'Sin clasificar') AS nombre_cat,
@@ -250,34 +267,97 @@ JOIN flows v
  AND v.fecha <= rd.fecha
 LEFT JOIN latest_categories lc ON lc.run_fondo = v.run_fondo
 GROUP BY rd.fecha,
+         v.administrador,
          COALESCE(lc.tipo, 'Otro'),
          COALESCE(lc.categoria, 'FI_OTRO'),
          COALESCE(lc.nombre_cat, 'Sin clasificar')
-ORDER BY tipo, nombre_cat
+ORDER BY tipo, nombre_cat, v.administrador
 """)
 
 
-def _currency_flow(row, currency: str, suffix: str) -> CurrencyFlow:
-    return CurrencyFlow(
-        currency=currency,
-        daily=Decimal(row[f"daily_{suffix}"]),
-        week=Decimal(row[f"week_{suffix}"]),
-        mtd=Decimal(row[f"mtd_{suffix}"]),
-        ytd=Decimal(row[f"ytd_{suffix}"]),
+_FLOW_PERIODS = ("daily", "week", "mtd", "ytd")
+
+
+def _aggregate_flow_rows(
+    rows,
+    currencies: tuple[tuple[str, str], ...],
+    key_fields: tuple[str, ...],
+) -> list[tuple[tuple[str, ...], int, tuple[CurrencyFlow, ...], int]]:
+    buckets: dict[tuple[str, ...], dict] = {}
+    for row in rows:
+        key = tuple(row[field] for field in key_fields)
+        bucket = buckets.setdefault(
+            key,
+            {
+                "funds": 0,
+                "unsupported": 0,
+                "values": {
+                    (period, suffix): Decimal(0)
+                    for _, suffix in currencies
+                    for period in _FLOW_PERIODS
+                },
+            },
+        )
+        bucket["funds"] += int(row["funds"])
+        bucket["unsupported"] += int(row["unsupported_currency_rows"])
+        for _, suffix in currencies:
+            for period in _FLOW_PERIODS:
+                bucket["values"][(period, suffix)] += Decimal(
+                    row[f"{period}_{suffix}"]
+                )
+
+    aggregated = []
+    for key, bucket in sorted(buckets.items()):
+        flows = tuple(
+            CurrencyFlow(
+                currency=currency,
+                daily=bucket["values"][("daily", suffix)],
+                week=bucket["values"][("week", suffix)],
+                mtd=bucket["values"][("mtd", suffix)],
+                ytd=bucket["values"][("ytd", suffix)],
+            )
+            for currency, suffix in currencies
+        )
+        aggregated.append(
+            (key, bucket["funds"], flows, bucket["unsupported"])
+        )
+    return aggregated
+
+
+def _category_flows(
+    rows,
+    currencies: tuple[tuple[str, str], ...],
+) -> tuple[CategoryFlow, ...]:
+    return tuple(
+        CategoryFlow(
+            tipo=key[0],
+            categoria=key[1],
+            nombre=key[2],
+            funds=funds,
+            currencies=flows,
+            unsupported_currency_rows=unsupported,
+        )
+        for key, funds, flows, unsupported in _aggregate_flow_rows(
+            rows, currencies, ("tipo", "categoria", "nombre_cat")
+        )
     )
 
 
-def _category_flow(row, currencies: tuple[tuple[str, str], ...]) -> CategoryFlow:
-    return CategoryFlow(
-        tipo=row["tipo"],
-        categoria=row["categoria"],
-        nombre=row["nombre_cat"],
-        funds=int(row["funds"]),
-        currencies=tuple(
-            _currency_flow(row, currency, suffix)
-            for currency, suffix in currencies
-        ),
-        unsupported_currency_rows=int(row["unsupported_currency_rows"]),
+def _admin_asset_flows(
+    rows,
+    currencies: tuple[tuple[str, str], ...],
+) -> tuple[AdminAssetFlow, ...]:
+    return tuple(
+        AdminAssetFlow(
+            administrador=key[1],
+            tipo=key[0],
+            funds=funds,
+            currencies=flows,
+            unsupported_currency_rows=unsupported,
+        )
+        for key, funds, flows, unsupported in _aggregate_flow_rows(
+            rows, currencies, ("tipo", "administrador")
+        )
     )
 
 
@@ -300,6 +380,7 @@ def load_snapshot() -> ReportSnapshot:
             "No investment-fund daily flows or classifications are available."
         )
 
+    fm_currencies = (("CLP", "clp"), ("USD", "usd"))
     fi_currencies = (
         ("CLP", "clp"), ("USD", "usd"), ("EUR", "eur"),
         ("COP", "cop"), ("PEN", "pen"),
@@ -307,15 +388,11 @@ def load_snapshot() -> ReportSnapshot:
 
     snapshot = ReportSnapshot(
         report_date=report_date,
-        rows=tuple(
-            _category_flow(row, (("CLP", "clp"), ("USD", "usd")))
-            for row in rows
-        ),
+        rows=_category_flows(rows, fm_currencies),
         fi_report_date=fi_rows[0]["report_date"],
-        fi_rows=tuple(
-            _category_flow(row, fi_currencies)
-            for row in fi_rows
-        ),
+        fi_rows=_category_flows(fi_rows, fi_currencies),
+        admin_rows=_admin_asset_flows(rows, fm_currencies),
+        fi_admin_rows=_admin_asset_flows(fi_rows, fi_currencies),
     )
     unsupported = sum(
         row.unsupported_currency_rows
@@ -334,7 +411,10 @@ def _format_amount(value: Decimal, currency: str) -> str:
     return f"{value / Decimal('1000000'):,.2f} mm {currency}"
 
 
-def _amounts(row: CategoryFlow, period: str) -> dict[str, Decimal]:
+def _amounts(
+    row: CategoryFlow | AdminAssetFlow,
+    period: str,
+) -> dict[str, Decimal]:
     return {flow.currency: getattr(flow, period) for flow in row.currencies}
 
 
@@ -377,6 +457,7 @@ def _plain_section(
     report_date: date,
     section_rows: tuple[CategoryFlow, ...],
     type_order: tuple[str, ...],
+    admin_rows: tuple[AdminAssetFlow, ...],
 ) -> list[str]:
     lines = [
         title,
@@ -404,6 +485,24 @@ def _plain_section(
                 f"{_plain_amounts(_amounts(row, 'mtd'))} | "
                 f"{_plain_amounts(_amounts(row, 'ytd'))}"
             )
+    if admin_rows:
+        lines.extend(["", "AGFs POR CLASE DE ACTIVO"])
+        for tipo in _active_types(section_rows, type_order):
+            matching = sorted(
+                (row for row in admin_rows if row.tipo == tipo),
+                key=lambda row: row.administrador.casefold(),
+            )
+            if not matching:
+                continue
+            lines.extend([tipo, "AGF | Fondos | Día | 1W | MTD | YTD"])
+            for row in matching:
+                lines.append(
+                    f"{row.administrador} | {row.funds} | "
+                    f"{_plain_amounts(_amounts(row, 'daily'))} | "
+                    f"{_plain_amounts(_amounts(row, 'week'))} | "
+                    f"{_plain_amounts(_amounts(row, 'mtd'))} | "
+                    f"{_plain_amounts(_amounts(row, 'ytd'))}"
+                )
     return lines
 
 
@@ -413,6 +512,7 @@ def _plain_report(snapshot: ReportSnapshot) -> str:
         snapshot.report_date,
         snapshot.rows,
         REPORT_TYPES,
+        snapshot.admin_rows,
     )
     if snapshot.fi_report_date and snapshot.fi_rows:
         lines.extend([""])
@@ -421,6 +521,7 @@ def _plain_report(snapshot: ReportSnapshot) -> str:
             snapshot.fi_report_date,
             snapshot.fi_rows,
             FI_REPORT_TYPES,
+            snapshot.fi_admin_rows,
         ))
     lines.extend([
         "",
@@ -491,11 +592,46 @@ def _detail_sections(
     return "".join(sections)
 
 
+def _admin_sections(
+    section_rows: tuple[CategoryFlow, ...],
+    admin_rows: tuple[AdminAssetFlow, ...],
+    type_order: tuple[str, ...],
+) -> str:
+    sections = []
+    for tipo in _active_types(section_rows, type_order):
+        rows = sorted(
+            (row for row in admin_rows if row.tipo == tipo),
+            key=lambda row: row.administrador.casefold(),
+        )
+        if not rows:
+            continue
+        body = "".join(
+            "<tr>"
+            f'<td class="label"><div class="admin">{html.escape(row.administrador)}</div></td>'
+            f'<td class="funds">{row.funds}</td>'
+            f"{_money_cell(_amounts(row, 'daily'))}"
+            f"{_money_cell(_amounts(row, 'week'))}"
+            f"{_money_cell(_amounts(row, 'mtd'))}"
+            f"{_money_cell(_amounts(row, 'ytd'))}"
+            "</tr>"
+            for row in rows
+        )
+        sections.append(f"""
+<div class="card admin-card">
+<div class="card-title"><span>{html.escape(tipo)}</span><span class="count">{len(rows)} AGFs</span></div>
+<table role="presentation">
+<thead><tr><th>AGF</th><th>Fondos</th><th>Día</th><th>1W</th><th>MTD</th><th>YTD</th></tr></thead>
+<tbody>{body}</tbody>
+</table></div>""")
+    return "".join(sections)
+
+
 def _html_section(
     title: str,
     report_date: date,
     section_rows: tuple[CategoryFlow, ...],
     type_order: tuple[str, ...],
+    admin_rows: tuple[AdminAssetFlow, ...],
 ) -> str:
     return f"""
 <div class="section-head"><h2>{html.escape(title)}</h2><span>Datos al {report_date.isoformat()}</span></div>
@@ -503,7 +639,9 @@ def _html_section(
 <thead><tr><th>Clasificación</th><th>Fondos</th><th>Día</th><th>1W</th><th>MTD</th><th>YTD</th></tr></thead>
 <tbody>{_summary_rows(section_rows, type_order)}</tbody></table></div>
 <div class="detail-label">Detalle por clasificación</div>
-{_detail_sections(section_rows, type_order)}"""
+{_detail_sections(section_rows, type_order)}
+<div class="detail-label admin-label">AGFs por clase de activo</div>
+{_admin_sections(section_rows, admin_rows, type_order)}"""
 
 
 def _html_report(snapshot: ReportSnapshot) -> str:
@@ -534,14 +672,17 @@ tr:last-child td{{border-bottom:0}}
 .type{{display:inline-block;font-size:11px;font-weight:600;color:#0f172a}}
 .type.muted{{font-size:9px;color:#195ab4;text-transform:uppercase;letter-spacing:.04em}}
 .category{{font-size:12px;color:#0f172a;margin-top:3px}}
+.admin{{font-size:11px;color:#0f172a;font-weight:500}}
+.admin-label{{margin-top:34px;color:#001e62}}
+.admin-card td{{padding-top:9px;padding-bottom:9px}}
 .note{{color:#64748b;font-size:10px;line-height:1.5;padding:1px 2px}}
 @media(max-width:640px){{body{{padding:12px 4px}}h1{{font-size:20px}}th,td{{padding:8px 5px}}table{{font-size:10px}}.category{{font-size:10px}}}}
 </style></head>
 <body><div class="wrap"><div class="top">
 <span class="brand">BTG Pactual</span><span class="date">Reporte diario</span>
 <h1>Net New Money · Fondos</h1></div>
-{_html_section("Fondos Mutuos", snapshot.report_date, snapshot.rows, REPORT_TYPES)}
-{_html_section("Fondos de Inversión", snapshot.fi_report_date, snapshot.fi_rows, FI_REPORT_TYPES) if snapshot.fi_report_date and snapshot.fi_rows else ""}
+{_html_section("Fondos Mutuos", snapshot.report_date, snapshot.rows, REPORT_TYPES, snapshot.admin_rows)}
+{_html_section("Fondos de Inversión", snapshot.fi_report_date, snapshot.fi_rows, FI_REPORT_TYPES, snapshot.fi_admin_rows) if snapshot.fi_report_date and snapshot.fi_rows else ""}
 <div class="note">FM: aportes − rescates · FI: flujo implícito por variación de cuotas · En FI no rescatables, las salidas son reducciones de cuotas, no rescates contractuales · Monedas por separado · Sin conversión FX · Fuente: CMF</div>
 </div></body></html>"""
 
@@ -556,7 +697,7 @@ def send_report(
         "Authorization": f"Bearer {settings.api_key}",
         "Content-Type": "application/json",
         "Idempotency-Key": (
-            f"fund-nnm-summary-v8-{delivery_date.isoformat()}-"
+            f"fund-nnm-summary-v9-{delivery_date.isoformat()}-"
             f"fm-{snapshot.report_date.isoformat()}-"
             f"fi-{fi_data_date.isoformat()}"
         ),
