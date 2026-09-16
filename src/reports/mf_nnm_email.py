@@ -407,7 +407,7 @@ def load_snapshot() -> ReportSnapshot:
 
 def _format_amount(value: Decimal, currency: str) -> str:
     if currency == "CLP":
-        return f"{value / Decimal('1000000000'):,.2f} bn CLP"
+        return f"{value / Decimal('1000000'):,.2f} mm CLP"
     return f"{value / Decimal('1000000'):,.2f} mm {currency}"
 
 
@@ -697,7 +697,7 @@ def send_report(
         "Authorization": f"Bearer {settings.api_key}",
         "Content-Type": "application/json",
         "Idempotency-Key": (
-            f"fund-nnm-summary-v9-{delivery_date.isoformat()}-"
+            f"fund-nnm-summary-v10-{delivery_date.isoformat()}-"
             f"fm-{snapshot.report_date.isoformat()}-"
             f"fi-{fi_data_date.isoformat()}"
         ),

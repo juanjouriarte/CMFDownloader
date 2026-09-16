@@ -149,9 +149,9 @@ def test_report_renders_plain_text_and_escaped_html(snapshot):
     plain = _plain_report(snapshot)
     rendered_html = _html_report(snapshot)
 
-    assert "1.50 bn CLP" in plain
+    assert "1,500.00 mm CLP" in plain
     assert "2.50 mm USD" in plain
-    assert "-3.00 bn CLP" in plain
+    assert "-3,000.00 mm CLP" in plain
     assert "Accionario Nacional &lt;Large Cap&gt;" in rendered_html
     assert "Accionario Nacional <Large Cap>" not in rendered_html
     assert "BTG Pactual" in rendered_html
@@ -231,7 +231,7 @@ def test_send_report_uses_resend_and_idempotency(snapshot):
     headers = factory.call_args.kwargs["headers"]
     assert headers["Authorization"] == "Bearer test-key"
     assert headers["Idempotency-Key"] == (
-        "fund-nnm-summary-v9-2026-09-15-fm-2026-09-14-fi-2026-09-13"
+        "fund-nnm-summary-v10-2026-09-15-fm-2026-09-14-fi-2026-09-13"
     )
     request = session.post.call_args
     assert request.kwargs["json"]["to"] == ["recipient@example.com"]
