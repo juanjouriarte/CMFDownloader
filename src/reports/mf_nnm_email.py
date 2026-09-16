@@ -632,7 +632,7 @@ def _detail_sections(
     sections = []
     for tipo in _active_types(section_rows, type_order):
         rows = [row for row in section_rows if row.tipo == tipo]
-        cards = []
+        cards: list[tuple[str, int]] = []
         for row in rows:
             matching = sorted(
                 (admin for admin in admin_rows if admin.categoria == row.categoria),
@@ -643,24 +643,47 @@ def _detail_sections(
                 for currency in CURRENCY_ORDER
                 if any(flow.currency == currency for flow in row.currencies)
             )
-            cards.append(f"""
+            active_currency_rows = sum(
+                2 + sum(
+                    any(
+                        getattr(currency_flow(admin, currency), period)
+                        for period in _FLOW_PERIODS
+                    )
+                    for admin in matching
+                )
+                for currency in CURRENCY_ORDER
+                if any(flow.currency == currency for flow in row.currencies)
+                and (
+                    any(
+                        getattr(currency_flow(row, currency), period)
+                        for period in _FLOW_PERIODS
+                    )
+                    or any(
+                        getattr(currency_flow(admin, currency), period)
+                        for admin in matching
+                        for period in _FLOW_PERIODS
+                    )
+                )
+            )
+            card = f"""
 <div class="category-card">
 <div class="category-card-head"><span>{html.escape(row.nombre)}</span><span>{len(matching)} AGFs · {row.funds} fondos</span></div>
-{tables}</div>""")
+{tables}</div>"""
+            cards.append((card, active_currency_rows))
 
-        grid_rows = []
-        for index in range(0, len(cards), 2):
-            left = f'<td class="grid-cell" width="50%">{cards[index]}</td>'
-            right = (
-                f'<td class="grid-cell" width="50%">{cards[index + 1]}</td>'
-                if index + 1 < len(cards)
-                else '<td class="grid-cell empty-grid-cell" width="50%"></td>'
-            )
-            grid_rows.append(f"<tr>{left}{right}</tr>")
+        columns: list[list[str]] = [[], []]
+        column_weights = [0, 0]
+        for card, weight in cards:
+            column = 0 if column_weights[0] <= column_weights[1] else 1
+            columns[column].append(card)
+            column_weights[column] += weight
         sections.append(f"""
 <div class="detail-group">
-<div class="detail-group-head"><span>{html.escape(tipo)}</span><span>{len(rows)} clasificaciones · {sum(row.funds for row in rows)} fondos</span></div>
-<table role="presentation" class="category-grid" cellspacing="8" cellpadding="0"><tbody>{''.join(grid_rows)}</tbody></table>
+<div class="detail-group-head"><div class="detail-group-title">{html.escape(tipo)}</div><div class="detail-group-count">{len(rows)} clasificaciones · {sum(row.funds for row in rows)} fondos</div></div>
+<table role="presentation" class="category-columns" cellspacing="0" cellpadding="0"><tbody><tr>
+<td class="category-column" width="50%">{''.join(columns[0])}</td>
+<td class="category-column" width="50%">{''.join(columns[1])}</td>
+</tr></tbody></table>
 </div>""")
     return "".join(sections)
 
@@ -710,11 +733,12 @@ tr:last-child td{{border-bottom:0}}
 .type.muted{{font-size:9px;color:#195ab4;text-transform:uppercase;letter-spacing:.04em}}
 .category{{font-size:12px;color:#0f172a;margin-top:3px}}
 .detail-group{{margin:0 0 20px}}
-.detail-group-head{{font-size:13px;font-weight:600;color:#001e62;padding:0 2px 5px}}
-.detail-group-head span:last-child{{float:right;color:#64748b;font-size:10px;font-weight:500}}
-.category-grid{{border-collapse:separate;width:100%;table-layout:fixed;margin:0}}
-.grid-cell{{border:0;padding:0;vertical-align:top}}
-.category-card{{background:#fff;border:1px solid #e2e8f0;border-radius:9px;overflow:hidden;margin:0}}
+.detail-group-head{{padding:2px 6px 9px}}
+.detail-group-title{{font-size:13px;font-weight:600;line-height:1.3;color:#001e62}}
+.detail-group-count{{margin-top:3px;color:#64748b;font-size:10px;font-weight:500;line-height:1.3}}
+.category-columns{{border-collapse:collapse;width:100%;table-layout:fixed;margin:0}}
+.category-column{{border:0;padding:0 4px;vertical-align:top}}
+.category-card{{background:#fff;border:1px solid #e2e8f0;border-radius:9px;overflow:hidden;margin:0 0 8px}}
 .category-card-head{{padding:11px 12px;border-bottom:1px solid #dce5f2;font-size:11px;font-weight:600;line-height:1.35;color:#0f172a}}
 .category-card-head span:last-child{{display:block;margin-top:3px;color:#64748b;font-size:9px;font-weight:500}}
 .currency-label{{padding:8px 9px 4px;color:#195ab4;font-size:8px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}}
@@ -727,7 +751,7 @@ tr:last-child td{{border-bottom:0}}
 .compact-money{{text-align:right;font-size:8px;line-height:1.2;font-variant-numeric:tabular-nums;white-space:nowrap}}
 .total-row td{{background:#f8fafc;font-weight:600}}
 .note{{color:#64748b;font-size:10px;line-height:1.5;padding:1px 2px}}
-@media(max-width:640px){{body{{padding:12px 4px}}h1{{font-size:20px}}th,td{{padding:8px 5px}}table{{font-size:10px}}.category{{font-size:10px}}.grid-cell{{display:block!important;width:100%!important;padding-bottom:8px!important}}.empty-grid-cell{{display:none!important}}.agf-flow-table th,.agf-flow-table td{{padding:6px 3px!important}}}}
+@media(max-width:640px){{body{{padding:12px 4px}}h1{{font-size:20px}}th,td{{padding:8px 5px}}table{{font-size:10px}}.category{{font-size:10px}}.category-column{{display:block!important;width:100%!important;padding:0!important}}.agf-flow-table th,.agf-flow-table td{{padding:6px 3px!important}}}}
 </style></head>
 <body><div class="wrap"><div class="top">
 <span class="brand">BTG Pactual</span><span class="date">Reporte diario</span>
@@ -748,7 +772,7 @@ def send_report(
         "Authorization": f"Bearer {settings.api_key}",
         "Content-Type": "application/json",
         "Idempotency-Key": (
-            f"fund-nnm-summary-v12-{delivery_date.isoformat()}-"
+            f"fund-nnm-summary-v13-{delivery_date.isoformat()}-"
             f"fm-{snapshot.report_date.isoformat()}-"
             f"fi-{fi_data_date.isoformat()}"
         ),
