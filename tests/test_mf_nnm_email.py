@@ -165,7 +165,10 @@ def test_report_renders_plain_text_and_escaped_html(snapshot):
     assert "Clasificación general" in rendered_html
     assert "Detalle por clasificación" in rendered_html
     assert ">1W<" in rendered_html
-    assert rendered_html.count('class="card detail-card"') == 3
+    assert rendered_html.count('class="category-card"') == 3
+    assert rendered_html.count('class="detail-group"') == 3
+    assert 'class="category-grid"' in rendered_html
+    assert 'class="grid-cell empty-grid-cell"' in rendered_html
     assert "4 fondos" in rendered_html
     assert "AGFs por clase de activo" in rendered_html
     assert "BTG Pactual AGF" in rendered_html
@@ -231,7 +234,7 @@ def test_send_report_uses_resend_and_idempotency(snapshot):
     headers = factory.call_args.kwargs["headers"]
     assert headers["Authorization"] == "Bearer test-key"
     assert headers["Idempotency-Key"] == (
-        "fund-nnm-summary-v10-2026-09-15-fm-2026-09-14-fi-2026-09-13"
+        "fund-nnm-summary-v11-2026-09-15-fm-2026-09-14-fi-2026-09-13"
     )
     request = session.post.call_args
     assert request.kwargs["json"]["to"] == ["recipient@example.com"]

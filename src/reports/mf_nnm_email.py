@@ -533,7 +533,7 @@ def _plain_report(snapshot: ReportSnapshot) -> str:
     return "\n".join(lines)
 
 
-def _money_cell(amounts: dict[str, Decimal]) -> str:
+def _money_lines(amounts: dict[str, Decimal]) -> str:
     def line(value: Decimal, currency: str) -> str:
         color = "#15803d" if value > 0 else "#b91c1c"
         return (
@@ -541,7 +541,11 @@ def _money_cell(amounts: dict[str, Decimal]) -> str:
             f"{html.escape(_format_amount(value, currency))}</div>"
         )
     values = [line(value, currency) for currency, value in _ordered_amounts(amounts)]
-    return f'<td class="money">{"".join(values) if values else "—"}</td>'
+    return "".join(values) if values else "—"
+
+
+def _money_cell(amounts: dict[str, Decimal]) -> str:
+    return f'<td class="money">{_money_lines(amounts)}</td>'
 
 
 def _summary_rows(
@@ -571,24 +575,40 @@ def _detail_sections(
     sections = []
     for tipo in _active_types(section_rows, type_order):
         rows = [row for row in section_rows if row.tipo == tipo]
-        body = "".join(
-            "<tr>"
-            f'<td class="label"><div class="category">{html.escape(row.nombre)}</div></td>'
-            f'<td class="funds">{row.funds}</td>'
-            f"{_money_cell(_amounts(row, 'daily'))}"
-            f"{_money_cell(_amounts(row, 'week'))}"
-            f"{_money_cell(_amounts(row, 'mtd'))}"
-            f"{_money_cell(_amounts(row, 'ytd'))}"
-            "</tr>"
-            for row in rows
-        )
+        cards = []
+        for row in rows:
+            metrics = [
+                f'<td class="metric" width="50%">'
+                f'<div class="metric-label">{label}</div>'
+                f'<div class="metric-value">{_money_lines(_amounts(row, period))}</div>'
+                "</td>"
+                for period, label in (
+                    ("daily", "Día"), ("week", "1W"),
+                    ("mtd", "MTD"), ("ytd", "YTD"),
+                )
+            ]
+            cards.append(f"""
+<div class="category-card">
+<div class="category-card-head"><span>{html.escape(row.nombre)}</span><span class="category-count">{row.funds} fondos</span></div>
+<table role="presentation" class="metric-grid"><tbody>
+<tr>{metrics[0]}{metrics[1]}</tr>
+<tr>{metrics[2]}{metrics[3]}</tr>
+</tbody></table></div>""")
+
+        grid_rows = []
+        for index in range(0, len(cards), 2):
+            left = f'<td class="grid-cell" width="50%">{cards[index]}</td>'
+            right = (
+                f'<td class="grid-cell" width="50%">{cards[index + 1]}</td>'
+                if index + 1 < len(cards)
+                else '<td class="grid-cell empty-grid-cell" width="50%"></td>'
+            )
+            grid_rows.append(f"<tr>{left}{right}</tr>")
         sections.append(f"""
-<div class="card detail-card">
-<div class="card-title"><span>{html.escape(tipo)}</span><span class="count">{sum(row.funds for row in rows)} fondos</span></div>
-<table role="presentation">
-<thead><tr><th>Clasificación</th><th>Fondos</th><th>Día</th><th>1W</th><th>MTD</th><th>YTD</th></tr></thead>
-<tbody>{body}</tbody>
-</table></div>""")
+<div class="detail-group">
+<div class="detail-group-head"><span>{html.escape(tipo)}</span><span>{len(rows)} clasificaciones · {sum(row.funds for row in rows)} fondos</span></div>
+<table role="presentation" class="category-grid" cellspacing="8" cellpadding="0"><tbody>{''.join(grid_rows)}</tbody></table>
+</div>""")
     return "".join(sections)
 
 
@@ -672,11 +692,24 @@ tr:last-child td{{border-bottom:0}}
 .type{{display:inline-block;font-size:11px;font-weight:600;color:#0f172a}}
 .type.muted{{font-size:9px;color:#195ab4;text-transform:uppercase;letter-spacing:.04em}}
 .category{{font-size:12px;color:#0f172a;margin-top:3px}}
+.detail-group{{margin:0 0 20px}}
+.detail-group-head{{font-size:13px;font-weight:600;color:#001e62;padding:0 2px 5px}}
+.detail-group-head span:last-child{{float:right;color:#64748b;font-size:10px;font-weight:500}}
+.category-grid{{border-collapse:separate;width:100%;table-layout:fixed;margin:0}}
+.grid-cell{{border:0;padding:0;vertical-align:top}}
+.category-card{{background:#fff;border:1px solid #e2e8f0;border-radius:9px;overflow:hidden}}
+.category-card-head{{min-height:30px;padding:11px 13px;border-bottom:1px solid #e2e8f0;font-size:11px;font-weight:600;line-height:1.35;color:#0f172a}}
+.category-count{{display:block;margin-top:3px;color:#64748b;font-size:9px;font-weight:500}}
+.metric-grid{{border-collapse:collapse;width:100%;table-layout:fixed}}
+.metric{{border:0;border-right:1px solid #f1f5f9;border-bottom:1px solid #f1f5f9;padding:9px 11px;vertical-align:top;text-align:left}}
+.metric:nth-child(2n){{border-right:0}}
+.metric-label{{color:#64748b;font-size:8px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px}}
+.metric-value{{font-size:10px;line-height:1.45;font-weight:500;font-variant-numeric:tabular-nums}}
 .admin{{font-size:11px;color:#0f172a;font-weight:500}}
 .admin-label{{margin-top:34px;color:#001e62}}
 .admin-card td{{padding-top:9px;padding-bottom:9px}}
 .note{{color:#64748b;font-size:10px;line-height:1.5;padding:1px 2px}}
-@media(max-width:640px){{body{{padding:12px 4px}}h1{{font-size:20px}}th,td{{padding:8px 5px}}table{{font-size:10px}}.category{{font-size:10px}}}}
+@media(max-width:640px){{body{{padding:12px 4px}}h1{{font-size:20px}}th,td{{padding:8px 5px}}table{{font-size:10px}}.category{{font-size:10px}}.grid-cell{{display:block!important;width:100%!important;padding-bottom:8px!important}}.empty-grid-cell{{display:none!important}}.metric{{display:table-cell!important;width:50%!important;padding:9px 11px!important}}}}
 </style></head>
 <body><div class="wrap"><div class="top">
 <span class="brand">BTG Pactual</span><span class="date">Reporte diario</span>
@@ -697,7 +730,7 @@ def send_report(
         "Authorization": f"Bearer {settings.api_key}",
         "Content-Type": "application/json",
         "Idempotency-Key": (
-            f"fund-nnm-summary-v10-{delivery_date.isoformat()}-"
+            f"fund-nnm-summary-v11-{delivery_date.isoformat()}-"
             f"fm-{snapshot.report_date.isoformat()}-"
             f"fi-{fi_data_date.isoformat()}"
         ),
