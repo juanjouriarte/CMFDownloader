@@ -70,8 +70,8 @@ ETL pipeline that downloads public fund datasets from the Chilean CMF (Comisión
   - `GET /shareholders/compare` — side-by-side admin comparison: shared holders, exclusives, merge AUM summary
 
 ### MCP Server (`src/mcp_server.py`)
-- [x] **FastMCP server with 15 tools** — `search_funds`, `compare_funds`, `top_funds_by_return` (+ `as_of_date`), `net_new_money_ranking` (FM: explicit daily aportes/rescates; FI rescatable: daily `flujo_neto`; FI non-rescatable: quarterly `cuotas_fi`; `rescatable` filter; `from_date`/`to_date`), `fi_equity_activity` (quarter-over-quarter delta signals for non-rescatable FI: `raising` / `returning` / `pending_calls`; all three pipeline stages: promise → subscribed → paid; group by fund or AGF), `get_fund_full_picture` (+ enriched `top_positions`), `get_administrator_full_picture` (+ `top_fm_positions`), `compare_administrators`, `get_shareholder_positions`, `potential_clients`, `market_overview`, `get_fund_portfolio`, `top_emisores_in_market`, `emisor_fund_exposure` (domestic + foreign), `portfolio_overlap`
-- [x] **Remote integration** — SSE on port 8081, reverse-proxied at `/mcp/sse`, connected to Claude.ai via Settings → Integrations
+- [x] **FastMCP server with 16 tools** — `search_funds`, `compare_funds`, `top_funds_by_return` (+ `as_of_date`), `net_new_money_ranking` (FM: explicit daily aportes/rescates; FI rescatable: daily `flujo_neto`; FI non-rescatable: quarterly `cuotas_fi`; `rescatable` filter; `from_date`/`to_date`), `fi_equity_activity` (quarter-over-quarter delta signals for non-rescatable FI: `raising` / `returning` / `pending_calls`; all three pipeline stages: promise → subscribed → paid; group by fund or AGF), `get_fund_full_picture` (+ enriched `top_positions`), `get_administrator_full_picture` (+ `top_fm_positions`), `get_administrator_funds`, `compare_administrators`, `get_shareholder_positions`, `potential_clients`, `market_overview`, `get_fund_portfolio`, `top_emisores_in_market`, `emisor_fund_exposure` (domestic + foreign), `portfolio_overlap`
+- [x] **Remote integration** — Streamable HTTP at `/mcp/` plus legacy SSE at `/mcp/sse` on port 8081
 - [x] **AI-driven market intelligence** — M&A analysis, net new money rankings, shareholder overlap, prospecting, portfolio analysis, issuer exposure across the market
 
 ### Deployment
@@ -79,7 +79,7 @@ ETL pipeline that downloads public fund datasets from the Chilean CMF (Comisión
   - `cmf-btg-db` (`146.181.47.236`) — PostgreSQL 16 on port 5433, system install (no Docker)
   - `cmf-btg-app` (`146.181.34.54`) — web + worker + mcp via `docker-compose`
 - [x] **DB restored** — 386 MB dump (6.9M rows in `cartola_diaria`) loaded via `pg_restore`
-- [x] **HTTPS live** at `https://api-cmf-146-181-34-54.sslip.io` — sslip.io + nginx + Let's Encrypt
+- [x] **HTTPS live** at `https://btg-agf-ai-assistant-146-181-34-54.sslip.io` — sslip.io + nginx + Let's Encrypt
 - [x] **nginx reverse proxy** — `/` → web (8080), `/mcp/` + `/messages/` → mcp (8081)
 - [x] **`docker-compose.yml`** — web + worker + mcp as separate containers with `restart: always`
 
