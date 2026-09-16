@@ -258,6 +258,8 @@ Large/Small Cap detection uses `rut_emisor` overlap with IPSA ETF (run_fondo `10
 
 FI public-debt categories mirror the FM reporting hierarchy without claiming Circular No. 7 status: debt origin is national, international, or flexible; weighted-average maturity uses `fecha_vencimiento` weighted by `pct_activo_fondo`; national debt is further split by CLP/UF dominance. At least 50% of position weight must have a valid maturity or the duration is left unavailable. Non-rescatable OTDN/OTE vehicles without maturity evidence fall back to alternative-strategy classification instead of being forced into public debt. The default FI classification period is the latest quarter whose fund coverage is at least 90% of the maximum observed, preventing a partially filed new quarter from replacing the complete classification.
 
+The FM classifier treats CMF instrument code `OTROC` (otros instrumentos de capitalización) as national equity. CMF classifies it as renta variable; `situacion_instrumento` restrictions such as a commitment do not change the underlying asset class.
+
 ### Rentability materialized views
 
 Two materialized views compute returns for 1D/1W/1M/1Y/5Y/YTD periods, refreshed daily via the scheduler with `REFRESH MATERIALIZED VIEW CONCURRENTLY`.

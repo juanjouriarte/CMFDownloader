@@ -1,4 +1,5 @@
 from datetime import date
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
@@ -6,6 +7,7 @@ import pytest
 from src.etl.mutualFunds.mutualFundsCategories import (
     _classify_debt,
     _classify_equity_geography,
+    run as _classify_fm,
 )
 from src.etl.investmentFunds.investmentFundsCategories import (
     _add_maturity_days,
@@ -69,6 +71,34 @@ def test_fund_domicile_not_counted_as_market():
     # USA 76% weight → should classify as FDOACCEEUU when domicile rows excluded
     df = _make_extr([("USA", 76), (None, 14), ("Canada", 10)])
     assert _classify_equity_geography(df) == "FDOACCEEUU"
+
+
+def test_otroc_capitalization_instruments_count_as_national_equity():
+    session = MagicMock()
+    session.execute.side_effect = [
+        MagicMock(fetchall=lambda: [
+            ("8898", "ACC", "$$", None, "8873"),
+            ("8898", "OTROC", "$$", None, "880"),
+            ("8898", "CFI", "$$", None, "246"),
+        ]),
+        MagicMock(fetchall=lambda: []),
+        MagicMock(fetchall=lambda: [
+            ("8898", "FONDO MUTUO BTG PACTUAL CHILE ACCIÓN"),
+        ]),
+    ]
+    session_context = MagicMock()
+    session_context.__enter__.return_value = session
+
+    with patch(
+        "src.etl.mutualFunds.mutualFundsCategories.SessionLocal",
+        return_value=session_context,
+    ):
+        result = _classify_fm(date(2026, 8, 1))
+
+    chile_accion = result.iloc[0]
+    assert chile_accion["pct_equity"] == pytest.approx(97.5)
+    assert chile_accion["categoria"] == "FDOACCNACLC"
+    assert chile_accion["tipo"] == "Accionario"
 
 
 def test_fi_national_equity_35_pct_ipsa_is_small_mid_cap():
