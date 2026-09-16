@@ -174,6 +174,11 @@ def test_report_renders_plain_text_and_escaped_html(snapshot):
     assert rendered_html.count('class="category-columns"') == 3
     assert "detail-group-title" in rendered_html
     assert "detail-group-count" in rendered_html
+    assert (
+        '<div class="category-card-name">Accionario Nacional '
+        '&lt;Large Cap&gt;</div><div class="category-card-meta">1 AGF · 4 fondos</div>'
+        in rendered_html
+    )
     assert "Total categoría" in rendered_html
     assert "CLP · millones" in rendered_html
     assert "4 fondos" in rendered_html
@@ -243,7 +248,7 @@ def test_send_report_uses_resend_and_idempotency(snapshot):
     headers = factory.call_args.kwargs["headers"]
     assert headers["Authorization"] == "Bearer test-key"
     assert headers["Idempotency-Key"] == (
-        "fund-nnm-summary-v13-2026-09-15-fm-2026-09-14-fi-2026-09-13"
+        "fund-nnm-summary-v14-2026-09-15-fm-2026-09-14-fi-2026-09-13"
     )
     request = session.post.call_args
     assert request.kwargs["json"]["to"] == ["recipient@example.com"]

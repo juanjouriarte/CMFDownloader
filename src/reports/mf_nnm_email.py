@@ -577,6 +577,9 @@ def _detail_sections(
     admin_rows: tuple[AdminAssetFlow, ...],
     type_order: tuple[str, ...],
 ) -> str:
+    def plural(count: int, singular: str, plural_form: str) -> str:
+        return singular if count == 1 else plural_form
+
     def compact_cell(value: Decimal) -> str:
         if not value:
             return '<td class="compact-money">—</td>'
@@ -613,7 +616,7 @@ def _detail_sections(
             return (
                 f'<tr class="agf-flow-row{row_class}">'
                 f'<td class="agf-name">{html.escape(label)}'
-                f'<span>{funds} fondos</span></td>'
+                f'<span>{funds} {plural(funds, "fondo", "fondos")}</span></td>'
                 f"{compact_cell(flow.daily)}{compact_cell(flow.week)}"
                 f"{compact_cell(flow.mtd)}{compact_cell(flow.ytd)}</tr>"
             )
@@ -667,7 +670,7 @@ def _detail_sections(
             )
             card = f"""
 <div class="category-card">
-<div class="category-card-head"><span>{html.escape(row.nombre)}</span><span>{len(matching)} AGFs · {row.funds} fondos</span></div>
+<div class="category-card-head"><div class="category-card-name">{html.escape(row.nombre)}</div><div class="category-card-meta">{len(matching)} {plural(len(matching), "AGF", "AGFs")} · {row.funds} {plural(row.funds, "fondo", "fondos")}</div></div>
 {tables}</div>"""
             cards.append((card, active_currency_rows))
 
@@ -679,7 +682,7 @@ def _detail_sections(
             column_weights[column] += weight
         sections.append(f"""
 <div class="detail-group">
-<div class="detail-group-head"><div class="detail-group-title">{html.escape(tipo)}</div><div class="detail-group-count">{len(rows)} clasificaciones · {sum(row.funds for row in rows)} fondos</div></div>
+<div class="detail-group-head"><div class="detail-group-title">{html.escape(tipo)}</div><div class="detail-group-count">{len(rows)} {plural(len(rows), "clasificación", "clasificaciones")} · {sum(row.funds for row in rows)} {plural(sum(row.funds for row in rows), "fondo", "fondos")}</div></div>
 <table role="presentation" class="category-columns" cellspacing="0" cellpadding="0"><tbody><tr>
 <td class="category-column" width="50%">{''.join(columns[0])}</td>
 <td class="category-column" width="50%">{''.join(columns[1])}</td>
@@ -740,7 +743,8 @@ tr:last-child td{{border-bottom:0}}
 .category-column{{border:0;padding:0 4px;vertical-align:top}}
 .category-card{{background:#fff;border:1px solid #e2e8f0;border-radius:9px;overflow:hidden;margin:0 0 8px}}
 .category-card-head{{padding:11px 12px;border-bottom:1px solid #dce5f2;font-size:11px;font-weight:600;line-height:1.35;color:#0f172a}}
-.category-card-head span:last-child{{display:block;margin-top:3px;color:#64748b;font-size:9px;font-weight:500}}
+.category-card-name{{display:block}}
+.category-card-meta{{display:block;margin-top:4px;color:#64748b;font-size:9px;font-weight:500}}
 .currency-label{{padding:8px 9px 4px;color:#195ab4;font-size:8px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}}
 .agf-flow-table{{border-collapse:collapse;width:100%;table-layout:fixed;font-size:8px}}
 .agf-flow-table th{{padding:5px 3px;font-size:7px;letter-spacing:.03em}}
@@ -772,7 +776,7 @@ def send_report(
         "Authorization": f"Bearer {settings.api_key}",
         "Content-Type": "application/json",
         "Idempotency-Key": (
-            f"fund-nnm-summary-v13-{delivery_date.isoformat()}-"
+            f"fund-nnm-summary-v14-{delivery_date.isoformat()}-"
             f"fm-{snapshot.report_date.isoformat()}-"
             f"fi-{fi_data_date.isoformat()}"
         ),
