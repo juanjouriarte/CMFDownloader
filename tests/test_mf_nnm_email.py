@@ -12,7 +12,7 @@ from src.reports.mf_nnm_email import (
     CurrencyFlow,
     ReportSettings,
     ReportSnapshot,
-    _admin_asset_flows,
+    _admin_category_flows,
     _category_flows,
     _html_report,
     _plain_report,
@@ -103,6 +103,8 @@ def snapshot():
             AdminAssetFlow(
                 administrador="BTG Pactual AGF",
                 tipo="Accionario",
+                categoria="FDOACCNACLC",
+                nombre="Accionario Nacional <Large Cap>",
                 funds=2,
                 currencies=(
                     CurrencyFlow(
@@ -120,6 +122,8 @@ def snapshot():
             AdminAssetFlow(
                 administrador="LarrainVial Activos AGF",
                 tipo="Alternativo",
+                categoria="FI_DEUDA_PRIVADA",
+                nombre="Deuda Privada",
                 funds=1,
                 currencies=(
                     CurrencyFlow(
@@ -163,14 +167,16 @@ def test_report_renders_plain_text_and_escaped_html(snapshot):
     assert "1.00 mm EUR" in rendered_html
     assert "Datos al 2026-09-13" in rendered_html
     assert "Clasificación general" in rendered_html
-    assert "Detalle por clasificación" in rendered_html
+    assert "Detalle por clasificación y AGF" in rendered_html
     assert ">1W<" in rendered_html
-    assert rendered_html.count('class="card detail-card"') == 3
+    assert rendered_html.count('class="category-card"') == 3
+    assert rendered_html.count('class="detail-group"') == 3
+    assert "Total categoría" in rendered_html
+    assert "CLP · millones" in rendered_html
     assert "4 fondos" in rendered_html
-    assert "AGFs por clase de activo" in rendered_html
     assert "BTG Pactual AGF" in rendered_html
     assert "LarrainVial Activos AGF" in rendered_html
-    assert "AGFs POR CLASE DE ACTIVO" in plain
+    assert "AGFs POR SUBCATEGORÍA" in plain
 
 
 def test_inactive_high_level_types_are_omitted(snapshot):
@@ -197,14 +203,17 @@ def test_granular_rows_aggregate_by_category_and_admin():
     currencies = (("CLP", "clp"),)
 
     categories = _category_flows(rows, currencies)
-    admins = _admin_asset_flows(rows, currencies)
+    admins = _admin_category_flows(rows, currencies)
 
     assert len(categories) == 1
     assert categories[0].funds == 5
     assert categories[0].currencies[0].daily == Decimal("350")
-    assert [(item.tipo, item.administrador, item.funds) for item in admins] == [
-        ("Deuda", "AGF Dos", 3),
-        ("Deuda", "AGF Uno", 2),
+    assert [
+        (item.tipo, item.categoria, item.administrador, item.funds)
+        for item in admins
+    ] == [
+        ("Deuda", "DEUDA_NACIONAL", "AGF Dos", 3),
+        ("Deuda", "DEUDA_NACIONAL", "AGF Uno", 2),
     ]
 
 
@@ -231,7 +240,7 @@ def test_send_report_uses_resend_and_idempotency(snapshot):
     headers = factory.call_args.kwargs["headers"]
     assert headers["Authorization"] == "Bearer test-key"
     assert headers["Idempotency-Key"] == (
-        "fund-nnm-summary-v10-2026-09-15-fm-2026-09-14-fi-2026-09-13"
+        "fund-nnm-summary-v12-2026-09-15-fm-2026-09-14-fi-2026-09-13"
     )
     request = session.post.call_args
     assert request.kwargs["json"]["to"] == ["recipient@example.com"]

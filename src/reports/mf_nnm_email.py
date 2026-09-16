@@ -90,6 +90,8 @@ class CategoryFlow:
 class AdminAssetFlow:
     administrador: str
     tipo: str
+    categoria: str
+    nombre: str
     funds: int
     currencies: tuple[CurrencyFlow, ...]
     unsupported_currency_rows: int
@@ -343,20 +345,24 @@ def _category_flows(
     )
 
 
-def _admin_asset_flows(
+def _admin_category_flows(
     rows,
     currencies: tuple[tuple[str, str], ...],
 ) -> tuple[AdminAssetFlow, ...]:
     return tuple(
         AdminAssetFlow(
-            administrador=key[1],
+            administrador=key[3],
             tipo=key[0],
+            categoria=key[1],
+            nombre=key[2],
             funds=funds,
             currencies=flows,
             unsupported_currency_rows=unsupported,
         )
         for key, funds, flows, unsupported in _aggregate_flow_rows(
-            rows, currencies, ("tipo", "administrador")
+            rows,
+            currencies,
+            ("tipo", "categoria", "nombre_cat", "administrador"),
         )
     )
 
@@ -391,8 +397,8 @@ def load_snapshot() -> ReportSnapshot:
         rows=_category_flows(rows, fm_currencies),
         fi_report_date=fi_rows[0]["report_date"],
         fi_rows=_category_flows(fi_rows, fi_currencies),
-        admin_rows=_admin_asset_flows(rows, fm_currencies),
-        fi_admin_rows=_admin_asset_flows(fi_rows, fi_currencies),
+        admin_rows=_admin_category_flows(rows, fm_currencies),
+        fi_admin_rows=_admin_category_flows(fi_rows, fi_currencies),
     )
     unsupported = sum(
         row.unsupported_currency_rows
@@ -486,15 +492,17 @@ def _plain_section(
                 f"{_plain_amounts(_amounts(row, 'ytd'))}"
             )
     if admin_rows:
-        lines.extend(["", "AGFs POR CLASE DE ACTIVO"])
-        for tipo in _active_types(section_rows, type_order):
+        lines.extend(["", "AGFs POR SUBCATEGORÍA"])
+        for category in section_rows:
             matching = sorted(
-                (row for row in admin_rows if row.tipo == tipo),
+                (row for row in admin_rows if row.categoria == category.categoria),
                 key=lambda row: row.administrador.casefold(),
             )
-            if not matching:
-                continue
-            lines.extend([tipo, "AGF | Fondos | Día | 1W | MTD | YTD"])
+            if matching:
+                lines.extend([
+                    f"{category.tipo} / {category.nombre}",
+                    "AGF | Fondos | Día | 1W | MTD | YTD",
+                ])
             for row in matching:
                 lines.append(
                     f"{row.administrador} | {row.funds} | "
@@ -566,63 +574,94 @@ def _summary_rows(
 
 def _detail_sections(
     section_rows: tuple[CategoryFlow, ...],
-    type_order: tuple[str, ...],
-) -> str:
-    sections = []
-    for tipo in _active_types(section_rows, type_order):
-        rows = [row for row in section_rows if row.tipo == tipo]
-        body = "".join(
-            "<tr>"
-            f'<td class="label"><div class="category">{html.escape(row.nombre)}</div></td>'
-            f'<td class="funds">{row.funds}</td>'
-            f"{_money_cell(_amounts(row, 'daily'))}"
-            f"{_money_cell(_amounts(row, 'week'))}"
-            f"{_money_cell(_amounts(row, 'mtd'))}"
-            f"{_money_cell(_amounts(row, 'ytd'))}"
-            "</tr>"
-            for row in rows
-        )
-        sections.append(f"""
-<div class="card detail-card">
-<div class="card-title"><span>{html.escape(tipo)}</span><span class="count">{sum(row.funds for row in rows)} fondos</span></div>
-<table role="presentation">
-<thead><tr><th>Clasificación</th><th>Fondos</th><th>Día</th><th>1W</th><th>MTD</th><th>YTD</th></tr></thead>
-<tbody>{body}</tbody>
-</table></div>""")
-    return "".join(sections)
-
-
-def _admin_sections(
-    section_rows: tuple[CategoryFlow, ...],
     admin_rows: tuple[AdminAssetFlow, ...],
     type_order: tuple[str, ...],
 ) -> str:
+    def compact_cell(value: Decimal) -> str:
+        if not value:
+            return '<td class="compact-money">—</td>'
+        color = "#15803d" if value > 0 else "#b91c1c"
+        amount = value / Decimal("1000000")
+        return (
+            f'<td class="compact-money" style="color:{color}">'
+            f"{amount:,.1f}</td>"
+        )
+
+    def currency_flow(row, currency: str) -> CurrencyFlow:
+        return next(
+            (flow for flow in row.currencies if flow.currency == currency),
+            CurrencyFlow(currency, Decimal(0), Decimal(0), Decimal(0), Decimal(0)),
+        )
+
+    def currency_table(
+        category: CategoryFlow,
+        category_admins: list[AdminAssetFlow],
+        currency: str,
+    ) -> str:
+        total = currency_flow(category, currency)
+        active_admins = [
+            row for row in category_admins
+            if any(getattr(currency_flow(row, currency), period) for period in _FLOW_PERIODS)
+        ]
+        if not active_admins and not any(
+            getattr(total, period) for period in _FLOW_PERIODS
+        ):
+            return ""
+
+        def flow_row(label: str, funds: int, flow: CurrencyFlow, total_row=False) -> str:
+            row_class = " total-row" if total_row else ""
+            return (
+                f'<tr class="agf-flow-row{row_class}">'
+                f'<td class="agf-name">{html.escape(label)}'
+                f'<span>{funds} fondos</span></td>'
+                f"{compact_cell(flow.daily)}{compact_cell(flow.week)}"
+                f"{compact_cell(flow.mtd)}{compact_cell(flow.ytd)}</tr>"
+            )
+
+        body = flow_row("Total categoría", category.funds, total, True)
+        body += "".join(
+            flow_row(row.administrador, row.funds, currency_flow(row, currency))
+            for row in active_admins
+        )
+        return f"""
+<div class="currency-label">{html.escape(currency)} · millones</div>
+<table role="presentation" class="agf-flow-table">
+<thead><tr><th>AGF</th><th>Día</th><th>1W</th><th>MTD</th><th>YTD</th></tr></thead>
+<tbody>{body}</tbody></table>"""
+
     sections = []
     for tipo in _active_types(section_rows, type_order):
-        rows = sorted(
-            (row for row in admin_rows if row.tipo == tipo),
-            key=lambda row: row.administrador.casefold(),
-        )
-        if not rows:
-            continue
-        body = "".join(
-            "<tr>"
-            f'<td class="label"><div class="admin">{html.escape(row.administrador)}</div></td>'
-            f'<td class="funds">{row.funds}</td>'
-            f"{_money_cell(_amounts(row, 'daily'))}"
-            f"{_money_cell(_amounts(row, 'week'))}"
-            f"{_money_cell(_amounts(row, 'mtd'))}"
-            f"{_money_cell(_amounts(row, 'ytd'))}"
-            "</tr>"
-            for row in rows
-        )
+        rows = [row for row in section_rows if row.tipo == tipo]
+        cards = []
+        for row in rows:
+            matching = sorted(
+                (admin for admin in admin_rows if admin.categoria == row.categoria),
+                key=lambda admin: admin.administrador.casefold(),
+            )
+            tables = "".join(
+                currency_table(row, matching, currency)
+                for currency in CURRENCY_ORDER
+                if any(flow.currency == currency for flow in row.currencies)
+            )
+            cards.append(f"""
+<div class="category-card">
+<div class="category-card-head"><span>{html.escape(row.nombre)}</span><span>{len(matching)} AGFs · {row.funds} fondos</span></div>
+{tables}</div>""")
+
+        grid_rows = []
+        for index in range(0, len(cards), 2):
+            left = f'<td class="grid-cell" width="50%">{cards[index]}</td>'
+            right = (
+                f'<td class="grid-cell" width="50%">{cards[index + 1]}</td>'
+                if index + 1 < len(cards)
+                else '<td class="grid-cell empty-grid-cell" width="50%"></td>'
+            )
+            grid_rows.append(f"<tr>{left}{right}</tr>")
         sections.append(f"""
-<div class="card admin-card">
-<div class="card-title"><span>{html.escape(tipo)}</span><span class="count">{len(rows)} AGFs</span></div>
-<table role="presentation">
-<thead><tr><th>AGF</th><th>Fondos</th><th>Día</th><th>1W</th><th>MTD</th><th>YTD</th></tr></thead>
-<tbody>{body}</tbody>
-</table></div>""")
+<div class="detail-group">
+<div class="detail-group-head"><span>{html.escape(tipo)}</span><span>{len(rows)} clasificaciones · {sum(row.funds for row in rows)} fondos</span></div>
+<table role="presentation" class="category-grid" cellspacing="8" cellpadding="0"><tbody>{''.join(grid_rows)}</tbody></table>
+</div>""")
     return "".join(sections)
 
 
@@ -638,10 +677,8 @@ def _html_section(
 <div class="card"><div class="card-title">Clasificación general</div><table role="presentation">
 <thead><tr><th>Clasificación</th><th>Fondos</th><th>Día</th><th>1W</th><th>MTD</th><th>YTD</th></tr></thead>
 <tbody>{_summary_rows(section_rows, type_order)}</tbody></table></div>
-<div class="detail-label">Detalle por clasificación</div>
-{_detail_sections(section_rows, type_order)}
-<div class="detail-label admin-label">AGFs por clase de activo</div>
-{_admin_sections(section_rows, admin_rows, type_order)}"""
+<div class="detail-label">Detalle por clasificación y AGF</div>
+{_detail_sections(section_rows, admin_rows, type_order)}"""
 
 
 def _html_report(snapshot: ReportSnapshot) -> str:
@@ -672,11 +709,25 @@ tr:last-child td{{border-bottom:0}}
 .type{{display:inline-block;font-size:11px;font-weight:600;color:#0f172a}}
 .type.muted{{font-size:9px;color:#195ab4;text-transform:uppercase;letter-spacing:.04em}}
 .category{{font-size:12px;color:#0f172a;margin-top:3px}}
-.admin{{font-size:11px;color:#0f172a;font-weight:500}}
-.admin-label{{margin-top:34px;color:#001e62}}
-.admin-card td{{padding-top:9px;padding-bottom:9px}}
+.detail-group{{margin:0 0 20px}}
+.detail-group-head{{font-size:13px;font-weight:600;color:#001e62;padding:0 2px 5px}}
+.detail-group-head span:last-child{{float:right;color:#64748b;font-size:10px;font-weight:500}}
+.category-grid{{border-collapse:separate;width:100%;table-layout:fixed;margin:0}}
+.grid-cell{{border:0;padding:0;vertical-align:top}}
+.category-card{{background:#fff;border:1px solid #e2e8f0;border-radius:9px;overflow:hidden;margin:0}}
+.category-card-head{{padding:11px 12px;border-bottom:1px solid #dce5f2;font-size:11px;font-weight:600;line-height:1.35;color:#0f172a}}
+.category-card-head span:last-child{{display:block;margin-top:3px;color:#64748b;font-size:9px;font-weight:500}}
+.currency-label{{padding:8px 9px 4px;color:#195ab4;font-size:8px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}}
+.agf-flow-table{{border-collapse:collapse;width:100%;table-layout:fixed;font-size:8px}}
+.agf-flow-table th{{padding:5px 3px;font-size:7px;letter-spacing:.03em}}
+.agf-flow-table th:first-child{{width:38%;padding-left:9px}}
+.agf-flow-table td{{padding:6px 3px;border-bottom:1px solid #f1f5f9}}
+.agf-flow-table .agf-name{{padding-left:9px;text-align:left;font-size:8px;line-height:1.25;overflow-wrap:anywhere}}
+.agf-name span{{display:block;color:#94a3b8;font-size:7px;font-weight:400;margin-top:2px}}
+.compact-money{{text-align:right;font-size:8px;line-height:1.2;font-variant-numeric:tabular-nums;white-space:nowrap}}
+.total-row td{{background:#f8fafc;font-weight:600}}
 .note{{color:#64748b;font-size:10px;line-height:1.5;padding:1px 2px}}
-@media(max-width:640px){{body{{padding:12px 4px}}h1{{font-size:20px}}th,td{{padding:8px 5px}}table{{font-size:10px}}.category{{font-size:10px}}}}
+@media(max-width:640px){{body{{padding:12px 4px}}h1{{font-size:20px}}th,td{{padding:8px 5px}}table{{font-size:10px}}.category{{font-size:10px}}.grid-cell{{display:block!important;width:100%!important;padding-bottom:8px!important}}.empty-grid-cell{{display:none!important}}.agf-flow-table th,.agf-flow-table td{{padding:6px 3px!important}}}}
 </style></head>
 <body><div class="wrap"><div class="top">
 <span class="brand">BTG Pactual</span><span class="date">Reporte diario</span>
@@ -697,7 +748,7 @@ def send_report(
         "Authorization": f"Bearer {settings.api_key}",
         "Content-Type": "application/json",
         "Idempotency-Key": (
-            f"fund-nnm-summary-v10-{delivery_date.isoformat()}-"
+            f"fund-nnm-summary-v12-{delivery_date.isoformat()}-"
             f"fm-{snapshot.report_date.isoformat()}-"
             f"fi-{fi_data_date.isoformat()}"
         ),
