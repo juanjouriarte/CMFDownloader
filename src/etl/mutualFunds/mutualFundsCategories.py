@@ -51,7 +51,10 @@ logger = logging.getLogger(__name__)
 # Instrument type → asset class
 # ---------------------------------------------------------------------------
 
-EQUITY_NACI  = {"ACC", "PE"}
+# CMF classifies OTROC (otros instrumentos de capitalización) as renta
+# variable. A restriction/commitment reported in situacion_instrumento does
+# not change the underlying asset class.
+EQUITY_NACI  = {"ACC", "PE", "OTROC"}
 EQUITY_EXTR  = {"ETFA", "ACE", "ADR"}
 DEBT_NACI    = {"BB", "DPC", "BE", "PDBC", "BTP", "BTU", "BU", "DPL", "BS",
                 "BNEE", "LH", "BBNEE", "BVL", "DPSA", "BH", "BC", "BCP"}
