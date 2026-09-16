@@ -8,7 +8,7 @@ from sqlalchemy import text
 from src.db.engine import SessionLocal
 
 mcp = FastMCP(
-    "BTG CMF Assistant",
+    "BTG AGF AI Assistant",
     instructions="""
 You are an expert analyst of the Chilean fund industry with access to the full CMF database.
 You have real-time data on ~1,340 mutual funds (FM) and ~1,641 investment funds (FI) from all

@@ -27,7 +27,7 @@ Two Oracle Cloud Always Free VMs (VM.Standard.E2.1.Micro — 1 OCPU, 1 GB RAM ea
 | `cmf-btg-app` | — | `146.181.34.54` | `10.0.0.10` | web + worker (Docker, port 8080) |
 
 **API base URL**: `https://api-cmf-146-181-34-54.sslip.io` (nginx + Let's Encrypt SSL)
-**MCP endpoints**: Streamable HTTP at `https://api-cmf-146-181-34-54.sslip.io/mcp/` (ChatGPT custom app) and legacy SSE at `https://api-cmf-146-181-34-54.sslip.io/mcp/sse` (existing clients)
+**MCP endpoints**: Streamable HTTP at `https://btg-agf-ai-assistant-146-181-34-54.sslip.io/mcp/` (ChatGPT custom app) and legacy SSE at `https://btg-agf-ai-assistant-146-181-34-54.sslip.io/mcp/sse` (existing clients). The former `api-cmf-146-181-34-54.sslip.io` hostname remains an HTTPS alias during migration.
 
 ### SSH access
 ```bash
@@ -209,7 +209,7 @@ The app runs as **three independent containers** on the `cmf-btg-app` VM (`docke
 - `mcp` — `python mcp_worker.py` (port 8081) — FastMCP Streamable HTTP + legacy SSE server
 
 All three have `restart: always`. A crash in one does not affect the others. nginx on the
-host terminates HTTPS (`api-cmf-146-181-34-54.sslip.io`) and reverse-proxies `/` → 8080 and
+host terminates HTTPS (`btg-agf-ai-assistant-146-181-34-54.sslip.io`, with the former API hostname as an alias) and reverse-proxies `/` → 8080 and
 `/mcp/` + `/messages/` → 8081.
 
 ### Downloader interface
@@ -288,7 +288,7 @@ The `emisores` table holds ~994k Chilean companies from the SII (tax authority) 
 
 ### MCP server (`src/mcp_server.py`)
 
-FastMCP server exposing 15 tools for AI-driven fund-market analysis. Runs as the `mcp` container (`mcp_worker.py`, SSE on port 8081), reverse-proxied by nginx at `/mcp/sse`. Connected to Claude.ai via Settings → Integrations. Tools:
+FastMCP server exposing 16 tools for AI-driven fund-market analysis. Runs as the `mcp` container (`mcp_worker.py`, Streamable HTTP and legacy SSE on port 8081), reverse-proxied by nginx at `/mcp/`. Tools:
 
 | Tool | Purpose |
 |---|---|
