@@ -27,7 +27,7 @@ Two Oracle Cloud Always Free VMs (VM.Standard.E2.1.Micro — 1 OCPU, 1 GB RAM ea
 | `cmf-btg-app` | — | `146.181.34.54` | `10.0.0.10` | web + worker (Docker, port 8080) |
 
 **API base URL**: `https://api-cmf-146-181-34-54.sslip.io` (nginx + Let's Encrypt SSL)
-**MCP endpoint**: `https://api-cmf-146-181-34-54.sslip.io/mcp/sse` (add in Claude.ai → Settings → Integrations)
+**MCP endpoints**: Streamable HTTP at `https://api-cmf-146-181-34-54.sslip.io/mcp/` (ChatGPT custom app) and legacy SSE at `https://api-cmf-146-181-34-54.sslip.io/mcp/sse` (existing clients)
 
 ### SSH access
 ```bash
@@ -206,7 +206,7 @@ Dockerfile
 The app runs as **three independent containers** on the `cmf-btg-app` VM (`docker-compose.yml`):
 - `web` — `uvicorn main:app` (port 8080) — public read API, no scheduler
 - `worker` — `python worker.py` — `BlockingScheduler` with all 16 jobs
-- `mcp` — `python mcp_worker.py` (port 8081) — FastMCP SSE server for Claude
+- `mcp` — `python mcp_worker.py` (port 8081) — FastMCP Streamable HTTP + legacy SSE server
 
 All three have `restart: always`. A crash in one does not affect the others. nginx on the
 host terminates HTTPS (`api-cmf-146-181-34-54.sslip.io`) and reverse-proxies `/` → 8080 and
