@@ -11,8 +11,8 @@ def test_category_catalog_builds_type_group_hierarchy():
          "name": "PE / Buyout", "fund_count": 42},
         {"tipo": "Alternativo", "grupo": "Capital Privado", "code": "FI_VC",
          "name": "Venture Capital", "fund_count": 12},
-        {"tipo": "Deuda", "grupo": "Deuda", "code": "FI_DEUDA_NAC",
-         "name": "Deuda Nacional", "fund_count": 20},
+        {"tipo": "Deuda", "grupo": "Deuda Nacional", "code": "FI_DN_90",
+         "name": "Deuda Nacional ≤ 90 días", "fund_count": 20},
     ]
 
     catalog = _build_catalog(rows)

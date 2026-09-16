@@ -1,3 +1,5 @@
+from datetime import date
+
 import pandas as pd
 import pytest
 
@@ -5,7 +7,13 @@ from src.etl.mutualFunds.mutualFundsCategories import (
     _classify_debt,
     _classify_equity_geography,
 )
-from src.etl.investmentFunds.investmentFundsCategories import _equity_sub
+from src.etl.investmentFunds.investmentFundsCategories import (
+    _add_maturity_days,
+    _classify as _classify_fi,
+    _debt_sub as _classify_fi_debt,
+    _weighted_maturity,
+    _equity_sub,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +81,84 @@ def test_fi_national_equity_above_35_pct_ipsa_is_general():
 
 def test_fi_national_equity_65_pct_ipsa_is_large_cap():
     assert _equity_sub(True, "Fondo Nacional", 0.65) == "FI_ACC_NAC_LC"
+
+
+def test_fi_debt_national_short_term():
+    assert _classify_fi_debt(
+        0.80, 0.20, wam_nac=75, pct_nac_clp=0.70
+    ) == "FI_DN_90"
+
+
+def test_fi_debt_national_uf_three_to_five_years():
+    assert _classify_fi_debt(
+        0.75, 0.25, wam_nac=365 * 4, pct_nac_uf=0.80
+    ) == "FI_DN_LP_UF5"
+
+
+def test_fi_debt_international_long_term():
+    assert _classify_fi_debt(
+        0.20, 0.80, wam_ext=500
+    ) == "FI_DI_LP"
+
+
+def test_fi_debt_flexible_origin():
+    assert _classify_fi_debt(
+        0.50, 0.50, wam_all=200
+    ) == "FI_DF_365"
+
+
+def test_fi_debt_without_enough_maturity_data_is_not_guessed():
+    assert _classify_fi_debt(0.90, 0.10) == "FI_DEUDA_ND"
+
+
+def test_fi_vehicle_without_maturity_uses_private_equity_name():
+    category, confidence = _classify_fi(
+        0, 0, 0, 0, 0, 0, 0.99, 0, 0.01,
+        False, "LARRAIN VIAL PRIVATE EQUITY VIII", False,
+    )
+
+    assert category == "FI_PE"
+    assert confidence == "Media"
+
+
+def test_fi_vehicle_without_maturity_uses_private_debt_name():
+    category, confidence = _classify_fi(
+        0, 0, 0, 0, 0, 0, 0.99, 0, 0.01,
+        False, "PRIVATE MARKETS DEUDA EVERGREEN", False,
+    )
+
+    assert category == "FI_DEUDA_PRIVADA"
+    assert confidence == "Media"
+
+
+def test_fi_non_rescatable_vehicle_without_maturity_falls_back_to_private_equity():
+    category, confidence = _classify_fi(
+        0, 0, 0, 0, 0, 0, 0.99, 0, 0.01,
+        False, "FONDO INTERNACIONAL VIII", False,
+    )
+
+    assert category == "FI_PE"
+    assert confidence == "Baja"
+
+
+def test_fi_weighted_maturity_uses_portfolio_weights():
+    positions = pd.DataFrame({
+        "pct": [75.0, 25.0],
+        "fecha_vencimiento": ["30/04/2026", "30/06/2026"],
+    })
+    _add_maturity_days(positions, date(2026, 3, 31))
+
+    assert _weighted_maturity(positions) == pytest.approx(45.25)
+
+
+def test_fi_weighted_maturity_requires_half_of_weight_covered():
+    positions = pd.DataFrame({
+        "pct": [40.0, 60.0],
+        "fecha_vencimiento": ["30/04/2026", None],
+    })
+    _add_maturity_days(positions, date(2026, 3, 31))
+
+    assert _weighted_maturity(positions) is None
 
 
 # ---------------------------------------------------------------------------

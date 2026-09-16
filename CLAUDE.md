@@ -242,7 +242,7 @@ Every scheduler job writes a row to `job_runs` on start and updates it on finish
 
 ### FI Fund Classifier (`investmentFundsCategories.py`)
 
-Classifies all FI funds based on IFRS quarterly cartera positions using `pct_activo_fondo` as portfolio weight. 20 subcategories across 6 types:
+Classifies all FI funds based on IFRS quarterly cartera positions using `pct_activo_fondo` as portfolio weight. 34 subcategories across 6 high-level types:
 
 | Type | Subcategories |
 |---|---|
@@ -250,10 +250,13 @@ Classifies all FI funds based on IFRS quarterly cartera positions using `pct_act
 | Alternativo — Inmobiliario | Hipotecario, Desarrollo, Renta |
 | Alternativo — Infraestructura | Infraestructura, Energía, Forestal y Agrícola |
 | Accionario | RV Nacional (General/LC/SC), RV Internacional (General/LC/SC) |
-| Deuda | Deuda Nacional, Deuda Internacional |
+| Deuda | Nacional: ≤90d, CLP/UF/Mixta ≤365d, CLP >365d, UF 1–3y/3–5y/>5y, Mixta >365d; Internacional: ≤90d/≤365d/>365d; Origen Flexible: ≤365d/>365d; duración no disponible |
 | Fondo de Fondos | Fondo de Fondos |
+| Balanceado | Multiactivo |
 
 Large/Small Cap detection uses `rut_emisor` overlap with IPSA ETF (run_fondo `10748`) — dynamic, no hardcoded tickers. National-equity funds with IPSA overlap ≤35% are Small/Mid Cap, ≥65% are Large Cap, and the remainder are general RV Nacional. FI results persist to `categoria_fi`; FM Circular No. 7 classifications persist to `categoria_fm`. Both refresh after their portfolio jobs.
+
+FI public-debt categories mirror the FM reporting hierarchy without claiming Circular No. 7 status: debt origin is national, international, or flexible; weighted-average maturity uses `fecha_vencimiento` weighted by `pct_activo_fondo`; national debt is further split by CLP/UF dominance. At least 50% of position weight must have a valid maturity or the duration is left unavailable. Non-rescatable OTDN/OTE vehicles without maturity evidence fall back to alternative-strategy classification instead of being forced into public debt. The default FI classification period is the latest quarter whose fund coverage is at least 90% of the maximum observed, preventing a partially filed new quarter from replacing the complete classification.
 
 ### Rentability materialized views
 

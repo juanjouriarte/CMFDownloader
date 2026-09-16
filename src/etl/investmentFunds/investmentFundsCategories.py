@@ -25,8 +25,21 @@ Categorías (alineadas con ACAFI):
     FI_ACC_INT_LC        — Renta Variable Internacional Large Cap
     FI_ACC_INT_SC        — Renta Variable Internacional Small/Mid Cap
   Deuda
-    FI_DEUDA_NAC         — Deuda Nacional
-    FI_DEUDA_INT         — Deuda Internacional
+    FI_DN_90             — Deuda Nacional con duración ≤ 90 días
+    FI_DN_365_CLP        — Deuda Nacional CLP con duración ≤ 365 días
+    FI_DN_365_UF         — Deuda Nacional UF con duración ≤ 365 días
+    FI_DN_365_MIX        — Deuda Nacional mixta con duración ≤ 365 días
+    FI_DN_LP_CLP         — Deuda Nacional CLP con duración > 365 días
+    FI_DN_LP_UF3         — Deuda Nacional UF entre 1 y 3 años
+    FI_DN_LP_UF5         — Deuda Nacional UF entre 3 y 5 años
+    FI_DN_LP_UF5P        — Deuda Nacional UF con duración > 5 años
+    FI_DN_LP_MIX         — Deuda Nacional mixta con duración > 365 días
+    FI_DI_90             — Deuda Internacional con duración ≤ 90 días
+    FI_DI_365            — Deuda Internacional con duración ≤ 365 días
+    FI_DI_LP             — Deuda Internacional con duración > 365 días
+    FI_DF_365            — Deuda de origen flexible con duración ≤ 365 días
+    FI_DF_LP             — Deuda de origen flexible con duración > 365 días
+    FI_DEUDA_ND          — Deuda con duración no disponible
   Fondo de Fondos
     FI_FOF               — Fondo de Fondos
   Balanceado
@@ -105,7 +118,8 @@ _VC_RE = re.compile(
 _DEUDA_PRIVADA_RE = re.compile(
     r"DEUDA PRIVADA|DEUDA DIRECTA|PRIVATE DEBT|PRIVATE CREDIT|"
     r"MEZZANINE|MEZANINE|SINDICADO|FINANCIAMIENTO|STRUCTURED|ESTRUCTURADO|"
-    r"\bBDC\b|DIRECT LEND|HIGH YIELD|CORTO PLAZO",
+    r"\bBDC\b|DIRECT LEND|HIGH YIELD|CORTO PLAZO|PRIVATE MARKETS DEUDA|"
+    r"DEUDA AUTOMOTRIZ|DEUDA MIXTA",
     re.IGNORECASE,
 )
 
@@ -128,7 +142,8 @@ _PE_ANY_RE = re.compile(
     r"MID MARKET|\bVC\b|VENTURE|DEUDA PRIVADA|DEUDA DIRECTA|PRIVATE DEBT|"
     r"PRIVATE CREDIT|FINANCIAMIENTO|SINDICADO|MEZZANINE|MEZANINE|IMPACTO|"
     r"ALTERNATIVES|ALTERNATIVOS|ESTRUCTURADO|STRUCTURED|\bBDC\b|"
-    r"AGRI.?FOOD|AGRICOL|FINTECH|TELCO|\bTECH\b",
+    r"AGRI.?FOOD|AGRICOL|FINTECH|TELCO|\bTECH\b|PRIVATE MARKETS DEUDA|"
+    r"DEUDA AUTOMOTRIZ|DEUDA MIXTA",
     re.IGNORECASE,
 )
 _INFRA_RE = re.compile(
@@ -180,8 +195,21 @@ CATEGORIAS: dict[str, dict] = {
     "FI_ACC_INT_LC":       {"nombre": "RV Internacional Large Cap","tipo": "Accionario",  "grupo": "Accionario Internacional"},
     "FI_ACC_INT_SC":       {"nombre": "RV Internacional Small/Mid Cap","tipo": "Accionario","grupo": "Accionario Internacional"},
     # Deuda
-    "FI_DEUDA_NAC":        {"nombre": "Deuda Nacional",            "tipo": "Deuda",       "grupo": "Deuda"},
-    "FI_DEUDA_INT":        {"nombre": "Deuda Internacional",       "tipo": "Deuda",       "grupo": "Deuda"},
+    "FI_DN_90":        {"nombre": "Deuda Nacional ≤ 90 días",       "tipo": "Deuda", "grupo": "Deuda Nacional"},
+    "FI_DN_365_CLP":   {"nombre": "Deuda Nacional CLP ≤ 365 días",  "tipo": "Deuda", "grupo": "Deuda Nacional"},
+    "FI_DN_365_UF":    {"nombre": "Deuda Nacional UF ≤ 365 días",   "tipo": "Deuda", "grupo": "Deuda Nacional"},
+    "FI_DN_365_MIX":   {"nombre": "Deuda Nacional Mixta ≤ 365 días","tipo": "Deuda", "grupo": "Deuda Nacional"},
+    "FI_DN_LP_CLP":    {"nombre": "Deuda Nacional CLP > 365 días",  "tipo": "Deuda", "grupo": "Deuda Nacional"},
+    "FI_DN_LP_UF3":    {"nombre": "Deuda Nacional UF 1–3 años",     "tipo": "Deuda", "grupo": "Deuda Nacional"},
+    "FI_DN_LP_UF5":    {"nombre": "Deuda Nacional UF 3–5 años",     "tipo": "Deuda", "grupo": "Deuda Nacional"},
+    "FI_DN_LP_UF5P":   {"nombre": "Deuda Nacional UF > 5 años",     "tipo": "Deuda", "grupo": "Deuda Nacional"},
+    "FI_DN_LP_MIX":    {"nombre": "Deuda Nacional Mixta > 365 días","tipo": "Deuda", "grupo": "Deuda Nacional"},
+    "FI_DI_90":        {"nombre": "Deuda Internacional ≤ 90 días",  "tipo": "Deuda", "grupo": "Deuda Internacional"},
+    "FI_DI_365":       {"nombre": "Deuda Internacional ≤ 365 días", "tipo": "Deuda", "grupo": "Deuda Internacional"},
+    "FI_DI_LP":        {"nombre": "Deuda Internacional > 365 días", "tipo": "Deuda", "grupo": "Deuda Internacional"},
+    "FI_DF_365":       {"nombre": "Deuda Origen Flexible ≤ 365 días","tipo": "Deuda", "grupo": "Deuda Flexible"},
+    "FI_DF_LP":        {"nombre": "Deuda Origen Flexible > 365 días","tipo": "Deuda", "grupo": "Deuda Flexible"},
+    "FI_DEUDA_ND":     {"nombre": "Deuda con duración no disponible","tipo": "Deuda", "grupo": "Deuda Flexible"},
     # Other
     "FI_FOF":              {"nombre": "Fondo de Fondos",           "tipo": "Fondo de Fondos","grupo": "Fondo de Fondos"},
     "FI_MULTIACTIVO":      {"nombre": "Multiactivo",               "tipo": "Balanceado",  "grupo": "Balanceado"},
@@ -242,8 +270,57 @@ def _equity_sub(is_nac: bool, nombre: str, ipsa_ratio: float | None = None) -> s
         return "FI_ACC_INT"
 
 
-def _debt_sub(pct_nac: float, pct_ext: float) -> str:
-    return "FI_DEUDA_INT" if pct_ext > pct_nac else "FI_DEUDA_NAC"
+def _debt_sub(
+    pct_nac: float,
+    pct_ext: float,
+    *,
+    wam_nac: float | None = None,
+    wam_ext: float | None = None,
+    wam_all: float | None = None,
+    pct_nac_clp: float = 0.0,
+    pct_nac_uf: float = 0.0,
+) -> str:
+    """Classify debt by origin, weighted maturity, and national currency."""
+    total_debt = pct_nac + pct_ext
+    if total_debt <= 0:
+        return "FI_DEUDA_ND"
+
+    nac_share = pct_nac / total_debt
+    ext_share = pct_ext / total_debt
+
+    if nac_share >= 0.60:
+        if wam_nac is None:
+            return "FI_DEUDA_ND"
+        if wam_nac <= 90:
+            return "FI_DN_90"
+        if wam_nac <= 365:
+            if pct_nac_uf >= 0.60:
+                return "FI_DN_365_UF"
+            if pct_nac_clp >= 0.60:
+                return "FI_DN_365_CLP"
+            return "FI_DN_365_MIX"
+        if pct_nac_uf >= 0.60:
+            if wam_nac <= 365 * 3:
+                return "FI_DN_LP_UF3"
+            if wam_nac <= 365 * 5:
+                return "FI_DN_LP_UF5"
+            return "FI_DN_LP_UF5P"
+        if pct_nac_clp >= 0.60:
+            return "FI_DN_LP_CLP"
+        return "FI_DN_LP_MIX"
+
+    if ext_share >= 0.60:
+        if wam_ext is None:
+            return "FI_DEUDA_ND"
+        if wam_ext <= 90:
+            return "FI_DI_90"
+        if wam_ext <= 365:
+            return "FI_DI_365"
+        return "FI_DI_LP"
+
+    if wam_all is None:
+        return "FI_DEUDA_ND"
+    return "FI_DF_365" if wam_all <= 365 else "FI_DF_LP"
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +341,11 @@ def _classify(
     nombre: str,
     rescatable: bool | None,
     ipsa_ratio: float | None = None,
+    wam_debt_nac: float | None = None,
+    wam_debt_ext: float | None = None,
+    wam_debt_all: float | None = None,
+    pct_debt_nac_clp: float = 0.0,
+    pct_debt_nac_uf: float = 0.0,
 ) -> tuple[str, str]:
     """Return (categoria_code, confianza)."""
 
@@ -300,7 +382,31 @@ def _classify(
 
     # 4. Debt
     if pct_debt >= 0.40:
-        return _debt_sub(pct_debt_nac, pct_debt_ext), conf(pct_debt)
+        code = _debt_sub(
+            pct_debt_nac,
+            pct_debt_ext,
+            wam_nac=wam_debt_nac,
+            wam_ext=wam_debt_ext,
+            wam_all=wam_debt_all,
+            pct_nac_clp=pct_debt_nac_clp,
+            pct_nac_uf=pct_debt_nac_uf,
+        )
+        if code != "FI_DEUDA_ND":
+            return code, conf(pct_debt)
+
+        # FI vehicles are often reported as OTDN/OTE even when the underlying
+        # strategy is private equity, real estate, infrastructure, or private
+        # credit. With no maturity evidence, prefer the explicit strategy name
+        # instead of forcing them into public fixed income.
+        if _INFRA_RE.search(nombre) or _ENERGIA_RE.search(nombre) or _FORESTAL_RE.search(nombre):
+            return _infra_sub(nombre), "Media"
+        if _INMOB_ANY_RE.search(nombre):
+            return _inmob_sub(nombre, pct_mh), "Media"
+        if _PE_ANY_RE.search(nombre):
+            return _pe_sub(nombre), "Media"
+        if not rescatable:
+            return _pe_sub(nombre), "Baja"
+        return code, "Baja"
 
     # 5. Fondo de Fondos (minority)
     if pct_fof >= 0.30:
@@ -320,7 +426,16 @@ def _classify(
         if _EQUITY_RE.search(nombre):
             return _equity_sub(is_nac_eq, nombre), "Media"
         if _DEBT_RE.search(nombre):
-            return _debt_sub(pct_debt_nac, pct_debt_ext), "Media"
+            code = _debt_sub(
+                pct_debt_nac,
+                pct_debt_ext,
+                wam_nac=wam_debt_nac,
+                wam_ext=wam_debt_ext,
+                wam_all=wam_debt_all,
+                pct_nac_clp=pct_debt_nac_clp,
+                pct_nac_uf=pct_debt_nac_uf,
+            )
+            return code, "Baja" if code == "FI_DEUDA_ND" else "Media"
         if not rescatable:
             return _pe_sub(nombre), "Baja"
         return "FI_OTRO", "Baja"
@@ -338,24 +453,67 @@ def _classify(
 
 def _load_cartera(session, periodo: date) -> pd.DataFrame:
     nac = pd.DataFrame(session.execute(text("""
-        SELECT run_fondo, tipo_instrumento, pct_activo_fondo
+        SELECT run_fondo, tipo_instrumento, pct_activo_fondo,
+               cod_moneda_liquidacion, fecha_vencimiento
         FROM cartera_fi_nac WHERE periodo = :p AND pct_activo_fondo IS NOT NULL
-    """), {"p": periodo}).fetchall(), columns=["run_fondo", "tipo", "pct"])
+    """), {"p": periodo}).fetchall(), columns=[
+        "run_fondo", "tipo", "pct", "moneda", "fecha_vencimiento"
+    ])
     nac["origin"] = "nac"
 
     ext = pd.DataFrame(session.execute(text("""
-        SELECT run_fondo, tipo_instrumento, pct_activo_fondo
+        SELECT run_fondo, tipo_instrumento, pct_activo_fondo,
+               cod_moneda_liquidacion, fecha_vencimiento
         FROM cartera_fi_ext WHERE periodo = :p AND pct_activo_fondo IS NOT NULL
-    """), {"p": periodo}).fetchall(), columns=["run_fondo", "tipo", "pct"])
+    """), {"p": periodo}).fetchall(), columns=[
+        "run_fondo", "tipo", "pct", "moneda", "fecha_vencimiento"
+    ])
     ext["origin"] = "ext"
 
     met = pd.DataFrame(session.execute(text("""
         SELECT run_fondo, tipo_instrumento, pct_activo_fondo
         FROM cartera_fi_met_part WHERE periodo = :p AND pct_activo_fondo IS NOT NULL
     """), {"p": periodo}).fetchall(), columns=["run_fondo", "tipo", "pct"])
+    met["moneda"] = None
+    met["fecha_vencimiento"] = None
     met["origin"] = "met"
 
     return pd.concat([nac, ext, met], ignore_index=True)
+
+
+def _add_maturity_days(cartera: pd.DataFrame, periodo: date) -> None:
+    """Add non-negative days to maturity, parsing the CMF DD/MM/YYYY field."""
+    maturity = pd.to_datetime(
+        cartera["fecha_vencimiento"],
+        format="%d/%m/%Y",
+        errors="coerce",
+    )
+    reference = pd.Timestamp(periodo)
+    cartera["days_to_maturity"] = (maturity - reference).dt.days.clip(lower=0)
+
+
+def _weighted_maturity(positions: pd.DataFrame) -> float | None:
+    """Return WAM when maturities cover at least half of position weight."""
+    if positions.empty:
+        return None
+    weights = pd.to_numeric(positions["pct"], errors="coerce").fillna(0).clip(lower=0)
+    total_weight = float(weights.sum())
+    known = positions["days_to_maturity"].notna() & weights.gt(0)
+    known_weight = float(weights[known].sum())
+    if total_weight <= 0 or known_weight / total_weight < 0.50:
+        return None
+    return float(
+        (positions.loc[known, "days_to_maturity"] * weights[known]).sum()
+        / known_weight
+    )
+
+
+def _currency_share(positions: pd.DataFrame, currency: str) -> float:
+    weights = pd.to_numeric(positions["pct"], errors="coerce").fillna(0).clip(lower=0)
+    total_weight = float(weights.sum())
+    if total_weight <= 0:
+        return 0.0
+    return float(weights[positions["moneda"].eq(currency)].sum()) / total_weight
 
 
 def _load_ipsa_ruts(session, periodo: date) -> set[str]:
@@ -393,7 +551,22 @@ def _load_funds(session) -> pd.DataFrame:
 
 def latest_periodo() -> date:
     with SessionLocal() as s:
-        return s.execute(text("SELECT MAX(periodo) FROM cartera_fi_nac")).scalar()
+        periodo = s.execute(text("""
+            WITH counts AS (
+                SELECT periodo, COUNT(DISTINCT run_fondo) AS fund_count
+                FROM cartera_fi_nac
+                GROUP BY periodo
+            ), eligible AS (
+                SELECT periodo, fund_count, MAX(fund_count) OVER () AS max_count
+                FROM counts
+            )
+            SELECT MAX(periodo)
+            FROM eligible
+            WHERE fund_count >= max_count * 0.90
+        """)).scalar()
+    if periodo is None:
+        raise RuntimeError("No FI cartera data found in DB")
+    return periodo
 
 
 def save(df: pd.DataFrame) -> int:
@@ -454,9 +627,7 @@ def run(periodo: date | None = None) -> pd.DataFrame:
     """
     with SessionLocal() as s:
         if periodo is None:
-            periodo = s.execute(text("SELECT MAX(periodo) FROM cartera_fi_nac")).scalar()
-            if periodo is None:
-                raise RuntimeError("No FI cartera data found in DB")
+            periodo = latest_periodo()
         cartera    = _load_cartera(s, periodo)
         funds      = _load_funds(s)
         ipsa_ruts  = _load_ipsa_ruts(s, periodo)
@@ -464,6 +635,9 @@ def run(periodo: date | None = None) -> pd.DataFrame:
 
     if cartera.empty:
         raise RuntimeError(f"No FI cartera data for periodo={periodo}")
+
+    cartera["pct"] = pd.to_numeric(cartera["pct"], errors="coerce").fillna(0)
+    _add_maturity_days(cartera, periodo)
 
     # Pre-compute IPSA overlap ratio per fund
     # ratio = (pct in IPSA stocks) / (total pct in national equity stocks)
@@ -503,11 +677,29 @@ def run(periodo: date | None = None) -> pd.DataFrame:
         pct_other    = max(0.0, 1.0 - known)
         has_met      = run_fondo in met_part_funds
 
+        debt_nac = grp[
+            grp["origin"].eq("nac") & grp["tipo"].isin(DEBT_NAC)
+        ]
+        debt_ext = grp[
+            grp["origin"].eq("ext") & grp["tipo"].isin(DEBT_EXT)
+        ]
+        debt_all = pd.concat([debt_nac, debt_ext], ignore_index=True)
+        wam_debt_nac = _weighted_maturity(debt_nac)
+        wam_debt_ext = _weighted_maturity(debt_ext)
+        wam_debt_all = _weighted_maturity(debt_all)
+        pct_debt_nac_clp = _currency_share(debt_nac, "$$")
+        pct_debt_nac_uf = _currency_share(debt_nac, "UF")
+
         codigo, confianza = _classify(
             pct_mh, pct_inmob, pct_pe, pct_eq_nac, pct_eq_ext,
             pct_debt_nac, pct_debt_ext, pct_fof, pct_other,
             has_met, nombre, rescatable,
             ipsa_ratio=ipsa_ratios.get(run_fondo),
+            wam_debt_nac=wam_debt_nac,
+            wam_debt_ext=wam_debt_ext,
+            wam_debt_all=wam_debt_all,
+            pct_debt_nac_clp=pct_debt_nac_clp,
+            pct_debt_nac_uf=pct_debt_nac_uf,
         )
 
         cat = CATEGORIAS[codigo]
@@ -527,6 +719,10 @@ def run(periodo: date | None = None) -> pd.DataFrame:
             "pct_eq_ext":    round(pct_eq_ext     * 100, 1),
             "pct_deuda_nac": round(pct_debt_nac   * 100, 1),
             "pct_deuda_int": round(pct_debt_ext   * 100, 1),
+            "pct_deuda_nac_clp": round(pct_debt_nac_clp * 100, 1),
+            "pct_deuda_nac_uf": round(pct_debt_nac_uf * 100, 1),
+            "wam_deuda_nac_dias": round(wam_debt_nac) if wam_debt_nac is not None else None,
+            "wam_deuda_int_dias": round(wam_debt_ext) if wam_debt_ext is not None else None,
             "pct_fof":       round(pct_fof        * 100, 1),
             "pct_other":     round(pct_other      * 100, 1),
             "met_part":      has_met,
