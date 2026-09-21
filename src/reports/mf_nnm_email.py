@@ -602,10 +602,19 @@ def _detail_sections(
         currency: str,
     ) -> str:
         total = currency_flow(category, currency)
-        active_admins = [
-            row for row in category_admins
-            if any(getattr(currency_flow(row, currency), period) for period in _FLOW_PERIODS)
-        ]
+        active_admins = sorted(
+            (
+                row for row in category_admins
+                if any(
+                    getattr(currency_flow(row, currency), period)
+                    for period in _FLOW_PERIODS
+                )
+            ),
+            key=lambda row: (
+                -currency_flow(row, currency).ytd,
+                row.administrador.casefold(),
+            ),
+        )
         if not active_admins and not any(
             getattr(total, period) for period in _FLOW_PERIODS
         ):
@@ -776,7 +785,7 @@ def send_report(
         "Authorization": f"Bearer {settings.api_key}",
         "Content-Type": "application/json",
         "Idempotency-Key": (
-            f"fund-nnm-summary-v14-{delivery_date.isoformat()}-"
+            f"fund-nnm-summary-v15-{delivery_date.isoformat()}-"
             f"fm-{snapshot.report_date.isoformat()}-"
             f"fi-{fi_data_date.isoformat()}"
         ),

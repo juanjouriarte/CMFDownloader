@@ -101,6 +101,23 @@ def snapshot():
         ),
         admin_rows=(
             AdminAssetFlow(
+                administrador="LarrainVial Mutual AGF",
+                tipo="Accionario",
+                categoria="FDOACCNACLC",
+                nombre="Accionario Nacional <Large Cap>",
+                funds=2,
+                currencies=(
+                    CurrencyFlow(
+                        currency="CLP",
+                        daily=Decimal("500000000"),
+                        week=Decimal("750000000"),
+                        mtd=Decimal("1750000000"),
+                        ytd=Decimal("3000000000"),
+                    ),
+                ),
+                unsupported_currency_rows=0,
+            ),
+            AdminAssetFlow(
                 administrador="BTG Pactual AGF",
                 tipo="Accionario",
                 categoria="FDOACCNACLC",
@@ -176,8 +193,11 @@ def test_report_renders_plain_text_and_escaped_html(snapshot):
     assert "detail-group-count" in rendered_html
     assert (
         '<div class="category-card-name">Accionario Nacional '
-        '&lt;Large Cap&gt;</div><div class="category-card-meta">1 AGF · 4 fondos</div>'
+        '&lt;Large Cap&gt;</div><div class="category-card-meta">2 AGFs · 4 fondos</div>'
         in rendered_html
+    )
+    assert rendered_html.index("LarrainVial Mutual AGF") < rendered_html.index(
+        "BTG Pactual AGF"
     )
     assert "Total categoría" in rendered_html
     assert "CLP · millones" in rendered_html
@@ -248,7 +268,7 @@ def test_send_report_uses_resend_and_idempotency(snapshot):
     headers = factory.call_args.kwargs["headers"]
     assert headers["Authorization"] == "Bearer test-key"
     assert headers["Idempotency-Key"] == (
-        "fund-nnm-summary-v14-2026-09-15-fm-2026-09-14-fi-2026-09-13"
+        "fund-nnm-summary-v15-2026-09-15-fm-2026-09-14-fi-2026-09-13"
     )
     request = session.post.call_args
     assert request.kwargs["json"]["to"] == ["recipient@example.com"]
