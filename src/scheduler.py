@@ -87,6 +87,7 @@ def register_jobs(scheduler: BaseScheduler) -> None:
     from src.etl.bolsaSantiago.downloaders.dividendosDownloader import DividendosDownloader
     from src.etl.investmentFunds.investmentFundsCategories import run_and_save as fi_categorize
     from src.etl.mutualFunds.mutualFundsCategories import run_and_save as fm_categorize
+    from src.etl.mutualFunds.flow_adjustments import run as detect_fm_migrations
     from src.etl.cmf.ref_codes import run as refresh_ref_codes
     from src.reports.mf_nnm_email import run as send_mf_nnm_reports
 
@@ -150,6 +151,10 @@ def register_jobs(scheduler: BaseScheduler) -> None:
     scheduler.add_job(
         _job("dividends", lambda: DividendosDownloader().run()),
         "cron", hour=9, minute=0, id="dividends",
+    )
+    scheduler.add_job(
+        _job("fm_flow_adjustments", detect_fm_migrations),
+        "cron", hour=10, minute=45, id="fm_flow_adjustments",
     )
     scheduler.add_job(
         _job("mf_nnm_email_report", send_mf_nnm_reports),

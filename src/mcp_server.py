@@ -18,7 +18,7 @@ portfolios, and shareholders from 2020 to today.
 When answering questions:
 - Always provide context: market share, rankings, comparisons
 - For AUM figures, express in CLP billions (divide by 1,000,000,000) for readability
-- Net new money = inflows (aportes) - outflows (rescates) — positive means the fund/AGF attracted capital
+- FM net new money = inflows - outflows - confirmed internal fund migrations; positive means external capital was attracted
 - Rentability figures are percentages (already multiplied by 100 for FM, direct for FI)
 - When comparing funds, always note the fund type (FM vs FI) and currency (CLP vs USD)
 - Use multiple tools to build a complete picture before answering
@@ -430,8 +430,9 @@ def net_new_money_ranking(
     limit: int = 20,
 ) -> list[dict]:
     """
-    Rank AGFs or individual funds by net new money (aportes - rescates).
+    Rank AGFs or individual funds by external net new money.
     Positive = attracted capital. Negative = net outflows.
+    FM results exclude confirmed internal migrations between funds of the same AGF/category.
     fund_type: 'fm' (mutual funds, daily) or 'fi' (investment funds).
     rescatable: FI only — True=rescatable, False=non-rescatable, None=both shown as separate rows.
     FI method differs by type:
@@ -455,7 +456,7 @@ def net_new_money_ranking(
 
     # FM — daily cartola_diaria
     if from_date or to_date:
-        conditions = ["cd.monto_aportado IS NOT NULL"]
+        conditions = ["cd.aportes IS NOT NULL"]
         if from_date:
             conditions.append("cd.fecha >= :from_date")
             params["from_date"] = from_date
@@ -464,19 +465,19 @@ def net_new_money_ranking(
             params["to_date"] = to_date
         period_filter = " AND ".join(conditions)
     else:
-        period_filter = _PERIOD_SQL[period] + " AND cd.monto_aportado IS NOT NULL"
+        period_filter = _PERIOD_SQL[period] + " AND cd.aportes IS NOT NULL"
 
     if group_by == "agf":
         return _rows(f"""
             SELECT
                 fm.razon_social_administradora                                          AS administrador,
-                ROUND(SUM(cd.monto_aportado)::numeric / 1e9, 2)                        AS aportes_bn_clp,
-                ROUND(SUM(cd.monto_rescatado)::numeric / 1e9, 2)                       AS rescates_bn_clp,
-                ROUND(SUM(cd.monto_aportado - cd.monto_rescatado)::numeric / 1e9, 2)   AS net_new_money_bn_clp,
+                ROUND(SUM(cd.aportes)::numeric / 1e9, 2)                               AS aportes_bn_clp,
+                ROUND(SUM(cd.rescates)::numeric / 1e9, 2)                              AS rescates_bn_clp,
+                ROUND(SUM(cd.adjusted_nnm)::numeric / 1e9, 2)                          AS net_new_money_bn_clp,
                 COUNT(DISTINCT cd.run_fondo)                                            AS num_fondos,
                 MIN(cd.fecha)                                                           AS desde,
                 MAX(cd.fecha)                                                           AS hasta
-            FROM cartola_diaria cd
+            FROM fm_daily_flows_adjusted cd
             JOIN fondo_mutuo fm ON fm.run_fondo = cd.run_fondo
             WHERE {period_filter}
             GROUP BY fm.razon_social_administradora
@@ -489,12 +490,12 @@ def net_new_money_ranking(
                 cd.run_fondo,
                 fm.nombre_fondo,
                 fm.razon_social_administradora                                          AS administrador,
-                ROUND(SUM(cd.monto_aportado)::numeric / 1e9, 2)                        AS aportes_bn_clp,
-                ROUND(SUM(cd.monto_rescatado)::numeric / 1e9, 2)                       AS rescates_bn_clp,
-                ROUND(SUM(cd.monto_aportado - cd.monto_rescatado)::numeric / 1e9, 2)   AS net_new_money_bn_clp,
+                ROUND(SUM(cd.aportes)::numeric / 1e9, 2)                               AS aportes_bn_clp,
+                ROUND(SUM(cd.rescates)::numeric / 1e9, 2)                              AS rescates_bn_clp,
+                ROUND(SUM(cd.adjusted_nnm)::numeric / 1e9, 2)                          AS net_new_money_bn_clp,
                 MIN(cd.fecha)                                                           AS desde,
                 MAX(cd.fecha)                                                           AS hasta
-            FROM cartola_diaria cd
+            FROM fm_daily_flows_adjusted cd
             JOIN fondo_mutuo fm ON fm.run_fondo = cd.run_fondo
             WHERE {period_filter}
             GROUP BY cd.run_fondo, fm.nombre_fondo, fm.razon_social_administradora
@@ -708,17 +709,34 @@ def get_fund_full_picture(
 
         # AUM + flows last 12 months (monthly)
         result["monthly_flows"] = _rows("""
+            WITH flows AS (
+                SELECT
+                    DATE_TRUNC('month', fecha)::date AS mes,
+                    SUM(aportes) AS aportes,
+                    SUM(rescates) AS rescates,
+                    SUM(adjusted_nnm) AS adjusted_nnm
+                FROM fm_daily_flows_adjusted
+                WHERE run_fondo = :run
+                  AND fecha >= CURRENT_DATE - INTERVAL '12 months'
+                GROUP BY DATE_TRUNC('month', fecha)
+            ),
+            aum AS (
+                SELECT DATE_TRUNC('month', fecha)::date AS mes,
+                       AVG(patrimonio_neto) AS promedio
+                FROM cartola_diaria
+                WHERE run_fondo = :run
+                  AND fecha >= CURRENT_DATE - INTERVAL '12 months'
+                GROUP BY DATE_TRUNC('month', fecha)
+            )
             SELECT
-                DATE_TRUNC('month', fecha)::date                    AS mes,
-                ROUND(SUM(monto_aportado)::numeric / 1e9, 3)        AS aportes_bn_clp,
-                ROUND(SUM(monto_rescatado)::numeric / 1e9, 3)       AS rescates_bn_clp,
-                ROUND(SUM(monto_aportado - monto_rescatado)::numeric / 1e9, 3) AS net_new_money_bn_clp,
-                ROUND(AVG(patrimonio_neto)::numeric / 1e9, 3)       AS aum_promedio_bn_clp
-            FROM cartola_diaria
-            WHERE run_fondo = :run
-              AND fecha >= CURRENT_DATE - INTERVAL '12 months'
-            GROUP BY DATE_TRUNC('month', fecha)
-            ORDER BY mes DESC
+                flows.mes,
+                ROUND(flows.aportes::numeric / 1e9, 3) AS aportes_bn_clp,
+                ROUND(flows.rescates::numeric / 1e9, 3) AS rescates_bn_clp,
+                ROUND(flows.adjusted_nnm::numeric / 1e9, 3) AS net_new_money_bn_clp,
+                ROUND(aum.promedio::numeric / 1e9, 3) AS aum_promedio_bn_clp
+            FROM flows
+            LEFT JOIN aum USING (mes)
+            ORDER BY flows.mes DESC
         """, {"run": run_fondo})
 
         # Portfolio summary (latest quarter) — by instrument type
@@ -897,10 +915,10 @@ def get_administrator_full_picture(admin: str) -> dict:
     # Net new money YTD
     result["net_new_money_ytd"] = _rows("""
         SELECT
-            ROUND(SUM(cd.monto_aportado)::numeric / 1e9, 2)     AS aportes_bn_clp,
-            ROUND(SUM(cd.monto_rescatado)::numeric / 1e9, 2)    AS rescates_bn_clp,
-            ROUND(SUM(cd.monto_aportado - cd.monto_rescatado)::numeric / 1e9, 2) AS net_new_money_bn_clp
-        FROM cartola_diaria cd
+            ROUND(SUM(cd.aportes)::numeric / 1e9, 2) AS aportes_bn_clp,
+            ROUND(SUM(cd.rescates)::numeric / 1e9, 2) AS rescates_bn_clp,
+            ROUND(SUM(cd.adjusted_nnm)::numeric / 1e9, 2) AS net_new_money_bn_clp
+        FROM fm_daily_flows_adjusted cd
         JOIN fondo_mutuo fm ON fm.run_fondo = cd.run_fondo
         WHERE fm.razon_social_administradora ILIKE :admin
           AND cd.fecha >= DATE_TRUNC('year', CURRENT_DATE)
@@ -1074,8 +1092,8 @@ def compare_administrators(admin_a: str, admin_b: str) -> dict:
         """, {"admin": f"%{admin}%"})
 
         nnm = _rows("""
-            SELECT ROUND(SUM(cd.monto_aportado - cd.monto_rescatado)::numeric / 1e9, 2) AS net_new_money_ytd_bn
-            FROM cartola_diaria cd
+            SELECT ROUND(SUM(cd.adjusted_nnm)::numeric / 1e9, 2) AS net_new_money_ytd_bn
+            FROM fm_daily_flows_adjusted cd
             JOIN fondo_mutuo fm ON fm.run_fondo = cd.run_fondo
             WHERE fm.razon_social_administradora ILIKE :admin
               AND cd.fecha >= DATE_TRUNC('year', CURRENT_DATE)
@@ -1305,11 +1323,11 @@ def market_overview() -> dict:
     result["net_new_money_this_month"] = _rows("""
         SELECT
             fm.razon_social_administradora AS administrador,
-            ROUND(SUM(cd.monto_aportado - cd.monto_rescatado)::numeric / 1e9, 2) AS net_new_money_bn_clp
-        FROM cartola_diaria cd
+            ROUND(SUM(cd.adjusted_nnm)::numeric / 1e9, 2) AS net_new_money_bn_clp
+        FROM fm_daily_flows_adjusted cd
         JOIN fondo_mutuo fm ON fm.run_fondo = cd.run_fondo
         WHERE cd.fecha >= DATE_TRUNC('month', CURRENT_DATE)
-          AND cd.monto_aportado IS NOT NULL
+          AND cd.aportes IS NOT NULL
         GROUP BY fm.razon_social_administradora
         ORDER BY net_new_money_bn_clp DESC NULLS LAST
         LIMIT 10

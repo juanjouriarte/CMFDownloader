@@ -43,8 +43,10 @@ Manual deploy if needed:
 ssh -i ~/.ssh/oracle_cmf.key ubuntu@146.181.34.54
 cd ~/CMFDownloader
 git pull origin main
+sudo docker compose build
 sudo docker compose run --rm web alembic upgrade head
-sudo docker compose up -d --build
+sudo docker compose run --rm worker python -c "from src.etl.mutualFunds.flow_adjustments import run; print(run())"
+sudo docker compose up -d
 ```
 
 ### DB connection (from app VM)
@@ -311,7 +313,7 @@ FastMCP server exposing 16 tools for AI-driven fund-market analysis. Runs as the
 | `emisor_fund_exposure` | Given a company (RUT or name), list every fund holding it with weight and instrument type. Covers domestic (naci) + foreign (extr) portfolios — foreign matched by nombre_emisor when searching by name; results tagged with `source=naci/extr` |
 | `portfolio_overlap` | Jaccard overlap score + shared positions between two funds |
 
-AUM figures are CLP. FM net new money uses `cartola_diaria` generated columns (`monto_aportado`, `monto_rescatado`). FI rescatable NNM uses `valores_cuota_fi.flujo_neto` (daily implied flow, pre-computed at load time). FI non-rescatable uses quarterly `cuotas_fi`. The `mcp` container only needs `DATABASE_URL`.
+AUM figures are CLP. FM external net new money uses `fm_daily_flows_adjusted`, which preserves reported aportes/rescates and subtracts confirmed internal migrations stored in `fm_flow_adjustments`. FI rescatable NNM uses `valores_cuota_fi.flujo_neto` (daily implied flow, pre-computed at load time). FI non-rescatable uses quarterly `cuotas_fi`. The `mcp` container only needs `DATABASE_URL`.
 
 ### Scheduler jobs (America/Santiago)
 
@@ -330,6 +332,7 @@ AUM figures are CLP. FM net new money uses `cartola_diaria` generated columns (`
 | `mf_categories` | Day 5 of month 09:15 | FM fund classification → categoria_fm |
 | `mf_costs` | Day 5 of month 09:30 | MF monthly TAC costs |
 | `dividends` | Daily 09:00 | Dividends + capital changes (Bolsa de Santiago) |
+| `fm_flow_adjustments` | Daily 10:45 | Incrementally detect and persist high-confidence internal FM migrations; full current-year safety scan weekly |
 | `mf_nnm_email_report` | Daily 11:15 | Three BTG-styled flow emails: mutual funds; FI Accionario/Balanceado/Deuda; and FI Alternativo/Fondo de Fondos/Otro. FM external NNM excludes high-confidence internal fund migrations detected from official terminations and stored in `fm_flow_adjustments`; raw CMF rows remain unchanged. FI categories aggregate rescatable and non-rescatable funds together. Each email includes its high-level overview, detailed categories, and AGF breakdown by subcategory, with daily/1W/MTD/YTD split by reported currency |
 | `fi_daily_nav` | Daily 09:30 | FI daily NAV/AUM (vigente funds only) |
 | `fi_rentabilidad` | Daily 10:00 | Refresh `mv_rentabilidad_fi` (FI returns) |
@@ -351,7 +354,7 @@ Public database endpoints return `Cache-Control: public, max-age=3600` and all e
 | `GET /mutual-funds/{run}` | FM fund detail: identity + latest NAV per serie (field: `series[]`) + rentability + `category` (full object: `categoria`, `tipo`, `grupo`, `nombre_cat`, `confianza`, `periodo`) + `geo_breakdown` (`[{pais, pct_peso}]` from latest portfolio) + `latest_tac` (`tac_total`, `tac_rem_fija`, `tac_rem_var`, `tac_gastos_op`, `periodo`) |
 | `GET /mutual-funds/{run}/nav` | FM NAV history for charts. Filters: `serie`, `from_date`, `to_date`. Field: `valor_cuota` |
 | `GET /mutual-funds/{run}/tac` | FM TAC history — last 24 months descending (`periodo`, `serie`, `tac_total`, `tac_rem_fija`, `tac_rem_var`, `tac_gastos_op`). Secondary sort by `serie`. |
-| `GET /mutual-funds/{run}/flows` | Monthly aportes/rescates/nnm aggregated across all series. Filters: `serie`, `from_date`, `to_date`. Fields: `aportes`, `rescates`, `nnm` |
+| `GET /mutual-funds/{run}/flows` | Monthly aportes/rescates/NNM. Fund-level responses expose `nnm_reportado`, `migraciones_internas`, and adjusted external `nnm`; `serie` requests remain raw because migrations cannot be assigned reliably to one share class. Filters: `serie`, `from_date`, `to_date` |
 | `GET /mutual-funds/{run}/portfolio` | FM portfolio (naci + extr), SII-enriched. Optional `?period=YYYY-MM-DD` (any date in the month resolves to first-of-month). Fields per position: `tir`, `fecha_vencimiento`, `cantidad_unidades`, `tipo_unidades`, `moneda_liquidacion`, `porcentaje_valor_par`, `tipo_interes`, `codigo_pais_emisor`, `situacion_instrumento`, `porcentaje_capital_emisor`, `porcentaje_activos_emisor`, `codigo_grupo_empresarial` |
 | `GET /mutual-funds/{run}/portfolio/history` | All FM monthly portfolio positions across every period. Flat list with `periodo` field per row. Paginated. |
 | `GET /mutual-funds/{run}/return-series` | FM cumulative total-return time series for charting. Params: `serie` (optional — defaults to serie with highest recent `patrimonio_neto`), `from_date` (optional — defaults to today − 1 year; pass further back for longer periods, e.g. today − 1825 for 5Y; data available from 2020), `to_date` (optional — for exact point-in-time alignment with rentability endpoint). Response: `[{ fecha, return_pct }]` where `return_pct` is cumulative % from `from_date` (first point always `0.0`). Accounts for distributions via `factor_reparto`. Returns `[]` if no data for the range. |

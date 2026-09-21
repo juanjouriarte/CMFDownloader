@@ -11,6 +11,7 @@ from sqlalchemy import (
     Index,
     Numeric,
     String,
+    SmallInteger,
     Text,
     UniqueConstraint,
     func,
@@ -67,6 +68,24 @@ class FMFlowAdjustment(Base):
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     detected_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class FMFlowAdjustmentState(Base):
+    """Singleton watermark for incremental internal-migration detection."""
+
+    __tablename__ = "fm_flow_adjustment_state"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_fm_flow_adjustment_state_singleton"),
+    )
+
+    id: Mapped[int] = mapped_column(SmallInteger, primary_key=True)
+    last_data_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    last_full_scan_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

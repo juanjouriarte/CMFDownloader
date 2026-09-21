@@ -50,11 +50,11 @@ fm_cat AS (
 ),
 fm_flows AS (
     SELECT run_fondo,
-           SUM(monto_aportado - monto_rescatado)
+           SUM(adjusted_nnm)
                FILTER (WHERE fecha >= DATE_TRUNC('month', CURRENT_DATE)) AS nnm_month_clp,
-           SUM(monto_aportado - monto_rescatado)
+           SUM(adjusted_nnm)
                FILTER (WHERE fecha >= DATE_TRUNC('year', CURRENT_DATE)) AS nnm_ytd_clp
-    FROM cartola_diaria
+    FROM fm_daily_flows_adjusted
     WHERE fecha >= DATE_TRUNC('year', CURRENT_DATE)
     GROUP BY run_fondo
 ),
@@ -288,10 +288,10 @@ def industry_overview(
         )))
     if fund_type != "fi":
         gross_flows = _rows(f"""
-            SELECT SUM(monto_aportado) AS aportes_month_clp,
-                   SUM(monto_rescatado) AS rescates_month_clp,
-                   SUM(monto_aportado - monto_rescatado) AS neto_month_clp
-            FROM cartola_diaria
+            SELECT SUM(aportes) AS aportes_month_clp,
+                   SUM(rescates) AS rescates_month_clp,
+                   SUM(adjusted_nnm) AS neto_month_clp
+            FROM fm_daily_flows_adjusted
             WHERE {" AND ".join(fm_gross_conds)}
         """, params)[0]
     else:
@@ -373,7 +373,13 @@ def industry_evolution(
                    fm.razon_social_administradora AS administrator,
                    SUM(cd.patrimonio_neto) AS aum_clp,
                    SUM(cd.monto_aportado) AS aportes_clp,
-                   SUM(cd.monto_rescatado) AS rescates_clp
+                   SUM(cd.monto_rescatado) AS rescates_clp,
+                   COALESCE((
+                       SELECT SUM(flow.adjusted_nnm)
+                       FROM fm_daily_flows_adjusted flow
+                       WHERE flow.run_fondo = cd.run_fondo
+                         AND flow.fecha = cd.fecha
+                   ), 0) AS nnm_clp
             FROM cartola_diaria cd
             JOIN fondo_mutuo fm ON fm.run_fondo = cd.run_fondo
             WHERE cd.fecha >= COALESCE(CAST(:from_date AS date), CURRENT_DATE - INTERVAL '1 year')
@@ -383,14 +389,15 @@ def industry_evolution(
         fm_monthly AS (
             SELECT DISTINCT ON (run_fondo, DATE_TRUNC('month', data_date))
                    data_date, fund_type, run_fondo, administrator, aum_clp,
-                   aportes_clp, rescates_clp
+                   aportes_clp, rescates_clp, nnm_clp
             FROM fm_daily
             ORDER BY run_fondo, DATE_TRUNC('month', data_date), data_date DESC
         ),
         fi_daily AS (
             SELECT v.fecha AS data_date, 'fi'::text AS fund_type, v.run_fondo,
                    fi.administrador AS administrator, SUM(v.patrimonio_neto) AS aum_clp,
-                   NULL::numeric AS aportes_clp, NULL::numeric AS rescates_clp
+                   NULL::numeric AS aportes_clp, NULL::numeric AS rescates_clp,
+                   NULL::numeric AS nnm_clp
             FROM valores_cuota_fi v
             JOIN fondos_inversion fi ON fi.run_fondo = v.run_fondo
             WHERE v.fecha >= COALESCE(CAST(:from_date AS date), CURRENT_DATE - INTERVAL '1 year')
@@ -400,7 +407,7 @@ def industry_evolution(
         fi_monthly AS (
             SELECT DISTINCT ON (run_fondo, DATE_TRUNC('month', data_date))
                    data_date, fund_type, run_fondo, administrator, aum_clp,
-                   aportes_clp, rescates_clp
+                   aportes_clp, rescates_clp, nnm_clp
             FROM fi_daily
             ORDER BY run_fondo, DATE_TRUNC('month', data_date), data_date DESC
         ),
@@ -425,7 +432,7 @@ def industry_evolution(
                    SUM(aum_clp) AS aum_clp,
                    SUM(aportes_clp) AS aportes_clp,
                    SUM(rescates_clp) AS rescates_clp,
-                   SUM(aportes_clp - rescates_clp) AS nnm_clp
+                   SUM(nnm_clp) AS nnm_clp
             FROM history
             WHERE {where}
             GROUP BY DATE_TRUNC('month', data_date)::date, fund_type,

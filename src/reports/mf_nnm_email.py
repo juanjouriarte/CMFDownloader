@@ -122,212 +122,13 @@ class ReportEmail:
     note: str
 
 
-_DETECT_FM_MIGRATIONS_SQL = text("""
-WITH terminated AS (
-    SELECT
-        fm.run_fondo AS source_run_fondo,
-        fm.razon_social_administradora AS administrador,
-        fm.fecha_termino_operaciones AS termination_date,
-        CASE cd.moneda
-            WHEN '$$' THEN 'CLP'
-            WHEN 'PROM' THEN 'USD'
-            ELSE cd.moneda
-        END AS currency,
-        SUM(cd.patrimonio_neto)::numeric AS source_final_aum
-    FROM fondo_mutuo fm
-    JOIN cartola_diaria cd
-      ON cd.run_fondo = fm.run_fondo
-     AND cd.fecha = fm.fecha_termino_operaciones
-    WHERE fm.fecha_termino_operaciones IS NOT NULL
-      AND cd.patrimonio_neto IS NOT NULL
-      AND NOT EXISTS (
-          SELECT 1
-          FROM cartola_diaria later
-          WHERE later.run_fondo = fm.run_fondo
-            AND later.fecha > fm.fecha_termino_operaciones
-      )
-      AND NOT EXISTS (
-          SELECT 1
-          FROM fm_flow_adjustments existing
-          WHERE existing.source_run_fondo = fm.run_fondo
-            AND existing.currency = CASE cd.moneda
-                WHEN '$$' THEN 'CLP'
-                WHEN 'PROM' THEN 'USD'
-                ELSE cd.moneda
-            END
-      )
-    GROUP BY
-        fm.run_fondo,
-        fm.razon_social_administradora,
-        fm.fecha_termino_operaciones,
-        CASE cd.moneda
-            WHEN '$$' THEN 'CLP'
-            WHEN 'PROM' THEN 'USD'
-            ELSE cd.moneda
-        END
-),
-target_flows AS (
-    SELECT
-        terminated.source_run_fondo,
-        terminated.termination_date,
-        terminated.currency,
-        terminated.source_final_aum,
-        cd.run_fondo AS target_run_fondo,
-        cd.fecha AS event_date,
-        SUM(cd.monto_aportado - cd.monto_rescatado)::numeric AS target_net
-    FROM terminated
-    JOIN fondo_mutuo fm
-      ON fm.razon_social_administradora = terminated.administrador
-     AND fm.run_fondo <> terminated.source_run_fondo
-    JOIN cartola_diaria cd
-      ON cd.run_fondo = fm.run_fondo
-     AND cd.fecha > terminated.termination_date
-     AND cd.fecha <= terminated.termination_date + 7
-     AND CASE cd.moneda
-             WHEN '$$' THEN 'CLP'
-             WHEN 'PROM' THEN 'USD'
-             ELSE cd.moneda
-         END = terminated.currency
-    WHERE cd.monto_aportado IS NOT NULL
-    GROUP BY
-        terminated.source_run_fondo,
-        terminated.termination_date,
-        terminated.currency,
-        terminated.source_final_aum,
-        cd.run_fondo,
-        cd.fecha
-    HAVING SUM(cd.monto_aportado - cd.monto_rescatado) > 0
-),
-candidates AS (
-    SELECT
-        f.source_run_fondo,
-        f.target_run_fondo,
-        f.event_date,
-        f.currency,
-        f.target_net AS amount,
-        f.source_final_aum,
-        ABS(f.target_net - f.source_final_aum)
-            / NULLIF(ABS(f.source_final_aum), 0) AS relative_difference,
-        source_cat.categoria AS source_category,
-        target_cat.categoria AS target_category
-    FROM target_flows f
-    JOIN LATERAL (
-        SELECT categoria
-        FROM categoria_fm
-        WHERE run_fondo = f.source_run_fondo
-          AND periodo <= f.termination_date
-        ORDER BY periodo DESC
-        LIMIT 1
-    ) source_cat ON TRUE
-    JOIN LATERAL (
-        SELECT categoria
-        FROM categoria_fm
-        WHERE run_fondo = f.target_run_fondo
-          AND periodo <= f.event_date
-        ORDER BY periodo DESC
-        LIMIT 1
-    ) target_cat ON target_cat.categoria = source_cat.categoria
-    WHERE f.source_final_aum > 0
-      AND ABS(f.target_net - f.source_final_aum)
-          / ABS(f.source_final_aum) <= 0.01
-),
-ranked AS (
-    SELECT
-        candidates.*,
-        ROW_NUMBER() OVER (
-            PARTITION BY source_run_fondo, currency
-            ORDER BY relative_difference, event_date, target_run_fondo
-        ) AS source_rank,
-        ROW_NUMBER() OVER (
-            PARTITION BY target_run_fondo, event_date, currency
-            ORDER BY relative_difference, source_run_fondo
-        ) AS target_rank
-    FROM candidates
-)
-INSERT INTO fm_flow_adjustments (
-    source_run_fondo,
-    target_run_fondo,
-    event_date,
-    currency,
-    amount,
-    source_final_aum,
-    relative_difference,
-    source_category,
-    target_category,
-    status,
-    reason
-)
-SELECT
-    source_run_fondo,
-    target_run_fondo,
-    event_date,
-    currency,
-    amount,
-    source_final_aum,
-    relative_difference,
-    source_category,
-    target_category,
-    'auto_confirmed',
-    'Official termination; same AGF, category, and currency; successor flow matched final AUM within 1%'
-FROM ranked
-WHERE source_rank = 1 AND target_rank = 1
-ON CONFLICT ON CONSTRAINT uq_fm_flow_adjustment_event DO UPDATE SET
-    amount = EXCLUDED.amount,
-    source_final_aum = EXCLUDED.source_final_aum,
-    relative_difference = EXCLUDED.relative_difference,
-    source_category = EXCLUDED.source_category,
-    target_category = EXCLUDED.target_category,
-    reason = EXCLUDED.reason,
-    updated_at = NOW()
-""")
-
-
 _REPORT_SQL = text("""
-WITH adjustment_totals AS (
-    SELECT
-        adjustment.target_run_fondo,
-        adjustment.event_date,
-        adjustment.currency,
-        SUM(adjustment.amount) AS amount
-    FROM fm_flow_adjustments adjustment
-    WHERE adjustment.status IN ('auto_confirmed', 'confirmed')
-    GROUP BY
-        adjustment.target_run_fondo,
-        adjustment.event_date,
-        adjustment.currency
-),
-adjustment_rows AS (
-    SELECT
-        adjustment.amount,
-        MIN(cd.id) AS cartola_id
-    FROM adjustment_totals adjustment
-    JOIN cartola_diaria cd
-      ON cd.run_fondo = adjustment.target_run_fondo
-     AND cd.fecha = adjustment.event_date
-     AND CASE cd.moneda
-             WHEN '$$' THEN 'CLP'
-             WHEN 'PROM' THEN 'USD'
-             ELSE cd.moneda
-         END = adjustment.currency
-    GROUP BY
-        adjustment.target_run_fondo,
-        adjustment.event_date,
-        adjustment.currency,
-        adjustment.amount
-),
-flows AS (
-    SELECT
-        cd.*,
-        cd.monto_aportado - cd.monto_rescatado
-            - COALESCE(adjustment.amount, 0) AS adjusted_net
-    FROM cartola_diaria cd
-    LEFT JOIN adjustment_rows adjustment ON adjustment.cartola_id = cd.id
-),
-daily_counts AS (
+WITH daily_counts AS (
     SELECT fecha, COUNT(DISTINCT run_fondo) AS fund_count
-    FROM flows
-    WHERE fecha >= (SELECT MAX(fecha) - INTERVAL '6 days' FROM flows)
-      AND monto_aportado IS NOT NULL
+    FROM fm_daily_flows_adjusted
+    WHERE fecha >= (
+        SELECT MAX(fecha) - INTERVAL '6 days' FROM fm_daily_flows_adjusted
+    )
     GROUP BY fecha
 ),
 eligible_dates AS (
@@ -352,32 +153,31 @@ SELECT
     lc.categoria,
     lc.nombre_cat,
     COUNT(DISTINCT cd.run_fondo) AS funds,
-    COALESCE(SUM(cd.adjusted_net)
+    COALESCE(SUM(cd.adjusted_nnm)
         FILTER (WHERE cd.fecha = rd.fecha AND cd.moneda = '$$'), 0) AS daily_clp,
-    COALESCE(SUM(cd.adjusted_net)
+    COALESCE(SUM(cd.adjusted_nnm)
         FILTER (WHERE cd.fecha = rd.fecha AND cd.moneda = 'PROM'), 0) AS daily_usd,
-    COALESCE(SUM(cd.adjusted_net)
+    COALESCE(SUM(cd.adjusted_nnm)
         FILTER (WHERE cd.fecha >= rd.fecha - INTERVAL '6 days' AND cd.moneda = '$$'), 0) AS week_clp,
-    COALESCE(SUM(cd.adjusted_net)
+    COALESCE(SUM(cd.adjusted_nnm)
         FILTER (WHERE cd.fecha >= rd.fecha - INTERVAL '6 days' AND cd.moneda = 'PROM'), 0) AS week_usd,
-    COALESCE(SUM(cd.adjusted_net)
+    COALESCE(SUM(cd.adjusted_nnm)
         FILTER (WHERE cd.fecha >= DATE_TRUNC('month', rd.fecha) AND cd.moneda = '$$'), 0) AS mtd_clp,
-    COALESCE(SUM(cd.adjusted_net)
+    COALESCE(SUM(cd.adjusted_nnm)
         FILTER (WHERE cd.fecha >= DATE_TRUNC('month', rd.fecha) AND cd.moneda = 'PROM'), 0) AS mtd_usd,
-    COALESCE(SUM(cd.adjusted_net)
+    COALESCE(SUM(cd.adjusted_nnm)
         FILTER (WHERE cd.moneda = '$$'), 0) AS ytd_clp,
-    COALESCE(SUM(cd.adjusted_net)
+    COALESCE(SUM(cd.adjusted_nnm)
         FILTER (WHERE cd.moneda = 'PROM'), 0) AS ytd_usd,
     COUNT(*) FILTER (
         WHERE cd.moneda IS NULL OR cd.moneda NOT IN ('$$', 'PROM')
     ) AS unsupported_currency_rows
 FROM reference_date rd
-JOIN flows cd
+JOIN fm_daily_flows_adjusted cd
   ON cd.fecha >= DATE_TRUNC('year', rd.fecha)
  AND cd.fecha <= rd.fecha
 JOIN latest_categories lc ON lc.run_fondo = cd.run_fondo
 JOIN fondo_mutuo fm ON fm.run_fondo = cd.run_fondo
-WHERE cd.monto_aportado IS NOT NULL
 GROUP BY rd.fecha,
          COALESCE(fm.razon_social_administradora, 'Sin administradora'),
          lc.tipo, lc.categoria, lc.nombre_cat
@@ -584,8 +384,6 @@ def _admin_category_flows(
 
 def load_snapshot() -> ReportSnapshot:
     with SessionLocal() as session:
-        session.execute(_DETECT_FM_MIGRATIONS_SQL)
-        session.commit()
         rows = session.execute(_REPORT_SQL).mappings().all()
         fi_rows = session.execute(_FI_REPORT_SQL).mappings().all()
 

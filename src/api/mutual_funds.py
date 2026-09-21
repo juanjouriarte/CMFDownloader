@@ -83,6 +83,8 @@ class FlowPoint(BaseModel):
     fecha: date
     aportes: float | None
     rescates: float | None
+    nnm_reportado: float | None
+    migraciones_internas: float | None
     nnm: float | None
 
 
@@ -382,16 +384,32 @@ def get_fund_flows(
         params["to_date"] = to_date
 
     where = "WHERE " + " AND ".join(conditions)
-    sql = text(f"""
-        SELECT DATE_TRUNC('month', fecha)::date AS fecha,
-               SUM(monto_aportado) AS aportes,
-               SUM(monto_rescatado) AS rescates,
-               SUM(monto_aportado - monto_rescatado) AS nnm
-        FROM cartola_diaria
-        {where}
-        GROUP BY DATE_TRUNC('month', fecha)
-        ORDER BY fecha DESC
-    """)
+    if serie:
+        sql = text(f"""
+            SELECT DATE_TRUNC('month', fecha)::date AS fecha,
+                   SUM(monto_aportado) AS aportes,
+                   SUM(monto_rescatado) AS rescates,
+                   SUM(monto_aportado - monto_rescatado) AS nnm_reportado,
+                   0::numeric AS migraciones_internas,
+                   SUM(monto_aportado - monto_rescatado) AS nnm
+            FROM cartola_diaria
+            {where}
+            GROUP BY DATE_TRUNC('month', fecha)
+            ORDER BY fecha DESC
+        """)
+    else:
+        sql = text(f"""
+            SELECT DATE_TRUNC('month', fecha)::date AS fecha,
+                   SUM(aportes) AS aportes,
+                   SUM(rescates) AS rescates,
+                   SUM(reported_nnm) AS nnm_reportado,
+                   SUM(internal_migration) AS migraciones_internas,
+                   SUM(adjusted_nnm) AS nnm
+            FROM fm_daily_flows_adjusted
+            {where}
+            GROUP BY DATE_TRUNC('month', fecha)
+            ORDER BY fecha DESC
+        """)
 
     with SessionLocal() as session:
         rows = session.execute(sql, params).mappings().all()
