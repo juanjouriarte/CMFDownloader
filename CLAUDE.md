@@ -329,7 +329,7 @@ AUM figures are CLP. FM net new money uses `cartola_diaria` generated columns (`
 | `mf_categories` | Day 5 of month 09:15 | FM fund classification → categoria_fm |
 | `mf_costs` | Day 5 of month 09:30 | MF monthly TAC costs |
 | `dividends` | Daily 09:00 | Dividends + capital changes (Bolsa de Santiago) |
-| `mf_nnm_email_report` | Daily 11:15 | Consolidated BTG-styled flow email for mutual funds plus all investment funds with daily NAV; FI categories aggregate rescatable and non-rescatable funds together. Includes high-level overview, detailed categories, and AGF breakdown by asset class, with daily/1W/MTD/YTD split by reported currency |
+| `mf_nnm_email_report` | Daily 11:15 | Three BTG-styled flow emails: mutual funds; FI Accionario/Balanceado/Deuda; and FI Alternativo/Fondo de Fondos/Otro. FI categories aggregate rescatable and non-rescatable funds together. Each email includes its high-level overview, detailed categories, and AGF breakdown by subcategory, with daily/1W/MTD/YTD split by reported currency |
 | `fi_daily_nav` | Daily 09:30 | FI daily NAV/AUM (vigente funds only) |
 | `fi_rentabilidad` | Daily 10:00 | Refresh `mv_rentabilidad_fi` (FI returns) |
 | `fi_shareholders` | Day 5 of month 10:00 | FI quarterly shareholders + cuotas (vigente only) |
@@ -533,7 +533,7 @@ print(DividendosDownloader().backfill())
 | `BOLSA_CSRF` | CSRF token for Bolsa de Santiago dividend and live-quote APIs (expires with cookies) |
 | `BOLSA_QUOTE_PACE_SECONDS` | Delay between individual Bolsa requests in the BTG fixed-income buffer (default `3`) |
 | `BOLSA_QUOTE_CACHE_SECONDS` | TTL for the on-demand BTG fixed-income quote snapshot (default `60`) |
-| `NNM_EMAIL_ENABLED` | Enable scheduled mutual-fund net-new-money emails (`true`/`false`) |
+| `NNM_EMAIL_ENABLED` | Enable the three scheduled fund net-new-money emails (`true`/`false`) |
 | `NNM_EMAIL_FROM` | Resend sender identity (test default: `CMF Reports <onboarding@resend.dev>`) |
 | `NNM_EMAIL_RECIPIENTS` | Comma-separated report recipients |
 | `RESEND_API_KEY` | Resend API key used only by the worker; never commit it |

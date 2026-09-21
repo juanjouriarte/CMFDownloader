@@ -22,6 +22,8 @@ REPORT_TYPES = tuple(tipo.value for tipo in TipoFondo)
 FI_REPORT_TYPES = (
     "Alternativo", "Accionario", "Deuda", "Fondo de Fondos", "Balanceado", "Otro",
 )
+FI_CORE_REPORT_TYPES = ("Accionario", "Balanceado", "Deuda")
+FI_OTHER_REPORT_TYPES = ("Alternativo", "Fondo de Fondos", "Otro")
 CURRENCY_ORDER = ("CLP", "USD", "EUR", "COP", "PEN")
 SANTIAGO_TZ = ZoneInfo("America/Santiago")
 
@@ -105,6 +107,19 @@ class ReportSnapshot:
     fi_rows: tuple[CategoryFlow, ...] = ()
     admin_rows: tuple[AdminAssetFlow, ...] = ()
     fi_admin_rows: tuple[AdminAssetFlow, ...] = ()
+
+
+@dataclass(frozen=True)
+class ReportEmail:
+    key: str
+    sequence: int
+    subject_label: str
+    title: str
+    report_date: date
+    rows: tuple[CategoryFlow, ...]
+    admin_rows: tuple[AdminAssetFlow, ...]
+    type_order: tuple[str, ...]
+    note: str
 
 
 _REPORT_SQL = text("""
@@ -541,6 +556,77 @@ def _plain_report(snapshot: ReportSnapshot) -> str:
     return "\n".join(lines)
 
 
+def _rows_for_types(rows, types: tuple[str, ...]):
+    allowed = set(types)
+    return tuple(row for row in rows if row.tipo in allowed)
+
+
+def _report_emails(snapshot: ReportSnapshot) -> tuple[ReportEmail, ...]:
+    fi_report_date = snapshot.fi_report_date or snapshot.report_date
+    return (
+        ReportEmail(
+            key="fm",
+            sequence=1,
+            subject_label="Fondos Mutuos",
+            title="Fondos Mutuos",
+            report_date=snapshot.report_date,
+            rows=snapshot.rows,
+            admin_rows=snapshot.admin_rows,
+            type_order=REPORT_TYPES,
+            note=(
+                "NNM = aportes − rescates · Monedas por separado · "
+                "Sin conversión FX · Fuente: CMF"
+            ),
+        ),
+        ReportEmail(
+            key="fi-core",
+            sequence=2,
+            subject_label="FI Accionario, Balanceado y Deuda",
+            title="Fondos de Inversión · Accionario, Balanceado y Deuda",
+            report_date=fi_report_date,
+            rows=_rows_for_types(snapshot.fi_rows, FI_CORE_REPORT_TYPES),
+            admin_rows=_rows_for_types(
+                snapshot.fi_admin_rows, FI_CORE_REPORT_TYPES
+            ),
+            type_order=FI_CORE_REPORT_TYPES,
+            note=(
+                "Flujo implícito por variación de cuotas · En fondos no "
+                "rescatables, las salidas son reducciones de cuotas · Monedas "
+                "por separado · Sin conversión FX · Fuente: CMF"
+            ),
+        ),
+        ReportEmail(
+            key="fi-other",
+            sequence=3,
+            subject_label="FI Alternativo, Fondo de Fondos y Otro",
+            title="Fondos de Inversión · Alternativo, Fondo de Fondos y Otro",
+            report_date=fi_report_date,
+            rows=_rows_for_types(snapshot.fi_rows, FI_OTHER_REPORT_TYPES),
+            admin_rows=_rows_for_types(
+                snapshot.fi_admin_rows, FI_OTHER_REPORT_TYPES
+            ),
+            type_order=FI_OTHER_REPORT_TYPES,
+            note=(
+                "Flujo implícito por variación de cuotas · En fondos no "
+                "rescatables, las salidas son reducciones de cuotas · Monedas "
+                "por separado · Sin conversión FX · Fuente: CMF"
+            ),
+        ),
+    )
+
+
+def _plain_email(report: ReportEmail) -> str:
+    lines = _plain_section(
+        report.title,
+        report.report_date,
+        report.rows,
+        report.type_order,
+        report.admin_rows,
+    )
+    lines.extend(["", report.note])
+    return "\n".join(lines)
+
+
 def _money_cell(amounts: dict[str, Decimal]) -> str:
     def line(value: Decimal, currency: str) -> str:
         color = "#15803d" if value > 0 else "#b91c1c"
@@ -716,7 +802,7 @@ def _html_section(
 {_detail_sections(section_rows, admin_rows, type_order)}"""
 
 
-def _html_report(snapshot: ReportSnapshot) -> str:
+def _html_document(title: str, sections: str, note: str) -> str:
     return f"""<!doctype html>
 <html><head><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
@@ -768,47 +854,94 @@ tr:last-child td{{border-bottom:0}}
 </style></head>
 <body><div class="wrap"><div class="top">
 <span class="brand">BTG Pactual</span><span class="date">Reporte diario</span>
-<h1>Net New Money · Fondos</h1></div>
-{_html_section("Fondos Mutuos", snapshot.report_date, snapshot.rows, REPORT_TYPES, snapshot.admin_rows)}
-{_html_section("Fondos de Inversión", snapshot.fi_report_date, snapshot.fi_rows, FI_REPORT_TYPES, snapshot.fi_admin_rows) if snapshot.fi_report_date and snapshot.fi_rows else ""}
-<div class="note">FM: aportes − rescates · FI: flujo implícito por variación de cuotas · En FI no rescatables, las salidas son reducciones de cuotas, no rescates contractuales · Monedas por separado · Sin conversión FX · Fuente: CMF</div>
+<h1>{html.escape(title)}</h1></div>
+{sections}
+<div class="note">{html.escape(note)}</div>
 </div></body></html>"""
+
+
+def _html_email(report: ReportEmail) -> str:
+    return _html_document(
+        f"Net New Money · {report.title}",
+        _html_section(
+            report.title,
+            report.report_date,
+            report.rows,
+            report.type_order,
+            report.admin_rows,
+        ),
+        report.note,
+    )
+
+
+def _html_report(snapshot: ReportSnapshot) -> str:
+    sections = _html_section(
+        "Fondos Mutuos",
+        snapshot.report_date,
+        snapshot.rows,
+        REPORT_TYPES,
+        snapshot.admin_rows,
+    )
+    if snapshot.fi_report_date and snapshot.fi_rows:
+        sections += _html_section(
+            "Fondos de Inversión",
+            snapshot.fi_report_date,
+            snapshot.fi_rows,
+            FI_REPORT_TYPES,
+            snapshot.fi_admin_rows,
+        )
+    return _html_document(
+        "Net New Money · Fondos",
+        sections,
+        "FM: aportes − rescates · FI: flujo implícito por variación de cuotas · "
+        "En FI no rescatables, las salidas son reducciones de cuotas, no "
+        "rescates contractuales · Monedas por separado · Sin conversión FX · "
+        "Fuente: CMF",
+    )
 
 
 def send_report(
     snapshot: ReportSnapshot,
     settings: ReportSettings,
-) -> str:
+) -> tuple[str, ...]:
     delivery_date = datetime.now(SANTIAGO_TZ).date()
     fi_data_date = snapshot.fi_report_date or snapshot.report_date
-    session = make_session(headers={
-        "Authorization": f"Bearer {settings.api_key}",
-        "Content-Type": "application/json",
-        "Idempotency-Key": (
-            f"fund-nnm-summary-v15-{delivery_date.isoformat()}-"
-            f"fm-{snapshot.report_date.isoformat()}-"
-            f"fi-{fi_data_date.isoformat()}"
-        ),
-    })
-    try:
-        response = session.post(
-            RESEND_URL,
-            json={
-                "from": settings.sender,
-                "to": list(settings.recipients),
-                "subject": f"BTG | Net New Money Fondos | {delivery_date.isoformat()}",
-                "text": _plain_report(snapshot),
-                "html": _html_report(snapshot),
-            },
-            timeout=30,
-        )
-    finally:
-        session.close()
-    response.raise_for_status()
-    message_id = response.json().get("id")
-    if not message_id:
-        raise RuntimeError("Resend accepted the request without returning a message ID")
-    return str(message_id)
+    message_ids = []
+    for report in _report_emails(snapshot):
+        session = make_session(headers={
+            "Authorization": f"Bearer {settings.api_key}",
+            "Content-Type": "application/json",
+            "Idempotency-Key": (
+                f"fund-nnm-split-v1-{report.key}-{delivery_date.isoformat()}-"
+                f"fm-{snapshot.report_date.isoformat()}-"
+                f"fi-{fi_data_date.isoformat()}"
+            ),
+        })
+        try:
+            response = session.post(
+                RESEND_URL,
+                json={
+                    "from": settings.sender,
+                    "to": list(settings.recipients),
+                    "subject": (
+                        f"BTG | Net New Money | {report.sequence}/3 "
+                        f"{report.subject_label} | {delivery_date.isoformat()}"
+                    ),
+                    "text": _plain_email(report),
+                    "html": _html_email(report),
+                },
+                timeout=30,
+            )
+        finally:
+            session.close()
+        response.raise_for_status()
+        message_id = response.json().get("id")
+        if not message_id:
+            raise RuntimeError(
+                "Resend accepted the request without returning a message ID"
+            )
+        message_ids.append(str(message_id))
+    return tuple(message_ids)
 
 
 def run() -> DownloadResult:
@@ -818,6 +951,6 @@ def run() -> DownloadResult:
         return DownloadResult(skipped=1)
 
     snapshot = load_snapshot()
-    message_id = send_report(snapshot, settings)
-    logger.info("Sent consolidated fund NNM report id=%s", message_id)
-    return DownloadResult(downloaded=1)
+    message_ids = send_report(snapshot, settings)
+    logger.info("Sent split fund NNM reports ids=%s", ",".join(message_ids))
+    return DownloadResult(downloaded=len(message_ids))

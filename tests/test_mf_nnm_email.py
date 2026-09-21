@@ -14,8 +14,11 @@ from src.reports.mf_nnm_email import (
     ReportSnapshot,
     _admin_category_flows,
     _category_flows,
+    _html_email,
     _html_report,
+    _plain_email,
     _plain_report,
+    _report_emails,
     run,
     send_report,
 )
@@ -212,6 +215,26 @@ def test_inactive_high_level_types_are_omitted(snapshot):
     assert "Estructurado" not in _html_report(snapshot)
 
 
+def test_report_is_split_into_three_complete_emails(snapshot):
+    reports = _report_emails(snapshot)
+
+    assert [report.sequence for report in reports] == [1, 2, 3]
+    assert [report.key for report in reports] == ["fm", "fi-core", "fi-other"]
+    assert {row.tipo for row in reports[0].rows} == {"Accionario"}
+    assert {row.tipo for row in reports[1].rows} == {"Accionario"}
+    assert {row.tipo for row in reports[2].rows} == {"Alternativo"}
+
+    fm_html = _html_email(reports[0])
+    core_html = _html_email(reports[1])
+    other_html = _html_email(reports[2])
+    assert "Accionario Nacional &lt;Large Cap&gt;" in fm_html
+    assert "RV Nacional Small/Mid Cap" in core_html
+    assert "Deuda Privada" not in core_html
+    assert "Deuda Privada" in other_html
+    assert "RV Nacional Small/Mid Cap" not in other_html
+    assert "AGFs POR SUBCATEGORÍA" in _plain_email(reports[0])
+
+
 def test_granular_rows_aggregate_by_category_and_admin():
     def row(admin, funds, daily):
         return {
@@ -262,20 +285,34 @@ def test_send_report_uses_resend_and_idempotency(snapshot):
         patch("src.reports.mf_nnm_email.datetime") as clock,
     ):
         clock.now.return_value.date.return_value = date(2026, 9, 15)
-        assert send_report(snapshot, settings) == "email-123"
+        assert send_report(snapshot, settings) == (
+            "email-123", "email-123", "email-123"
+        )
 
-    response.raise_for_status.assert_called_once_with()
-    headers = factory.call_args.kwargs["headers"]
+    assert response.raise_for_status.call_count == 3
+    assert factory.call_count == 3
+    headers = factory.call_args_list[0].kwargs["headers"]
     assert headers["Authorization"] == "Bearer test-key"
     assert headers["Idempotency-Key"] == (
-        "fund-nnm-summary-v15-2026-09-15-fm-2026-09-14-fi-2026-09-13"
+        "fund-nnm-split-v1-fm-2026-09-15-fm-2026-09-14-fi-2026-09-13"
     )
-    request = session.post.call_args
-    assert request.kwargs["json"]["to"] == ["recipient@example.com"]
-    assert request.kwargs["json"]["subject"] == (
-        "BTG | Net New Money Fondos | 2026-09-15"
+    requests = session.post.call_args_list
+    assert all(
+        request.kwargs["json"]["to"] == ["recipient@example.com"]
+        for request in requests
     )
-    session.close.assert_called_once_with()
+    assert [request.kwargs["json"]["subject"] for request in requests] == [
+        "BTG | Net New Money | 1/3 Fondos Mutuos | 2026-09-15",
+        (
+            "BTG | Net New Money | 2/3 FI Accionario, Balanceado y Deuda | "
+            "2026-09-15"
+        ),
+        (
+            "BTG | Net New Money | 3/3 FI Alternativo, Fondo de Fondos y Otro | "
+            "2026-09-15"
+        ),
+    ]
+    assert session.close.call_count == 3
 
 
 def test_disabled_job_does_not_query_or_send(monkeypatch):
