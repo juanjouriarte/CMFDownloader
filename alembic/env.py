@@ -21,11 +21,13 @@ import src.db.models.valores_cuota_fi  # noqa: F401
 import src.db.models.aportantes_fi  # noqa: F401
 import src.db.models.carteras_fi  # noqa: F401
 import src.db.models.entidades  # noqa: F401
+import src.db.models.emisores  # noqa: F401
 import src.db.models.dividendos  # noqa: F401
 import src.db.models.job_runs  # noqa: F401
 import src.db.models.categoria_fi  # noqa: F401
 import src.db.models.categoria_fm  # noqa: F401
 import src.db.models.ref_codes  # noqa: F401
+import src.db.models.fm_flow_adjustments  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", DATABASE_URL)

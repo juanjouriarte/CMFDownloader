@@ -180,6 +180,7 @@ src/
 │       ├── job_runs.py             # job_runs (scheduler execution history)
 │       ├── categoria_fi.py         # categoria_fi (FI fund classifications)
 │       ├── categoria_fm.py         # categoria_fm (FM fund classifications)
+│       ├── fm_flow_adjustments.py  # Auditable internal FM migrations excluded from external NNM
 │       └── ref_codes.py            # ref_codes — unified CMF reference table (domain + code + name)
 ├── base.py                   # BaseDownloader + DownloadResult
 ├── categories.py             # Circular No. 7 category definitions + country tables
@@ -329,7 +330,7 @@ AUM figures are CLP. FM net new money uses `cartola_diaria` generated columns (`
 | `mf_categories` | Day 5 of month 09:15 | FM fund classification → categoria_fm |
 | `mf_costs` | Day 5 of month 09:30 | MF monthly TAC costs |
 | `dividends` | Daily 09:00 | Dividends + capital changes (Bolsa de Santiago) |
-| `mf_nnm_email_report` | Daily 11:15 | Three BTG-styled flow emails: mutual funds; FI Accionario/Balanceado/Deuda; and FI Alternativo/Fondo de Fondos/Otro. FI categories aggregate rescatable and non-rescatable funds together. Each email includes its high-level overview, detailed categories, and AGF breakdown by subcategory, with daily/1W/MTD/YTD split by reported currency |
+| `mf_nnm_email_report` | Daily 11:15 | Three BTG-styled flow emails: mutual funds; FI Accionario/Balanceado/Deuda; and FI Alternativo/Fondo de Fondos/Otro. FM external NNM excludes high-confidence internal fund migrations detected from official terminations and stored in `fm_flow_adjustments`; raw CMF rows remain unchanged. FI categories aggregate rescatable and non-rescatable funds together. Each email includes its high-level overview, detailed categories, and AGF breakdown by subcategory, with daily/1W/MTD/YTD split by reported currency |
 | `fi_daily_nav` | Daily 09:30 | FI daily NAV/AUM (vigente funds only) |
 | `fi_rentabilidad` | Daily 10:00 | Refresh `mv_rentabilidad_fi` (FI returns) |
 | `fi_shareholders` | Day 5 of month 10:00 | FI quarterly shareholders + cuotas (vigente only) |

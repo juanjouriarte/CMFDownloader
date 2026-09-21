@@ -208,6 +208,8 @@ def test_report_renders_plain_text_and_escaped_html(snapshot):
     assert "BTG Pactual AGF" in rendered_html
     assert "LarrainVial Activos AGF" in rendered_html
     assert "AGFs POR SUBCATEGORÍA" in plain
+    assert "migraciones internas detectadas" in plain
+    assert "migraciones internas detectadas" in rendered_html
 
 
 def test_inactive_high_level_types_are_omitted(snapshot):
