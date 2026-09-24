@@ -300,7 +300,7 @@ FastMCP server exposing 16 tools for AI-driven fund-market analysis. Runs as the
 | `search_funds` | Find FM/FI funds by name or admin |
 | `compare_funds` | Side-by-side returns for 2+ funds |
 | `top_funds_by_return` | Rankings by 1D/1W/1M/1Y/5Y/YTD. Optional `as_of_date` (YYYY-MM-DD) computes returns dynamically from raw data for any historical date (FM: total return with factor_reparto; FI: NAV-only) |
-| `net_new_money_ranking` | Net new money by AGF or fund. `fund_type`: `fm` (daily, explicit aportes+rescates) or `fi` (rescatable: daily implied via `flujo_neto`; non-rescatable: quarterly `cuotas_fi`). `rescatable` filter for FI. Optional `from_date`/`to_date` overrides `period` preset |
+| `net_new_money_ranking` | Net new money by AGF, category, or fund. Returns a structured response with explicit data/classification dates and amounts in millions, always separated and ranked within normalized currency. `limit` applies per currency/methodology partition. Supports AGF, high-level type, category, currency, rescatable, and custom-date filters plus optional fund contributors. FM exposes reported NNM, confirmed internal migrations, and adjusted external NNM; FI uses daily implied `flujo_neto` for rescatables and quarterly `cuotas_fi` for non-rescatables. Preset periods anchor to each source's latest loaded date rather than the server clock |
 | `fi_equity_activity` | Equity events for non-rescatable FI funds: `raising` (new cuotas issued), `returning` (cuotas paid back), `pending_calls` (cuotas subscribed but not yet paid). Returns `capital_raised_bn_clp`, `capital_returned_bn_clp`, `net_equity_change_bn_clp`, `pending_calls_bn_clp`, `num_contratos_promesa`, `num_promitentes`. Group by fund or AGF |
 | `get_fund_full_picture` | Identity, returns, flows, portfolio, shareholders |
 | `get_administrator_full_picture` | AUM, market share, best/worst funds, flows, shareholders, `top_fm_positions` (top 15 holdings across all admin FM funds, enriched) |
@@ -313,7 +313,7 @@ FastMCP server exposing 16 tools for AI-driven fund-market analysis. Runs as the
 | `emisor_fund_exposure` | Given a company (RUT or name), list every fund holding it with weight and instrument type. Covers domestic (naci) + foreign (extr) portfolios — foreign matched by nombre_emisor when searching by name; results tagged with `source=naci/extr` |
 | `portfolio_overlap` | Jaccard overlap score + shared positions between two funds |
 
-AUM figures are CLP. FM external net new money uses `fm_daily_flows_adjusted`, which preserves reported aportes/rescates and subtracts confirmed internal migrations stored in `fm_flow_adjustments`. FI rescatable NNM uses `valores_cuota_fi.flujo_neto` (daily implied flow, pre-computed at load time). FI non-rescatable uses quarterly `cuotas_fi`. The `mcp` container only needs `DATABASE_URL`.
+AUM figures are CLP. MCP NNM amounts are returned in millions of the explicit currency on each row and currencies are never aggregated together. FM external net new money preserves reported aportes/rescates and subtracts confirmed internal migrations stored in `fm_flow_adjustments`; its MCP query reads the indexed raw date range and joins those adjustments to avoid full-history view scans. FI rescatable NNM uses `valores_cuota_fi.flujo_neto` (daily implied flow, pre-computed at load time). FI non-rescatable uses quarterly `cuotas_fi`. The `mcp` container only needs `DATABASE_URL`.
 
 ### Scheduler jobs (America/Santiago)
 
