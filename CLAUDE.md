@@ -459,6 +459,26 @@ Public database endpoints return `Cache-Control: public, max-age=3600` and all e
 
 ## Git Workflow
 
+### Working with BTGDashboard
+
+The frontend lives in the sibling repository `../BTGDashboard`. Backend and
+frontend work can be coordinated from this checkout. Read that repository's
+`AGENTS.md` and `CLAUDE.md` before changing frontend files; its instructions apply
+there. Keep changes and commits scoped to their respective repositories and
+preserve existing local work in each.
+
+Open `BTG.code-workspace` in an editor that supports multi-root workspaces to
+browse both repositories. This file does not change sandbox write permissions;
+access outside the active writable roots still requires tool approval.
+
+Run the API here with `.venv/bin/uvicorn main:app --reload` and, in a second
+terminal from this directory, run `npm --prefix ../BTGDashboard run dev`.
+The dashboard's development `/api/cmf` proxy targets `http://127.0.0.1:8000`.
+Validate frontend changes with `npm --prefix ../BTGDashboard run build` and
+the relevant lint checks. Coordinate API contract changes across both repos.
+
+### Branches and commits
+
 - Always develop on a feature branch, never directly on `main`.
 - Branch naming: `feature/<short-description>`
 - Use **conventional commits** for all commit messages and PR titles:
