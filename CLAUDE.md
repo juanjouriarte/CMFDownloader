@@ -239,6 +239,16 @@ The DB is the sole source of truth — ephemeral disk is just a staging area.
 Set automatically on first fetch result. Vigente funds are never marked `False`.
 This eliminates wasted requests for the ~750 non-vigente funds with no CMF portal data.
 
+### FI shareholder import completeness
+
+The shareholder downloader skips a fund/quarter only when **both** `cuotas_fi`
+and `aportantes_fi` contain records for that exact pair. Cuota data alone does not
+prove shareholders were imported. Empty shareholder responses remain eligible
+for retry, including legitimate empty filings; no completion marker is inferred.
+This presence check does not certify that all source shareholder rows are present.
+The incremental shareholder job revisits the two previous completed quarters to
+catch late filings, and quarter iteration excludes future quarter-end dates.
+
 ### Job tracking
 
 Every scheduler job writes a row to `job_runs` on start and updates it on finish via `_run_tracked()` in `scheduler.py`. Fields: `job_id`, `started_at`, `finished_at`, `status` (running/success/error), `rows_upserted`, `errors`, `error_detail`.
