@@ -291,6 +291,29 @@ r = (VL_end - VL_start + SUM(dividends in period)) / VL_start × 100
 
 Both pick the **most recent date whose fund count is ≥ 90% of the maximum seen in the last 7 days** as reference. This tolerates a handful of late-publishing funds while still preferring recency (e.g. one fund missing on a newer date no longer anchors the MV to an older date). Note: raw CMF data occasionally has corrupt `valor_cuota` jumps for individual fund/series — the views reflect source data faithfully and do not mask these.
 
+### Industria monthly history
+
+`mv_industry_monthly_fm` and `mv_industry_monthly_fi` store monthly history per
+fund and normalized native currency. Each row contains the latest available
+fund AUM in that month and full-month raw FM flows. The API joins current fund
+classifications and confirmed flow adjustments at read time, so changes to
+those dimensions do not require rebuilding history.
+
+The scheduled NAV jobs refresh their corresponding view **after** importing,
+using `REFRESH MATERIALIZED VIEW CONCURRENTLY`; child job runs are tracked as
+`fm_industry_monthly` / `fi_industry_monthly`. This also incorporates corrections
+to already-loaded dates. After manual NAV imports/backfills, refresh the matching
+view explicitly with `src.scheduler._refresh_view('mv_industry_monthly_fm')`
+(or the FI counterpart).
+
+`/industry/evolution` uses these summaries for month-start ranges ending today
+or later. It compares the latest source date with the summary date before use;
+if a newer source date is present, or a request needs partial historical months,
+it falls back to the original exact daily query. Same-date source corrections
+become visible after the post-import refresh. The response and currency contract
+are identical on both paths. Migration `x4y5z6a7b8c9` builds the initial history
+and unique indexes required for concurrent refresh.
+
 ### `mv_administradores` materialized view
 
 Unified administradora dimension derived entirely from existing tables (no new download). Joins `fondo_mutuo` (FM, has admin RUT) with `fondos_inversion` (FI, name only) via `LOWER(TRIM(nombre))` match — name matching works because both come from the same CMF source. ~50 rows, refreshed daily at 09:20. Columns: `rut`, `nombre`, `funds_fm`, `funds_fm_vigente`, `funds_fi`, `funds_fi_vigente`, `funds_total`.
@@ -380,9 +403,10 @@ Public database endpoints return `Cache-Control: public, max-age=3600` and all e
 | `GET /categories/fi` | FI fund classifications. Filters: `categoria`, `tipo`, `admin` |
 | `GET /categories/fm` | FM fund classifications. Filters: `categoria`, `tipo`, `admin` |
 | `GET /categories/catalog` | Hierarchical category catalog with fund counts. Optional `?fund_type=fm\|fi` returns just that side's tree; omitted returns `{fm: [...], fi: [...]}` combined |
-| `GET /industry/overview` | Market snapshot: total AUM, active funds, admins, flows. Filters: `fund_type`, `categoria`, `tipo`. Returns `aportes_month_clp`, `rescates_month_clp`, `neto_month_clp` (FM gross flows) + `top_administrators` (with `nnm_ytd_clp`) + `category_aum_breakdown` (with `nnm_ytd_clp`) |
-| `GET /industry/funds` | Unified FM/FI screener with classification, AUM, returns, and flows. Filters: `fund_type`, `type`, `group`, `category`, `admin`, `rescatable`, `vigente` |
-| `GET /industry/evolution` | Monthly AUM history grouped by market/admin/category. Filters: `fund_type`, `categoria`, `tipo`, `from_date`, `to_date`. Returns `aportes_clp`, `rescates_clp`, `nnm_clp` per month point (FM only; FI flows are null) |
+| `GET /industry/currencies` | Normalized reporting currencies present in the latest FM/FI NAV data |
+| `GET /industry/overview` | Single-currency snapshot (default CLP): AUM, counts, monthly flows, top ten admins, independent BTG aggregate, category breakdown, and source dates. Filters: `currency`, `fund_type`, `categoria`, `tipo`, `nombre_cat`, `admin`, `rescatable`. `include_ytd=false` restricts flow scans to the source's current month and returns null YTD fields; defaults to true for existing consumers. FM external flows subtract confirmed internal migrations; FI flows cover rescatable funds only. |
+| `GET /industry/funds` | Unified FM/FI screener with classification, AUM, returns, and flows. Filters: `currency`, `fund_type`, `type`, `group`, `category`, `admin`, `rescatable`, `vigente`. Without currency filtering, results remain partitioned by currency. |
+| `GET /industry/evolution` | Monthly AUM history within one currency (default CLP). Filters: `currency`, `fund_type`, `categoria`, `tipo`, `nombre_cat`, `admin`, `rescatable`, `from_date`, `to_date`; group by market/admin/category. Uses last available fund AUM per month and sums full-month FM flows, subtracting confirmed migrations. FI flows remain null. |
 | `GET /ref-codes` | All CMF reference codes. Filter: `?domain=country\|currency\|instrument`. Returns `domain`, `code`, `name`, `updated_at` |
 | `GET /admins` | List administradoras with FM+FI fund counts. Filter: `search` |
 | `GET /admins/{rut}` | Single administradora by RUT |
@@ -408,6 +432,8 @@ Public database endpoints return `Cache-Control: public, max-age=3600` and all e
 | `GET /emisores/{rut}/history` | Monthly (FM) + quarterly (FI) time series of total market exposure. Filters: `fund_type`, `tipo_instrumento` (drill-down by instrument type), `from_date`. Powers exposure timeline chart |
 | `GET /emisores/{rut}/funds/{run_fondo}/history` | Time series of how much a **specific fund** has held a **specific company** — one row per period × instrument type. Filters: `fund_type`, `from_date` |
 | `GET /emisores/{rut}/concentration` | Herfindahl index of company exposure across AGFs. Label: `diversified` (<1500), `moderate` (1500-2500), `concentrated` (>2500). Returns `agfs[]` with `pct_of_total` |
+
+**Industria currency contract**: generic amount fields (`aum`, `total_aum`, `nnm`, etc.) are in native units of the explicit currency. No FX conversion is performed. Legacy `*_clp` aliases are populated only for CLP; they are null for other currencies. Source symbols `$`/`$$` normalize to CLP, `US$`/`PROM` to USD. The FI fund list includes `moneda` so the dashboard can filter its universe correctly.
 
 **Shareholder AUM formula**: `pct_propiedad / 100 × fund_aum`. Fund AUM is estimated as the median of `valorizacion_cierre × 100 / pct_activo_fondo` across all `cartera_fi_nac` + `cartera_fi_ext` positions for that fund/quarter.
 

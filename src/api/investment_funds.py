@@ -28,6 +28,7 @@ class GeoPct(BaseModel):
 
 
 class FundFIItem(BaseModel):
+    moneda: str | None = None
     run_fondo: str
     razon_social: str | None
     administrador: str | None
@@ -167,7 +168,7 @@ def list_investment_funds(
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     sql = text(f"""
-        SELECT f.run_fondo, f.razon_social, f.administrador, f.rescatable, f.vigente,
+        SELECT f.run_fondo, f.razon_social, f.administrador, f.rescatable, f.vigente, f.moneda,
                cat.categoria, cat.tipo, cat.nombre_cat
         FROM fondos_inversion f
         LEFT JOIN LATERAL (
@@ -192,7 +193,7 @@ def get_investment_fund(run: str, _: CacheHook) -> FundFIDetail:
     with SessionLocal() as session:
         fund_row = session.execute(
             text("""
-                SELECT f.run_fondo, f.razon_social, f.administrador, f.rescatable, f.vigente,
+                SELECT f.run_fondo, f.razon_social, f.administrador, f.rescatable, f.vigente, f.moneda,
                        cat.categoria, cat.tipo, cat.nombre_cat
                 FROM fondos_inversion f
                 LEFT JOIN LATERAL (

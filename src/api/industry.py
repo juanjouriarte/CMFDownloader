@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import date
-from typing import Literal
+from decimal import Decimal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Query
 from sqlalchemy import text
@@ -10,171 +12,21 @@ from src.db.engine import SessionLocal
 from .deps import CacheHook, Pagination
 
 router = APIRouter(prefix="/industry", tags=["industry"])
-
 FundType = Literal["all", "fm", "fi"]
 GroupBy = Literal["market", "admin", "category"]
+Currency = Annotated[str, Query(pattern=r"^(?:[A-Z]{3}|UF)$", description="Reporting currency; no FX conversion")]
 
-_SORT_COLUMNS = {
-    "aum": "aum_clp",
-    "r_1y": "r_1y",
-    "r_ytd": "r_ytd",
-    "nnm": "nnm_ytd_clp",
-}
 
-_SNAPSHOT_CTE = """
-WITH fm_ref AS (
-    SELECT fecha FROM cartola_diaria
-    WHERE fecha >= (SELECT MAX(fecha) FROM cartola_diaria) - 7
-    GROUP BY fecha
-    ORDER BY COUNT(DISTINCT run_fondo) DESC, fecha DESC
-    LIMIT 1
-),
-fm_nav AS (
-    SELECT cd.run_fondo, cd.serie, cd.fecha, cd.patrimonio_neto
-    FROM cartola_diaria cd
-    WHERE cd.fecha = (SELECT fecha FROM fm_ref)
-),
-fm_aum AS (
-    SELECT run_fondo, SUM(patrimonio_neto) AS aum_clp, MAX(fecha) AS data_date
-    FROM fm_nav GROUP BY run_fondo
-),
-fm_series AS (
-    SELECT DISTINCT ON (run_fondo) run_fondo, serie
-    FROM fm_nav
-    ORDER BY run_fondo, patrimonio_neto DESC NULLS LAST, serie
-),
-fm_cat AS (
-    SELECT DISTINCT ON (run_fondo) run_fondo, tipo, grupo, categoria, nombre_cat
-    FROM categoria_fm
-    ORDER BY run_fondo, periodo DESC
-),
-fm_flows AS (
-    SELECT run_fondo,
-           SUM(adjusted_nnm)
-               FILTER (WHERE fecha >= DATE_TRUNC('month', CURRENT_DATE)) AS nnm_month_clp,
-           SUM(adjusted_nnm)
-               FILTER (WHERE fecha >= DATE_TRUNC('year', CURRENT_DATE)) AS nnm_ytd_clp
-    FROM fm_daily_flows_adjusted
-    WHERE fecha >= DATE_TRUNC('year', CURRENT_DATE)
-    GROUP BY run_fondo
-),
-fm AS (
-    SELECT 'fm'::text AS fund_type, f.run_fondo, f.nombre_fondo AS name,
-           f.razon_social_administradora AS administrator,
-           f.fecha_termino_operaciones IS NULL AS vigente,
-           NULL::boolean AS rescatable,
-           c.tipo AS category_type, c.grupo AS category_group,
-           c.categoria AS category, c.nombre_cat AS category_name,
-           a.aum_clp,
-           NULL::numeric AS aum_usd,
-           NULL::numeric AS aum_eur,
-           NULL::numeric AS aum_other,
-           a.data_date, r.r_1y, r.r_ytd,
-           COALESCE(fl.nnm_month_clp, 0) AS nnm_month_clp,
-           COALESCE(fl.nnm_ytd_clp, 0) AS nnm_ytd_clp
-    FROM fondo_mutuo f
-    LEFT JOIN fm_aum a ON a.run_fondo = f.run_fondo
-    LEFT JOIN fm_series s ON s.run_fondo = f.run_fondo
-    LEFT JOIN v_rentabilidad_fm_quality r
-      ON r.run_fondo = s.run_fondo AND r.serie IS NOT DISTINCT FROM s.serie
-     AND NOT r.is_data_suspicious
-    LEFT JOIN fm_cat c ON c.run_fondo = f.run_fondo
-    LEFT JOIN fm_flows fl ON fl.run_fondo = f.run_fondo
-),
-fi_ref AS (
-    SELECT fecha FROM valores_cuota_fi v
-    JOIN fondos_inversion f ON f.run_fondo = v.run_fondo
-    WHERE f.vigente = true
-      AND v.fecha >= (SELECT MAX(fecha) FROM valores_cuota_fi) - 7
-    GROUP BY fecha
-    ORDER BY COUNT(DISTINCT v.run_fondo) DESC, fecha DESC
-    LIMIT 1
-),
-fi_nav AS (
-    SELECT v.run_fondo, v.serie, v.fecha, v.patrimonio_neto, v.moneda
-    FROM valores_cuota_fi v
-    WHERE v.fecha = (SELECT fecha FROM fi_ref)
-),
-fi_aum AS (
-    SELECT n.run_fondo,
-           -- NULL moneda rows inherit the fund's pre-computed dominant currency
-           SUM(CASE WHEN COALESCE(n.moneda, fi_meta.moneda, '$$') IN ('$$')
-                    THEN n.patrimonio_neto ELSE 0 END) AS aum_clp,
-           SUM(CASE WHEN COALESCE(n.moneda, fi_meta.moneda) = 'PROM'
-                    THEN n.patrimonio_neto ELSE 0 END) AS aum_usd,
-           SUM(CASE WHEN COALESCE(n.moneda, fi_meta.moneda) = 'EUR'
-                    THEN n.patrimonio_neto ELSE 0 END) AS aum_eur,
-           SUM(CASE WHEN COALESCE(n.moneda, fi_meta.moneda) NOT IN ('$$', 'PROM', 'EUR', '0')
-                    THEN n.patrimonio_neto ELSE 0 END) AS aum_other,
-           MAX(n.fecha) AS data_date
-    FROM fi_nav n
-    LEFT JOIN fondos_inversion fi_meta ON fi_meta.run_fondo = n.run_fondo
-    GROUP BY n.run_fondo
-),
-fi_series AS (
-    SELECT DISTINCT ON (run_fondo) run_fondo, serie
-    FROM fi_nav
-    ORDER BY run_fondo, patrimonio_neto DESC NULLS LAST, serie
-),
-fi_cat AS (
-    SELECT DISTINCT ON (run_fondo) run_fondo, tipo, grupo, categoria, nombre_cat
-    FROM categoria_fi
-    ORDER BY run_fondo, periodo DESC
-),
-fi_flows_rescatable AS (
-    SELECT run_fondo,
-           SUM(flujo_neto) FILTER (WHERE fecha >= DATE_TRUNC('month', CURRENT_DATE)) AS nnm_month_clp,
-           SUM(flujo_neto) FILTER (WHERE fecha >= DATE_TRUNC('year', CURRENT_DATE)) AS nnm_ytd_clp
-    FROM valores_cuota_fi
-    WHERE fecha >= DATE_TRUNC('year', CURRENT_DATE)
-    GROUP BY run_fondo
-),
-fi_flows_non_rescatable AS (
-    SELECT cf.run_fondo,
-           SUM((cf.cuotas_emitidas - cf.cuotas_pagadas) * cf.valor_libro)
-               FILTER (WHERE cf.periodo >= DATE_TRUNC('month', CURRENT_DATE)) AS nnm_month_clp,
-           SUM((cf.cuotas_emitidas - cf.cuotas_pagadas) * cf.valor_libro)
-               FILTER (WHERE cf.periodo >= DATE_TRUNC('year', CURRENT_DATE)) AS nnm_ytd_clp
-    FROM cuotas_fi cf
-    JOIN fondos_inversion f ON f.run_fondo = cf.run_fondo
-    WHERE f.rescatable = false
-      AND cf.periodo >= DATE_TRUNC('year', CURRENT_DATE)
-      AND cf.valor_libro > 0
-    GROUP BY cf.run_fondo
-),
-fi_flows AS (
-    SELECT COALESCE(r.run_fondo, n.run_fondo) AS run_fondo,
-           COALESCE(r.nnm_month_clp, n.nnm_month_clp, 0) AS nnm_month_clp,
-           COALESCE(r.nnm_ytd_clp, n.nnm_ytd_clp, 0) AS nnm_ytd_clp
-    FROM fi_flows_rescatable r
-    FULL OUTER JOIN fi_flows_non_rescatable n ON n.run_fondo = r.run_fondo
-),
-fi AS (
-    SELECT 'fi'::text AS fund_type, f.run_fondo, f.razon_social AS name,
-           f.administrador AS administrator, COALESCE(f.vigente, false) AS vigente,
-           f.rescatable, c.tipo AS category_type, c.grupo AS category_group,
-           c.categoria AS category, c.nombre_cat AS category_name,
-           NULLIF(a.aum_clp, 0) AS aum_clp,
-           NULLIF(a.aum_usd, 0) AS aum_usd,
-           NULLIF(a.aum_eur, 0) AS aum_eur,
-           NULLIF(a.aum_other, 0) AS aum_other,
-           a.data_date, r.r_1y, r.r_ytd,
-           COALESCE(fl.nnm_month_clp, 0) AS nnm_month_clp,
-           COALESCE(fl.nnm_ytd_clp, 0) AS nnm_ytd_clp
-    FROM fondos_inversion f
-    LEFT JOIN fi_aum a ON a.run_fondo = f.run_fondo
-    LEFT JOIN fi_series s ON s.run_fondo = f.run_fondo
-    LEFT JOIN mv_rentabilidad_fi r
-      ON r.run_fondo = s.run_fondo AND r.serie IS NOT DISTINCT FROM s.serie
-    LEFT JOIN fi_cat c ON c.run_fondo = f.run_fondo
-    LEFT JOIN fi_flows fl ON fl.run_fondo = f.run_fondo
-),
-snapshot AS (
-    SELECT * FROM fm
-    UNION ALL
-    SELECT * FROM fi
-)
-"""
+def _currency(column: str) -> str:
+    return f"""CASE UPPER(TRIM({column}))
+        WHEN '$$' THEN 'CLP' WHEN '$' THEN 'CLP'
+        WHEN 'PROM' THEN 'USD' WHEN 'US$' THEN 'USD'
+        WHEN '0' THEN NULL WHEN '' THEN NULL
+        ELSE UPPER(TRIM({column})) END"""
+
+
+FM_CURRENCY = f"COALESCE({_currency('cd.moneda')}, {_currency('f.moneda')})"
+FI_CURRENCY = f"COALESCE({_currency('v.moneda')}, {_currency('f.moneda')})"
 
 
 def _rows(sql: str, params: dict | None = None) -> list[dict]:
@@ -183,265 +35,349 @@ def _rows(sql: str, params: dict | None = None) -> list[dict]:
     return [dict(row) for row in result]
 
 
-@router.get("/funds")
+def _reference(table: str) -> str:
+    # Prefer the newest date with near-complete coverage, not the fullest older date.
+    return f"""SELECT MAX(fecha) FROM (
+        SELECT fecha, COUNT(DISTINCT run_fondo) AS coverage,
+               MAX(COUNT(DISTINCT run_fondo)) OVER () AS max_coverage
+        FROM {table}
+        WHERE fecha >= (SELECT MAX(fecha) FROM {table}) - 7
+        GROUP BY fecha
+    ) dates WHERE coverage >= max_coverage * 0.9"""
+
+
+def _snapshot_cte(include_returns: bool = True, include_ytd: bool = True) -> str:
+    flow_period = "year" if include_ytd else "month"
+    return f"""WITH
+    fm_ref AS (SELECT ({_reference('cartola_diaria')}) AS fecha),
+    fi_ref AS (SELECT ({_reference('valores_cuota_fi')}) AS fecha),
+    fm_nav AS (
+        SELECT cd.*, {FM_CURRENCY} AS currency
+        FROM cartola_diaria cd JOIN fondo_mutuo f USING (run_fondo)
+        WHERE :fund_type != 'fi' AND cd.fecha = (SELECT fecha FROM fm_ref)
+    ),
+    fi_nav AS (
+        SELECT v.*, {FI_CURRENCY} AS currency
+        FROM valores_cuota_fi v JOIN fondos_inversion f USING (run_fondo)
+        WHERE :fund_type != 'fm' AND v.fecha = (SELECT fecha FROM fi_ref)
+    ),
+    fm_aum AS (
+        SELECT run_fondo, currency, SUM(patrimonio_neto) AS aum, MAX(fecha) AS data_date
+        FROM fm_nav GROUP BY run_fondo, currency
+    ),
+    fi_aum AS (
+        SELECT run_fondo, currency, SUM(patrimonio_neto) AS aum, MAX(fecha) AS data_date
+        FROM fi_nav GROUP BY run_fondo, currency
+    ),
+    fm_series AS (
+        SELECT DISTINCT ON (run_fondo, currency) run_fondo, currency, serie
+        FROM fm_nav ORDER BY run_fondo, currency, patrimonio_neto DESC NULLS LAST, serie
+    ),
+    fi_series AS (
+        SELECT DISTINCT ON (run_fondo, currency) run_fondo, currency, serie
+        FROM fi_nav ORDER BY run_fondo, currency, patrimonio_neto DESC NULLS LAST, serie
+    ),
+    fm_cat AS (
+        SELECT DISTINCT ON (run_fondo) * FROM categoria_fm ORDER BY run_fondo, periodo DESC
+    ),
+    fi_cat AS (
+        SELECT DISTINCT ON (run_fondo) * FROM categoria_fi ORDER BY run_fondo, periodo DESC
+    ),
+    fm_reported_raw AS (
+        SELECT cd.run_fondo, {FM_CURRENCY} AS currency,
+               SUM(cd.monto_aportado) FILTER (WHERE cd.fecha >= DATE_TRUNC('month', ref.fecha)) AS aportes_month,
+               SUM(cd.monto_rescatado) FILTER (WHERE cd.fecha >= DATE_TRUNC('month', ref.fecha)) AS rescates_month,
+               SUM(cd.monto_aportado - cd.monto_rescatado)
+                   FILTER (WHERE cd.fecha >= DATE_TRUNC('month', ref.fecha)) AS nnm_month,
+               {'SUM(cd.monto_aportado - cd.monto_rescatado)' if include_ytd else 'NULL::numeric'} AS nnm_ytd
+        FROM cartola_diaria cd JOIN fondo_mutuo f USING (run_fondo) CROSS JOIN fm_ref ref
+        WHERE :fund_type != 'fi' AND cd.fecha >= DATE_TRUNC('{flow_period}', ref.fecha) AND cd.fecha <= ref.fecha
+          AND (:currency IS NULL OR {FM_CURRENCY} = :currency)
+        GROUP BY cd.run_fondo, cd.moneda, f.moneda
+    ),
+    fm_reported AS (
+        SELECT run_fondo, currency, SUM(aportes_month) AS aportes_month,
+               SUM(rescates_month) AS rescates_month, SUM(nnm_month) AS nnm_month, SUM(nnm_ytd) AS nnm_ytd
+        FROM fm_reported_raw GROUP BY run_fondo, currency
+    ),
+    adjustments AS (
+        SELECT target_run_fondo AS run_fondo, currency,
+               SUM(amount) FILTER (WHERE event_date >= DATE_TRUNC('month', ref.fecha)) AS month_amount,
+               {'SUM(amount)' if include_ytd else 'NULL::numeric'} AS ytd_amount
+        FROM fm_flow_adjustments CROSS JOIN fm_ref ref
+        WHERE :fund_type != 'fi' AND status IN ('auto_confirmed', 'confirmed')
+          AND event_date >= DATE_TRUNC('{flow_period}', ref.fecha) AND event_date <= ref.fecha
+          AND (:currency IS NULL OR currency = :currency)
+        GROUP BY target_run_fondo, currency
+    ),
+    fi_flows AS (
+        SELECT v.run_fondo, {FI_CURRENCY} AS currency,
+               SUM(v.flujo_neto) FILTER (WHERE v.fecha >= DATE_TRUNC('month', ref.fecha)) AS nnm_month,
+               {'SUM(v.flujo_neto)' if include_ytd else 'NULL::numeric'} AS nnm_ytd
+        FROM valores_cuota_fi v JOIN fondos_inversion f USING (run_fondo) CROSS JOIN fi_ref ref
+        WHERE :fund_type != 'fm' AND f.rescatable = true
+          AND v.fecha >= DATE_TRUNC('{flow_period}', ref.fecha) AND v.fecha <= ref.fecha
+          AND (:currency IS NULL OR {FI_CURRENCY} = :currency)
+        GROUP BY v.run_fondo, {FI_CURRENCY}
+    ),
+    snapshot AS (
+        SELECT 'fm'::text AS fund_type, f.run_fondo, f.nombre_fondo AS name,
+               f.razon_social_administradora AS administrator,
+               f.fecha_termino_operaciones IS NULL AS vigente, NULL::boolean AS rescatable,
+               c.tipo AS category_type, c.grupo AS category_group, c.categoria AS category,
+               c.nombre_cat AS category_name, COALESCE(a.currency, {_currency('f.moneda')}) AS currency, a.aum, a.data_date, {'r.r_1y, r.r_ytd' if include_returns else 'NULL::numeric AS r_1y, NULL::numeric AS r_ytd'},
+               fl.aportes_month, fl.rescates_month,
+               fl.nnm_month - COALESCE(adj.month_amount, 0) AS nnm_month,
+               fl.nnm_ytd - COALESCE(adj.ytd_amount, 0) AS nnm_ytd
+        FROM fondo_mutuo f LEFT JOIN fm_aum a USING (run_fondo)
+        LEFT JOIN fm_series s USING (run_fondo, currency)
+        {'LEFT JOIN v_rentabilidad_fm_quality r ON r.run_fondo = s.run_fondo AND r.serie IS NOT DISTINCT FROM s.serie AND NOT r.is_data_suspicious' if include_returns else ''}
+        LEFT JOIN fm_cat c ON c.run_fondo = f.run_fondo
+        LEFT JOIN fm_reported fl ON fl.run_fondo = a.run_fondo AND fl.currency = a.currency
+        LEFT JOIN adjustments adj ON adj.run_fondo = a.run_fondo AND adj.currency = a.currency
+        WHERE :fund_type != 'fi'
+        UNION ALL
+        SELECT 'fi', f.run_fondo, f.razon_social, f.administrador,
+               COALESCE(f.vigente, false), f.rescatable,
+               c.tipo, c.grupo, c.categoria, c.nombre_cat,
+               COALESCE(a.currency, {_currency('f.moneda')}), a.aum, a.data_date, {'r.r_1y, r.r_ytd' if include_returns else 'NULL::numeric AS r_1y, NULL::numeric AS r_ytd'},
+               NULL::numeric, NULL::numeric, fl.nnm_month, fl.nnm_ytd
+        FROM fondos_inversion f LEFT JOIN fi_aum a USING (run_fondo)
+        LEFT JOIN fi_series s USING (run_fondo, currency)
+        {'LEFT JOIN mv_rentabilidad_fi r ON r.run_fondo = s.run_fondo AND r.serie IS NOT DISTINCT FROM s.serie' if include_returns else ''}
+        LEFT JOIN fi_cat c ON c.run_fondo = f.run_fondo
+        LEFT JOIN fi_flows fl ON fl.run_fondo = a.run_fondo AND fl.currency = a.currency
+        WHERE :fund_type != 'fm'
+    )"""
+
+
+def _filters(params: dict) -> str:
+    clauses = []
+    for key, column in [('type', 'category_type'), ('group', 'category_group'),
+                        ('category', 'category'), ('nombre_cat', 'category_name'),
+                        ('rescatable', 'rescatable'), ('vigente', 'vigente'), ('currency', 'currency')]:
+        if params.get(key) is not None:
+            clauses.append(f'{column} = :{key}')
+    if params.get('admin'):
+        clauses.append('administrator ILIKE :admin')
+    return 'WHERE ' + ' AND '.join(clauses) if clauses else ''
+
+
+def _legacy(row: dict, currency: str | None) -> dict:
+    # Existing consumers may still read *_clp. Never put another currency in those fields.
+    for key in ('aum', 'total_aum', 'aportes_month', 'rescates_month', 'neto_month',
+                'nnm_month', 'nnm_ytd', 'net_flow_month', 'net_flow_ytd', 'aportes', 'rescates', 'nnm'):
+        if key in row:
+            row[key + '_clp'] = row[key] if currency == 'CLP' else None
+    return row
+
+
+@router.get('/currencies')
+def industry_currencies(_: CacheHook) -> list[str]:
+    rows = _rows(f"""SELECT DISTINCT currency FROM (
+        SELECT {FM_CURRENCY} AS currency FROM cartola_diaria cd JOIN fondo_mutuo f USING (run_fondo)
+        WHERE cd.fecha = (SELECT MAX(fecha) FROM cartola_diaria)
+        UNION
+        SELECT {FI_CURRENCY} AS currency FROM valores_cuota_fi v JOIN fondos_inversion f USING (run_fondo)
+        WHERE v.fecha = (SELECT MAX(fecha) FROM valores_cuota_fi)
+    ) currencies WHERE currency ~ '^(?:[A-Z]{{3}}|UF)$' ORDER BY currency""")
+    return [r['currency'] for r in rows]
+
+
+@router.get('/funds')
 def industry_funds(
-    pagination: Pagination,
-    _: CacheHook,
-    fund_type: FundType = "all",
-    type: str | None = Query(None),
-    group: str | None = Query(None),
-    category: str | None = Query(None),
-    admin: str | None = Query(None),
-    rescatable: bool | None = Query(None),
-    vigente: bool | None = Query(True),
-    sort: Literal["aum", "r_1y", "r_ytd", "nnm"] = "aum",
+    pagination: Pagination, _: CacheHook,
+    fund_type: FundType = 'all', currency: Currency | None = None,
+    type: str | None = None, group: str | None = None, category: str | None = None,
+    admin: str | None = None, rescatable: bool | None = None, vigente: bool | None = True,
+    sort: Literal['aum', 'r_1y', 'r_ytd', 'nnm'] = 'aum',
 ) -> list[dict]:
     limit, offset = pagination
-    conditions: list[str] = []
-    params: dict = {"limit": limit, "offset": offset}
-    if fund_type != "all":
-        conditions.append("fund_type = :fund_type")
-        params["fund_type"] = fund_type
-    if type:
-        conditions.append("category_type = :type")
-        params["type"] = type
-    if group:
-        conditions.append("category_group = :group")
-        params["group"] = group
-    if category:
-        conditions.append("category = :category")
-        params["category"] = category
-    if admin:
-        conditions.append("administrator ILIKE :admin")
-        params["admin"] = f"%{admin}%"
-    if rescatable is not None:
-        conditions.append("rescatable = :rescatable")
-        params["rescatable"] = rescatable
-    if vigente is not None:
-        conditions.append("vigente = :vigente")
-        params["vigente"] = vigente
-    where = "WHERE " + " AND ".join(conditions) if conditions else ""
-    sort_column = _SORT_COLUMNS[sort]
-    return _rows(f"""
-        {_SNAPSHOT_CTE}
-        SELECT * FROM snapshot
-        {where}
-        ORDER BY {sort_column} DESC NULLS LAST, name
-        LIMIT :limit OFFSET :offset
-    """, params)
+    params = dict(fund_type=fund_type, currency=currency, type=type, group=group,
+                  category=category, admin=f'%{admin}%' if admin else None,
+                  rescatable=rescatable, vigente=vigente, limit=limit, offset=offset)
+    sort_column = {'aum': 'aum', 'nnm': 'nnm_ytd', 'r_1y': 'r_1y', 'r_ytd': 'r_ytd'}[sort]
+    rows = _rows(f"""{_snapshot_cte()}
+        SELECT * FROM snapshot {_filters(params)}
+        ORDER BY currency, {sort_column} DESC NULLS LAST, name, run_fondo
+        LIMIT :limit OFFSET :offset""", params)
+    for r in rows:
+        _legacy(r, r['currency'])
+        r['aum_usd'] = r['aum'] if r['currency'] == 'USD' else None
+        r['aum_eur'] = r['aum'] if r['currency'] == 'EUR' else None
+    return rows
 
 
-@router.get("/overview")
+def _sum(rows: list[dict], key: str):
+    values = [r[key] for r in rows if r.get(key) is not None]
+    return sum(values, Decimal(0)) if values else None
+
+
+def _aggregate(rows: list[dict], currency: str) -> dict:
+    return _legacy(dict(
+        aum=_sum(rows, 'aum'), active_funds=len({(r['fund_type'], r['run_fondo']) for r in rows}),
+        latest_data_date=max((r['data_date'] for r in rows if r['data_date']), default=None),
+        nnm_month=_sum(rows, 'nnm_month'), nnm_ytd=_sum(rows, 'nnm_ytd'),
+    ), currency)
+
+
+def _group(rows: list[dict], keys: tuple[str, ...], currency: str) -> list[dict]:
+    groups = defaultdict(list)
+    for row in rows:
+        groups[tuple(row[k] for k in keys)].append(row)
+    return sorted([dict(zip(keys, key), **_aggregate(items, currency)) for key, items in groups.items()],
+                  key=lambda r: r['aum'] or 0, reverse=True)
+
+
+@router.get('/overview')
 def industry_overview(
-    _: CacheHook,
-    fund_type: FundType = "all",
-    categoria: str | None = Query(None),
-    tipo: str | None = Query(None),
+    _: CacheHook, fund_type: FundType = 'all', currency: Currency = 'CLP',
+    categoria: str | None = None, tipo: str | None = None, nombre_cat: str | None = None,
+    admin: str | None = None, rescatable: bool | None = None,
+    include_ytd: bool = True,
 ) -> dict:
-    conditions: list[str] = []
-    params: dict = {}
-    if fund_type != "all":
-        conditions.append("fund_type = :fund_type")
-        params["fund_type"] = fund_type
-    if categoria:
-        conditions.append("category = :categoria")
-        params["categoria"] = categoria
-    if tipo:
-        conditions.append("category_type = :tipo")
-        params["tipo"] = tipo
-    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-
-    # FM gross flows for aportes/rescates breakdown
-    fm_flow_conditions: list[str] = []
-    if fund_type == "fi":
-        fm_flow_conditions.append("1=0")  # exclude FM entirely
-    fi_flow_conditions: list[str] = []
-    if fund_type == "fm":
-        fi_flow_conditions.append("1=0")  # exclude FI entirely
-
-    summary = _rows(f"""
-        {_SNAPSHOT_CTE}
-        SELECT SUM(aum_clp)   AS total_aum_clp,
-               SUM(aum_usd)   AS total_aum_usd,
-               SUM(aum_eur)   AS total_aum_eur,
-               SUM(aum_other) AS total_aum_other,
-               COUNT(*) FILTER (WHERE vigente) AS active_funds,
-               COUNT(DISTINCT administrator) FILTER (WHERE vigente) AS administrators,
-               MAX(data_date) AS latest_data_date,
-               SUM(nnm_month_clp) AS net_flow_month_clp,
-               SUM(nnm_ytd_clp) AS net_flow_ytd_clp
-        FROM snapshot {where}
-    """, params)[0]
-
-    # Gross aportes + rescates (FM only — FI doesn't have granular aportes/rescates)
-    fm_gross_conds = ["fecha >= DATE_TRUNC('month', CURRENT_DATE)"]
-    if categoria or tipo:
-        fm_gross_conds.append("""run_fondo IN (
-            SELECT DISTINCT ON (run_fondo) run_fondo FROM categoria_fm
-            WHERE 1=1
-            {cat_filter}
-            ORDER BY run_fondo, periodo DESC
-        )""".format(cat_filter=(
-            f"AND categoria = :categoria" if categoria else ""
-        ) + (
-            f" AND tipo = :tipo" if tipo else ""
-        )))
-    if fund_type != "fi":
-        gross_flows = _rows(f"""
-            SELECT SUM(aportes) AS aportes_month_clp,
-                   SUM(rescates) AS rescates_month_clp,
-                   SUM(adjusted_nnm) AS neto_month_clp
-            FROM fm_daily_flows_adjusted
-            WHERE {" AND ".join(fm_gross_conds)}
-        """, params)[0]
-    else:
-        gross_flows = {"aportes_month_clp": None, "rescates_month_clp": None, "neto_month_clp": None}
-
-    breakdown = _rows(f"""
-        {_SNAPSHOT_CTE}
-        SELECT fund_type, SUM(aum_clp) AS aum_clp,
-               COUNT(*) FILTER (WHERE vigente) AS active_funds,
-               MAX(data_date) AS latest_data_date,
-               SUM(nnm_month_clp) AS net_flow_month_clp,
-               SUM(nnm_ytd_clp) AS net_flow_ytd_clp
-        FROM snapshot {where}
-        GROUP BY fund_type ORDER BY fund_type
-    """, params)
-    top_admins = _rows(f"""
-        {_SNAPSHOT_CTE}
-        SELECT administrator, SUM(aum_clp) AS aum_clp,
-               ROUND(SUM(aum_clp) * 100.0 / NULLIF(SUM(SUM(aum_clp)) OVER (), 0), 2)
-                   AS market_share_pct,
-               COUNT(*) FILTER (WHERE vigente) AS active_funds,
-               SUM(nnm_ytd_clp) AS nnm_ytd_clp
-        FROM snapshot {where}
-        GROUP BY administrator
-        ORDER BY aum_clp DESC NULLS LAST LIMIT 10
-    """, params)
-    categories = _rows(f"""
-        {_SNAPSHOT_CTE}
-        SELECT fund_type, category_type AS type, category_group AS "group",
-               category, category_name, SUM(aum_clp) AS aum_clp,
-               COUNT(*) FILTER (WHERE vigente) AS active_funds,
-               SUM(nnm_ytd_clp) AS nnm_ytd_clp
-        FROM snapshot {where}
-        GROUP BY fund_type, category_type, category_group, category, category_name
-        ORDER BY aum_clp DESC NULLS LAST
-    """, params)
-    return {
-        **summary,
-        **gross_flows,
-        "breakdown": breakdown,
-        "top_administrators": top_admins,
-        "category_aum_breakdown": categories,
-    }
+    params = dict(fund_type=fund_type, currency=currency, category=categoria, type=tipo,
+                  nombre_cat=nombre_cat, admin=f'%{admin}%' if admin else None,
+                  rescatable=rescatable, vigente=True)
+    # Read the fund snapshot once, then aggregate its small result in memory.
+    rows = _rows(f'{_snapshot_cte(include_returns=False, include_ytd=include_ytd)} SELECT * FROM snapshot {_filters(params)} AND aum IS NOT NULL', params)
+    total = _aggregate(rows, currency)
+    admins = _group(rows, ('administrator',), currency)
+    for a in admins:
+        a['market_share_pct'] = round(a['aum'] * 100 / total['aum'], 2) if a['aum'] is not None and total['aum'] else None
+    categories = _group(rows, ('fund_type', 'category_type', 'category_group', 'category', 'category_name'), currency)
+    for c in categories:
+        c['type'] = c.pop('category_type')
+        c['group'] = c.pop('category_group')
+    fm = [r for r in rows if r['fund_type'] == 'fm']
+    return _legacy(dict(
+        currency=currency, units='native', includes_ytd=include_ytd, total_aum=total['aum'], active_funds=total['active_funds'],
+        administrators=len(admins), latest_data_date=total['latest_data_date'],
+        net_flow_month=total['nnm_month'], net_flow_ytd=total['nnm_ytd'],
+        aportes_month=_sum(fm, 'aportes_month'), rescates_month=_sum(fm, 'rescates_month'),
+        neto_month=_sum(fm, 'nnm_month'),
+        flow_coverage='FM adjusted external flows and FI rescatable implied daily flows; non-rescatable FI excluded',
+        breakdown=_group(rows, ('fund_type',), currency), top_administrators=admins[:10],
+        btg_administrator=next((a for a in admins if 'BTG' in (a['administrator'] or '').upper()), None),
+        category_aum_breakdown=categories,
+    ), currency)
 
 
-@router.get("/evolution")
-def industry_evolution(
-    _: CacheHook,
-    fund_type: FundType = "all",
-    group_by: GroupBy = "market",
-    from_date: date | None = Query(None),
-    to_date: date | None = Query(None),
-    categoria: str | None = Query(None),
-    tipo: str | None = Query(None),
-) -> list[dict]:
-    group_expr = {
-        "market": "fund_type",
-        "admin": "administrator",
-        "category": "category",
-    }[group_by]
-    conditions = [
-        "data_date >= COALESCE(CAST(:from_date AS date), CURRENT_DATE - INTERVAL '1 year')",
-        "data_date <= COALESCE(CAST(:to_date AS date), CURRENT_DATE)",
-    ]
-    params: dict = {"from_date": from_date, "to_date": to_date}
-    if fund_type != "all":
-        conditions.append("fund_type = :fund_type")
-        params["fund_type"] = fund_type
-    if categoria:
-        conditions.append("category = :categoria")
-        params["categoria"] = categoria
-    if tipo:
-        conditions.append("category_tipo = :tipo")
-        params["tipo"] = tipo
-    where = " AND ".join(conditions)
-    return _rows(f"""
-        WITH fm_daily AS (
-            SELECT cd.fecha AS data_date, 'fm'::text AS fund_type, cd.run_fondo,
-                   fm.razon_social_administradora AS administrator,
-                   SUM(cd.patrimonio_neto) AS aum_clp,
-                   SUM(cd.monto_aportado) AS aportes_clp,
-                   SUM(cd.monto_rescatado) AS rescates_clp,
-                   COALESCE((
-                       SELECT SUM(flow.adjusted_nnm)
-                       FROM fm_daily_flows_adjusted flow
-                       WHERE flow.run_fondo = cd.run_fondo
-                         AND flow.fecha = cd.fecha
-                   ), 0) AS nnm_clp
-            FROM cartola_diaria cd
-            JOIN fondo_mutuo fm ON fm.run_fondo = cd.run_fondo
-            WHERE cd.fecha >= COALESCE(CAST(:from_date AS date), CURRENT_DATE - INTERVAL '1 year')
-              AND cd.fecha <= COALESCE(CAST(:to_date AS date), CURRENT_DATE)
-            GROUP BY cd.fecha, cd.run_fondo, fm.razon_social_administradora
-        ),
+def _evolution_sources(use_monthly: bool) -> str:
+    if use_monthly:
+        return """
         fm_monthly AS (
-            SELECT DISTINCT ON (run_fondo, DATE_TRUNC('month', data_date))
-                   data_date, fund_type, run_fondo, administrator, aum_clp,
-                   aportes_clp, rescates_clp, nnm_clp
-            FROM fm_daily
-            ORDER BY run_fondo, DATE_TRUNC('month', data_date), data_date DESC
-        ),
-        fi_daily AS (
-            SELECT v.fecha AS data_date, 'fi'::text AS fund_type, v.run_fondo,
-                   fi.administrador AS administrator, SUM(v.patrimonio_neto) AS aum_clp,
-                   NULL::numeric AS aportes_clp, NULL::numeric AS rescates_clp,
-                   NULL::numeric AS nnm_clp
-            FROM valores_cuota_fi v
-            JOIN fondos_inversion fi ON fi.run_fondo = v.run_fondo
-            WHERE v.fecha >= COALESCE(CAST(:from_date AS date), CURRENT_DATE - INTERVAL '1 year')
-              AND v.fecha <= COALESCE(CAST(:to_date AS date), CURRENT_DATE)
-            GROUP BY v.fecha, v.run_fondo, fi.administrador
+            SELECT run_fondo, month, aum, aportes, rescates, nnm
+            FROM mv_industry_monthly_fm
+            WHERE :fund_type != 'fi' AND currency = :currency
+              AND month >= :from_date
+              AND month <= COALESCE(CAST(:to_date AS date), CURRENT_DATE)
         ),
         fi_monthly AS (
-            SELECT DISTINCT ON (run_fondo, DATE_TRUNC('month', data_date))
-                   data_date, fund_type, run_fondo, administrator, aum_clp,
-                   aportes_clp, rescates_clp, nnm_clp
-            FROM fi_daily
-            ORDER BY run_fondo, DATE_TRUNC('month', data_date), data_date DESC
+            SELECT run_fondo, month, aum
+            FROM mv_industry_monthly_fi
+            WHERE :fund_type != 'fm' AND currency = :currency
+              AND month >= :from_date
+              AND month <= COALESCE(CAST(:to_date AS date), CURRENT_DATE)
         ),
-        fm_cat AS (
-            SELECT DISTINCT ON (run_fondo) run_fondo, categoria AS category, tipo AS category_tipo
-            FROM categoria_fm ORDER BY run_fondo, periodo DESC
-        ),
-        fi_cat AS (
-            SELECT DISTINCT ON (run_fondo) run_fondo, categoria AS category, tipo AS category_tipo
-            FROM categoria_fi ORDER BY run_fondo, periodo DESC
-        ),
-        history AS (
-            SELECT x.*, c.category, c.category_tipo
-            FROM fm_monthly x LEFT JOIN fm_cat c USING (run_fondo)
-            UNION ALL
-            SELECT x.*, c.category, c.category_tipo
-            FROM fi_monthly x LEFT JOIN fi_cat c USING (run_fondo)
-        ),
-        grouped AS (
-            SELECT DATE_TRUNC('month', data_date)::date AS date,
-                   fund_type, COALESCE({group_expr}, 'Sin clasificar') AS group_key,
-                   SUM(aum_clp) AS aum_clp,
-                   SUM(aportes_clp) AS aportes_clp,
-                   SUM(rescates_clp) AS rescates_clp,
-                   SUM(nnm_clp) AS nnm_clp
-            FROM history
-            WHERE {where}
-            GROUP BY DATE_TRUNC('month', data_date)::date, fund_type,
-                     COALESCE({group_expr}, 'Sin clasificar')
-        )
-        SELECT date, fund_type, group_key, aum_clp,
-               aportes_clp, rescates_clp, nnm_clp,
-               ROUND(aum_clp * 100.0 / NULLIF(SUM(aum_clp) OVER (PARTITION BY date), 0), 2)
-                   AS market_share_pct
-        FROM grouped
-        ORDER BY date, aum_clp DESC NULLS LAST
+    adjustments AS (
+        SELECT target_run_fondo AS run_fondo, DATE_TRUNC('month', event_date)::date AS month,
+               SUM(amount) AS amount
+        FROM fm_flow_adjustments WHERE status IN ('auto_confirmed', 'confirmed') AND currency = :currency
+          AND event_date >= COALESCE(CAST(:from_date AS date), CURRENT_DATE - INTERVAL '1 year')
+          AND event_date <= COALESCE(CAST(:to_date AS date), CURRENT_DATE)
+        GROUP BY target_run_fondo, DATE_TRUNC('month', event_date)::date
+    )"""
+    return f"""
+    fm_daily AS (
+        SELECT cd.fecha AS data_date, cd.run_fondo, SUM(cd.patrimonio_neto) AS aum,
+               SUM(cd.monto_aportado) AS aportes, SUM(cd.monto_rescatado) AS rescates,
+               SUM(cd.monto_aportado - cd.monto_rescatado) AS reported_nnm
+        FROM cartola_diaria cd JOIN fondo_mutuo f USING (run_fondo)
+        WHERE cd.fecha >= COALESCE(CAST(:from_date AS date), CURRENT_DATE - INTERVAL '1 year')
+          AND cd.fecha <= COALESCE(CAST(:to_date AS date), CURRENT_DATE)
+          AND :fund_type != 'fi' AND {FM_CURRENCY} = :currency
+        GROUP BY cd.fecha, cd.run_fondo
+    ),
+    adjustments AS (
+        SELECT target_run_fondo AS run_fondo, DATE_TRUNC('month', event_date)::date AS month,
+               SUM(amount) AS amount
+        FROM fm_flow_adjustments WHERE status IN ('auto_confirmed', 'confirmed') AND currency = :currency
+          AND event_date >= COALESCE(CAST(:from_date AS date), CURRENT_DATE - INTERVAL '1 year')
+          AND event_date <= COALESCE(CAST(:to_date AS date), CURRENT_DATE)
+        GROUP BY target_run_fondo, DATE_TRUNC('month', event_date)::date
+    ),
+    fm_monthly AS (
+        SELECT run_fondo, DATE_TRUNC('month', data_date)::date AS month,
+               (ARRAY_AGG(aum ORDER BY data_date DESC))[1] AS aum,
+               SUM(aportes) AS aportes, SUM(rescates) AS rescates, SUM(reported_nnm) AS nnm
+        FROM fm_daily GROUP BY run_fondo, DATE_TRUNC('month', data_date)::date
+    ),
+    fi_daily AS (
+        SELECT v.fecha AS data_date, v.run_fondo, SUM(v.patrimonio_neto) AS aum
+        FROM valores_cuota_fi v JOIN fondos_inversion f USING (run_fondo)
+        WHERE v.fecha >= COALESCE(CAST(:from_date AS date), CURRENT_DATE - INTERVAL '1 year')
+          AND v.fecha <= COALESCE(CAST(:to_date AS date), CURRENT_DATE)
+          AND :fund_type != 'fm' AND {FI_CURRENCY} = :currency
+        GROUP BY v.fecha, v.run_fondo
+    ),
+    fi_monthly AS (
+        SELECT run_fondo, DATE_TRUNC('month', data_date)::date AS month,
+               (ARRAY_AGG(aum ORDER BY data_date DESC))[1] AS aum
+        FROM fi_daily GROUP BY run_fondo, DATE_TRUNC('month', data_date)::date
+    )"""
+
+
+def _monthly_history_is_current(fund_type: str) -> bool:
+    checks = []
+    for kind, source in (("fm", "cartola_diaria"), ("fi", "valores_cuota_fi")):
+        if fund_type not in ("all", kind):
+            continue
+        checks.append(f"""(SELECT MAX(latest_data_date) FROM mv_industry_monthly_{kind})
+            IS NOT DISTINCT FROM (SELECT MAX(fecha) FROM {source} WHERE fecha <= CURRENT_DATE)""")
+    return bool(_rows('SELECT ' + ' AND '.join(checks) + ' AS current')[0]['current'])
+
+
+@router.get('/evolution')
+def industry_evolution(
+    _: CacheHook, fund_type: FundType = 'all', currency: Currency = 'CLP',
+    group_by: GroupBy = 'market', from_date: date | None = None, to_date: date | None = None,
+    categoria: str | None = None, tipo: str | None = None, nombre_cat: str | None = None,
+    admin: str | None = None, rescatable: bool | None = None,
+) -> list[dict]:
+    group_expr = {'market': 'fund_type', 'admin': 'administrator', 'category': 'category'}[group_by]
+    params = dict(fund_type=fund_type, currency=currency, from_date=from_date, to_date=to_date,
+                  category=categoria, type=tipo, nombre_cat=nombre_cat,
+                  admin=f'%{admin}%' if admin else None, rescatable=rescatable)
+    # Monthly summaries preserve full calendar months. Arbitrary partial date
+    # ranges and sources newer than the summaries retain the exact raw query.
+    use_monthly = (from_date is not None and from_date.day == 1
+                   and (to_date is None or to_date >= date.today())
+                   and _monthly_history_is_current(fund_type))
+    rows = _rows(f"""WITH
+    {_evolution_sources(use_monthly)},
+    fm_cat AS (SELECT DISTINCT ON (run_fondo) * FROM categoria_fm ORDER BY run_fondo, periodo DESC),
+    fi_cat AS (SELECT DISTINCT ON (run_fondo) * FROM categoria_fi ORDER BY run_fondo, periodo DESC),
+    history AS (
+        SELECT :currency AS currency, 'fm'::text AS fund_type, x.month, x.aum, x.aportes, x.rescates,
+               x.nnm - COALESCE(a.amount, 0) AS nnm,
+               f.razon_social_administradora AS administrator, NULL::boolean AS rescatable,
+               c.categoria AS category, c.tipo AS category_type, c.nombre_cat AS category_name
+        FROM fm_monthly x JOIN fondo_mutuo f USING (run_fondo)
+        LEFT JOIN fm_cat c USING (run_fondo) LEFT JOIN adjustments a USING (run_fondo, month)
+        UNION ALL
+        SELECT :currency, 'fi', x.month, x.aum, NULL, NULL, NULL, f.administrador, f.rescatable,
+               c.categoria, c.tipo, c.nombre_cat
+        FROM fi_monthly x JOIN fondos_inversion f USING (run_fondo) LEFT JOIN fi_cat c USING (run_fondo)
+    ),
+    grouped AS (
+        SELECT month AS date, fund_type, COALESCE({group_expr}, 'Sin clasificar') AS group_key,
+               SUM(aum) AS aum, SUM(aportes) AS aportes, SUM(rescates) AS rescates, SUM(nnm) AS nnm
+        FROM history {_filters(params)}
+        GROUP BY month, fund_type, COALESCE({group_expr}, 'Sin clasificar')
+    )
+    SELECT *, :currency AS currency,
+           ROUND(aum * 100.0 / NULLIF(SUM(aum) OVER (PARTITION BY date), 0), 2) AS market_share_pct
+    FROM grouped ORDER BY date, aum DESC NULLS LAST
     """, params)
+    return [_legacy(r, currency) for r in rows]
