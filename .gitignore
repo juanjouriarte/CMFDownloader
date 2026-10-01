@@ -9,3 +9,6 @@ downloads/
 *.log
 .DS_Store
 *.dump
+
+# Local design iterations and audit artifacts; promoted source lives in src/.
+output/industry-concept/

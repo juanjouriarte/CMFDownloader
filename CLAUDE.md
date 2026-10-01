@@ -600,3 +600,33 @@ print(DividendosDownloader().backfill())
 
 Set locally via `.env`. Production environment variables are configured for the
 Oracle-hosted Docker Compose services.
+
+## Connected industry workspace
+
+`src/api/industry_workspace/` is mounted under `/industry-workspace` in the public
+API. It promotes the reviewed design's read-only fund, portfolio, instrument,
+shareholder, capital-activity, competitive-analysis and currency-exposure queries.
+The production frontend uses `/api/cmf/industry-workspace`; no separate preview
+service or localhost proxy is needed. Queries set a read-only transaction and a
+20-second statement timeout. No schema or ETL changes are part of this promotion.
+
+Administrator endpoints: `/administrators/analysis` provides the monthly ranking
+and FM/FI strategy map; `/administrators/history` takes exact inclusive dates,
+current active-fund/category identity and one native currency, returning daily
+NAV points for spans up to 400 days and the last observed date per month for
+longer spans. Share denominators use the same reporting day and currency. There
+is no carried-forward NAV or synthetic zero for an absent administrator. History
+samples can change; point-level fund counts remain visible.
+
+`/administrators/flows` aggregates observed FM contributions minus redemptions
+and confirmed/auto-confirmed receiving-fund migration adjustments. Adjustments
+match currency, fund and observed flow day. Category/total rows sum their fund
+children. Only observations with both valid flow amounts contribute; missing
+flows stay null and coverage is returned. FI NNM is not inferred from NAV changes.
+All these endpoints require NAV and use current fund identities/classifications.
+Administrator responses use a bounded 60-second process cache.
+
+Tests: `tests/test_workspace_*.py`; run with `PYTHONPATH=. .venv/bin/pytest`.
+Local design/audit artifacts under `output/industry-concept/` are ignored; the
+maintained frontend lives in the BTGDashboard repository. Deploy this backend
+before the frontend that depends on `/industry-workspace`.
