@@ -613,8 +613,9 @@ service or localhost proxy is needed. Queries set a read-only transaction and a
 Administrator endpoints: `/administrators/analysis` provides the monthly ranking
 and FM/FI strategy map; `/administrators/history` takes exact inclusive dates,
 current active-fund/category identity and one native currency, returning daily
-NAV points for spans up to 400 days and the last observed date per month for
-longer spans. Share denominators use the same reporting day and currency. There
+NAV points for spans up to 400 days. Longer spans use common reporting dates
+from the monthly NAV views, with an exact daily query for the final boundary
+month so a custom end date never includes later data. Share denominators use the same reporting day and currency. There
 is no carried-forward NAV or synthetic zero for an absent administrator. History
 samples can change; point-level fund counts remain visible.
 

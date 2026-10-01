@@ -19,6 +19,8 @@ def validate_range(start, end):
 @lru_cache(maxsize=32)
 def load_history(currency, kind, admin, start, end, category, metric, bucket):
     from .router import rows
+    if (end-start).days > 400:
+        return monthly_history(currency,kind,admin,start,end,category,metric,bucket)
     parts = []
     for k, table, fund_table, alias, name, active, expression in [
         ('fm', 'cartola_diaria', 'fondo_mutuo', 'cd', 'razon_social_administradora', 'f.fecha_termino_operaciones IS NULL', FM_CURRENCY),
@@ -44,16 +46,34 @@ def load_history(currency, kind, admin, start, end, category, metric, bucket):
           SUM(aum) market_aum, COUNT(*) market_funds
         FROM daily GROUP BY date ORDER BY date''',
         dict(currency=currency, start=start, end=end, admin=admin, category=category))
-    granularity = 'daily' if (end-start).days <= 400 else 'monthly'
-    if granularity == 'monthly':
-        # Last observed common day per calendar month, never a fabricated month-end.
-        latest = {r['date'].replace(day=1): r for r in data}
-        data = list(latest.values())
     points = [dict(date=r['date'], aum=float(r['aum']) if r['aum'] is not None else None,
         share=float(r['aum']/r['market_aum']*100) if metric=='share' and r['aum'] is not None and r['market_aum'] else None,
         funds=r['funds'], market_funds=r['market_funds'] if metric=='share' else None) for r in data]
     return dict(currency=currency, kind=kind, admin=admin, start=start, end=end,
-        granularity=granularity, points=points)
+        granularity='daily', points=points)
+
+
+def monthly_history(currency,kind,admin,start,end,category,metric,bucket):
+    from .router import monthly_data, market_snapshots
+    end_month=end.replace(day=1)
+    # Complete historical months use materialized summaries. The boundary month
+    # uses exact daily NAV so custom mid-month end dates never include later data.
+    before_end=date.fromordinal(end_month.toordinal()-1).replace(day=1)
+    data=monthly_data(currency,kind,start.replace(day=1),before_end,category,active_only=True)
+    data=[r for r in data if start<=r['latest_data_date']<end_month
+          and (metric=='share' or r['admin']==admin)]
+    points=[]
+    for snap in market_snapshots(data):
+        own=next((a for a in snap['administrators'] if a['admin']==admin),None)
+        points.append(dict(date=snap['date'],aum=own['aum'] if own else None,
+            share=own['share'] if metric=='share' and own else None,
+            funds=own['funds'] if own else 0,
+            market_funds=snap['reported_funds'] if metric=='share' else None))
+    boundary=load_history(currency,kind,admin,end_month,end,category,metric,bucket)['points']
+    if boundary:
+        points.append(boundary[-1])
+    return dict(currency=currency,kind=kind,admin=admin,start=start,end=end,
+        granularity='monthly',points=points)
 
 
 @router.get('/history')

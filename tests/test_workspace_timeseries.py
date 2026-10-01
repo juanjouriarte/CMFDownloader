@@ -47,12 +47,32 @@ def test_daily_history_and_share_use_same_dates_and_bound_filters(monkeypatch):
     assert "COALESCE(f.razon_social_administradora, 'Sin administradora')=:admin" in calls[-1][0]
 
 
-def test_long_history_uses_actual_last_reported_date_per_month(monkeypatch):
-    data=[dict(date=d,aum=1,funds=1,market_aum=1,market_funds=1) for d in [date(2025,1,2),date(2025,1,29),date(2025,2,28)]]
-    monkeypatch.setattr(api,'rows',lambda *a:data);m.load_history.cache_clear()
-    result=m.load_history('CLP','all','A',date(2024,1,1),date(2026,1,1),None,'aum',0)
+def test_long_history_uses_materialized_common_dates_and_exact_final_month(monkeypatch):
+    monthly=[dict(month=date(2025,1,1),latest_data_date=date(2025,1,29),aum=100,
+                  admin='A',run_fondo='1',kind='fm',category='Deuda'),
+             dict(month=date(2025,2,1),latest_data_date=date(2025,2,28),aum=120,
+                  admin='A',run_fondo='1',kind='fm',category='Deuda')]
+    calls=[]
+    def daily(sql,p):
+        calls.append(p)
+        return [dict(date=date(2026,1,15),aum=150,funds=1,market_aum=300,market_funds=2)]
+    monkeypatch.setattr(api,'monthly_data',lambda *a,**k:monthly)
+    monkeypatch.setattr(api,'rows',daily);m.load_history.cache_clear()
+    result=m.load_history('CLP','all','A',date(2024,1,1),date(2026,1,15),None,'share',0)
     assert result['granularity']=='monthly'
-    assert [p['date'] for p in result['points']]==[date(2025,1,29),date(2025,2,28)]
+    assert [p['date'] for p in result['points']]==[date(2025,1,29),date(2025,2,28),date(2026,1,15)]
+    assert result['points'][-1]['share']==50
+    # Only the final partial month scans daily data, not the whole multi-year range.
+    assert calls[0]['start']==date(2026,1,1) and calls[0]['end']==date(2026,1,15)
+
+
+def test_monthly_history_does_not_include_nav_before_custom_start(monkeypatch):
+    monthly=[dict(month=date(2024,1,1),latest_data_date=date(2024,1,10),aum=100,
+                  admin='A',run_fondo='1',kind='fm',category='Deuda')]
+    monkeypatch.setattr(api,'monthly_data',lambda *a,**k:monthly)
+    monkeypatch.setattr(api,'rows',lambda *a:[]);m.load_history.cache_clear()
+    result=m.load_history('CLP','fm','A',date(2024,1,20),date(2026,1,15),None,'aum',0)
+    assert result['points']==[]
 
 
 def test_flows_query_scopes_migrations_to_currency_fund_and_observed_day(monkeypatch):
