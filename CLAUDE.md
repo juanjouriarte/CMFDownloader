@@ -626,6 +626,11 @@ children. Only observations with both valid flow amounts contribute; missing
 flows stay null and coverage is returned. FI NNM is not inferred from NAV changes.
 All these endpoints require NAV and use current fund identities/classifications.
 Administrator responses use a bounded 60-second process cache.
+`/administrators/currencies` returns NAV-backed native currencies for the selected
+administrator/month/type/category, plus FM currencies in the five-year NNM
+history. It uses monthly summaries and current active-fund identities; availability
+does not imply that the AGF has NAV on the market's common reporting day or
+reported flows in every window. Profile currency tabs must preserve empty states.
 `/administrators/flows-periods` returns aligned 1D/1W/1M/3M/6M/1A/5A/YTD
 columns for the same end date, with category/fund/AGF totals and per-cell coverage.
 A single bound SQL query scans source observations once, then aggregates each

@@ -9,6 +9,45 @@ from fastapi import APIRouter, HTTPException, Query
 router = APIRouter(prefix='/administrators')
 
 
+@lru_cache(maxsize=64)
+def load_currencies(admin, kind, period, category, cache_bucket):
+    """NAV-backed currencies in this month, plus FM history for the NNM matrix."""
+    from .router import rows
+    parts = []
+    for k, table, admin_column, active in [
+        ('fm', 'fondo_mutuo', 'razon_social_administradora', 'f.fecha_termino_operaciones IS NULL'),
+        ('fi', 'fondos_inversion', 'administrador', 'f.vigente IS TRUE'),
+    ]:
+        if kind not in ('all', k):
+            continue
+        parts.append(f"""SELECT '{k}' kind, m.currency,
+            BOOL_OR(m.month=:period) current_month
+            FROM mv_industry_monthly_{k} m JOIN {table} f USING(run_fondo)
+            LEFT JOIN (SELECT DISTINCT ON(run_fondo) run_fondo, nombre_cat
+                FROM categoria_{k} WHERE periodo<=CURRENT_DATE
+                ORDER BY run_fondo, periodo DESC) c USING(run_fondo)
+            WHERE COALESCE(f.{admin_column},'Sin administradora')=:admin AND {active}
+                AND m.month BETWEEN :start AND :period
+                AND m.currency ~ '^(?:[A-Z]{{3}}|UF)$'
+                AND m.aum IS NOT NULL AND m.aum>=0
+                AND m.aum::text NOT IN ('NaN','Infinity','-Infinity')
+                AND (:category IS NULL OR COALESCE(c.nombre_cat,'Sin clasificación')=:category)
+            GROUP BY m.currency""")
+    data = rows(' UNION ALL '.join(parts), dict(admin=admin, period=period,
+        start=max(date(2020, 1, 1), month_shift(period, -60)), category=category))
+    return dict(currencies=sorted({r['currency'] for r in data if r['current_month']}),
+        flow_currencies=sorted({r['currency'] for r in data if r['kind']=='fm'}))
+
+
+@router.get('/currencies')
+def administrator_currencies(admin: str, period: date,
+        kind: Literal['all','fm','fi']='all', category: str|None=None):
+    period = period.replace(day=1)
+    if period > date.today() or period < date(2020, 1, 1):
+        raise HTTPException(422, 'Seleccione un mes entre 2020 y el actual.')
+    return load_currencies(admin, kind, period, category, int(monotonic() // 60))
+
+
 def month_shift(value, offset):
     n = value.year * 12 + value.month - 1 + offset
     return date(n // 12, n % 12 + 1, 1)

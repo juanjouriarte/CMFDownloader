@@ -57,3 +57,38 @@ def test_active_query_is_opt_in_and_currency_is_bound(monkeypatch):
     sql,p=calls[0]
     assert 'f.vigente IS TRUE' in sql and 'f.fecha_termino_operaciones IS NULL' in sql
     assert p['currency']=='PEN' and 'm.currency=:currency' in sql
+
+
+def test_currency_options_preserve_native_codes_and_separate_fm_history(monkeypatch):
+    api=import_module('src.api.industry_workspace.router')
+    calls=[]
+    def query(sql, params):
+        calls.append((sql, params))
+        return [dict(kind='fi',currency='PEN',current_month=True),
+                dict(kind='fm',currency='USD',current_month=True),
+                dict(kind='fm',currency='CLP',current_month=False),
+                dict(kind='fi',currency='EUR',current_month=False)]
+    monkeypatch.setattr(api,'rows',query)
+    result=m.load_currencies.__wrapped__('AGF', 'all', date(2026,6,1), 'Deuda', 0)
+    assert result == dict(currencies=['PEN','USD'],flow_currencies=['CLP','USD'])
+    sql,params=calls[0]
+    assert params==dict(admin='AGF',period=date(2026,6,1),start=date(2021,6,1),category='Deuda')
+    assert 'f.vigente IS TRUE' in sql and 'f.fecha_termino_operaciones IS NULL' in sql
+    assert ':admin' in sql and ':category' in sql and 'm.aum>=0' in sql
+
+
+def test_currency_options_respect_type_and_history_floor(monkeypatch):
+    api=import_module('src.api.industry_workspace.router');calls=[]
+    monkeypatch.setattr(api,'rows',lambda sql,params:calls.append((sql,params)) or [])
+    assert m.load_currencies.__wrapped__('AGF','fi',date(2022,2,1),None,0)==dict(currencies=[],flow_currencies=[])
+    sql,params=calls[0]
+    assert 'mv_industry_monthly_fm' not in sql
+    assert params['start']==date(2020,1,1)
+
+
+@pytest.mark.parametrize('period',[date(2019,12,1),date(2100,1,1)])
+def test_currency_options_reject_unsupported_months(period):
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        m.administrator_currencies('AGF',period)
+    assert exc.value.status_code==422
