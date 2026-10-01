@@ -95,3 +95,54 @@ def test_invalid_ranges_return_422(endpoint,start,end):
     app=FastAPI();app.include_router(m.router)
     response=TestClient(app).get('/administrators/'+endpoint,params=dict(admin='A',from_date=start,to_date=end))
     assert response.status_code==422
+
+
+def test_flow_windows_share_one_end_and_use_correct_inclusive_boundaries():
+    windows={p['key']:p for p in m.flow_windows(date(2026,9,24))}
+    assert list(windows)==['1D','1W','1M','3M','6M','1A','5A','YTD']
+    assert windows['1D']['start']==date(2026,9,24)
+    assert windows['1W']['start']==date(2026,9,18)
+    assert windows['1M']['start']==date(2026,8,25)
+    assert windows['3M']['start']==date(2026,6,25)
+    assert windows['6M']['start']==date(2026,3,25)
+    assert windows['1A']['start']==date(2025,9,25)
+    assert windows['5A']['start']==date(2021,9,25)
+    assert windows['YTD']['start']==date(2026,1,1)
+    assert all(p['end']==date(2026,9,24) for p in windows.values())
+    leap={p['key']:p for p in m.flow_windows(date(2024,3,31))}
+    assert leap['1M']['start']==date(2024,3,1)
+    assert leap['5A']['truncated'] and leap['5A']['start']==date(2020,1,1)
+
+
+def test_flow_matrix_aligns_funds_without_filling_missing_periods_with_zero():
+    periods=m.flow_windows(date(2026,9,24))
+    rows=[dict(**flow('a','Deuda',100,20,10),period='1D'),
+          dict(**flow('b','Deuda',None,None),period='1D'),
+          dict(**flow('a','Deuda',200,30,10),period='YTD'),
+          dict(**flow('b','Deuda',0,0),period='YTD'),
+          dict(**flow('c','Acciones',10,30),period='YTD')]
+    d=m.build_flow_matrix(rows,periods)
+    assert d['total']['funds']==3
+    assert d['total']['values']['1D']['net']==70
+    assert d['total']['values']['YTD']['net']==140
+    assert d['total']['values']['5A']['net'] is None
+    deuda=next(c for c in d['categories'] if c['name']=='Deuda')
+    b=next(f for f in deuda['children'] if f['run']=='b')
+    assert b['values']['1D']['net'] is None and b['values']['YTD']['net']==0
+    assert '1W' not in b['values']
+    for period in periods:
+        key=period['key']
+        cells=[c['values'][key]['net'] for c in d['categories'] if key in c['values'] and c['values'][key]['net'] is not None]
+        assert d['total']['values'][key]['net']==(sum(cells) if cells else None)
+
+
+def test_flow_matrix_uses_one_bound_query_for_all_periods(monkeypatch):
+    calls=[]
+    monkeypatch.setattr(api,'rows',lambda sql,p:calls.append((sql,p)) or [])
+    m.load_flow_matrix.cache_clear()
+    d=m.load_flow_matrix('USD','A',date(2026,9,24),None,0)
+    assert len(calls)==1 and len(d['periods'])==8
+    sql,p=calls[0]
+    assert p['currency']=='USD' and p['start']==date(2021,9,25)
+    assert p['start_0']==p['end'] and p['period_7']=='YTD'
+    assert 'USING(period,run_fondo)' in sql and 'o.fecha>=w.start_date' in sql

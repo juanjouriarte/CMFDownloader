@@ -626,6 +626,11 @@ children. Only observations with both valid flow amounts contribute; missing
 flows stay null and coverage is returned. FI NNM is not inferred from NAV changes.
 All these endpoints require NAV and use current fund identities/classifications.
 Administrator responses use a bounded 60-second process cache.
+`/administrators/flows-periods` returns aligned 1D/1W/1M/3M/6M/1A/5A/YTD
+columns for the same end date, with category/fund/AGF totals and per-cell coverage.
+A single bound SQL query scans source observations once, then aggregates each
+window and its matching migrations. The existing exact-range `/flows` uses the
+same query path. Absent periods remain null; actual zero flows remain zero.
 
 Tests: `tests/test_workspace_*.py`; run with `PYTHONPATH=. .venv/bin/pytest`.
 Local design/audit artifacts under `output/industry-concept/` are ignored; the

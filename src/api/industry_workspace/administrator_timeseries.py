@@ -1,6 +1,7 @@
 """Exact-date NAV history and reported external FM flows for an AGF."""
+from calendar import monthrange
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 from functools import lru_cache
 from time import monotonic
 from typing import Literal
@@ -112,8 +113,21 @@ def flow_tree(funds):
 
 @lru_cache(maxsize=32)
 def load_flows(currency, admin, start, end, category, bucket):
+    data=flow_period_data(currency,admin,end,category,[('range',start)])
+    dates=[r['last_date'] for r in data]
+    return dict(currency=currency,kind='fm',admin=admin,start=start,end=end,
+        last_date=max(dates) if dates else None,**flow_tree(data))
+
+
+def flow_period_data(currency,admin,end,category,periods):
     from .router import rows
-    data=rows(f"""WITH observations AS MATERIALIZED (
+    params=dict(currency=currency,admin=admin,start=min(s for _,s in periods),end=end,category=category)
+    windows=[]
+    for i,(label,start) in enumerate(periods):
+        params[f'period_{i}']=label;params[f'start_{i}']=start
+        windows.append(f'(:period_{i}, CAST(:start_{i} AS date))')
+    return rows(f"""WITH windows(period,start_date) AS (VALUES {','.join(windows)}),
+      observations AS MATERIALIZED (
         SELECT cd.run_fondo, cd.fecha, f.nombre_fondo name,
           COALESCE(c.nombre_cat,'Sin clasificación') category, cd.patrimonio_neto,
           CASE WHEN cd.monto_aportado::text NOT IN ('NaN','Infinity','-Infinity')
@@ -131,25 +145,25 @@ def load_flows(currency, admin, start, end, category, bucket):
           AND COALESCE(f.razon_social_administradora,'Sin administradora')=:admin
           AND f.fecha_termino_operaciones IS NULL
           AND (:category IS NULL OR COALESCE(c.nombre_cat,'Sin clasificación')=:category)
+    ), period_observations AS (
+        SELECT o.*,w.period FROM observations o JOIN windows w ON o.fecha>=w.start_date
     ), adjustments AS (
-        SELECT a.target_run_fondo run_fondo,SUM(a.amount) amount FROM fm_flow_adjustments a
+        SELECT w.period,a.target_run_fondo run_fondo,SUM(a.amount) amount
+        FROM fm_flow_adjustments a JOIN windows w ON a.event_date>=w.start_date
         WHERE a.currency=:currency AND a.status IN ('auto_confirmed','confirmed')
           AND a.event_date BETWEEN :start AND :end
           AND EXISTS(SELECT 1 FROM observations o WHERE o.run_fondo=a.target_run_fondo
                      AND o.fecha=a.event_date AND o.aportes IS NOT NULL)
-        GROUP BY a.target_run_fondo
-    ) SELECT o.run_fondo run, o.name, o.category, MIN(fecha) first_date, MAX(fecha) last_date,
+        GROUP BY w.period,a.target_run_fondo
+    ) SELECT o.period, o.run_fondo run, o.name, o.category, MIN(fecha) first_date, MAX(fecha) last_date,
         SUM(aportes) aportes, SUM(rescates) rescates, SUM(aportes-rescates) reported,
         CASE WHEN COUNT(aportes)>0 THEN COALESCE(MAX(a.amount),0) END migrations,
         COUNT(*) observations, COUNT(aportes) reported_observations
-      FROM observations o LEFT JOIN adjustments a USING(run_fondo)
-      GROUP BY o.run_fondo,o.name,o.category
+      FROM period_observations o LEFT JOIN adjustments a USING(period,run_fondo)
+      GROUP BY o.period,o.run_fondo,o.name,o.category
       HAVING COUNT(*) FILTER(WHERE patrimonio_neto IS NOT NULL AND patrimonio_neto>=0
         AND patrimonio_neto::text NOT IN ('NaN','Infinity','-Infinity'))>0""",
-      dict(currency=currency,admin=admin,start=start,end=end,category=category))
-    dates=[r['last_date'] for r in data]
-    return dict(currency=currency,kind='fm',admin=admin,start=start,end=end,
-        last_date=max(dates) if dates else None,**flow_tree(data))
+      params)
 
 
 @router.get('/flows')
@@ -158,3 +172,60 @@ def administrator_flows(admin: str=Query(min_length=1,max_length=300),
         currency: str=Query('CLP',pattern='^(?:[A-Z]{3}|UF)$'), category: str|None=None):
     validate_range(from_date,to_date)
     return load_flows(currency,admin,from_date,to_date,category,int(monotonic()//60))
+
+
+FLOW_PERIODS=('1D','1W','1M','3M','6M','1A','5A','YTD')
+
+
+def flow_windows(end):
+    periods=[]
+    for key in FLOW_PERIODS:
+        if key=='1D':start=end
+        elif key=='1W':start=end-timedelta(days=6)
+        elif key=='YTD':start=end.replace(month=1,day=1)
+        else:
+            months={'1M':1,'3M':3,'6M':6,'1A':12,'5A':60}[key]
+            n=end.year*12+end.month-1-months
+            year,month=n//12,n%12+1
+            start=date(year,month,min(end.day,monthrange(year,month)[1]))+timedelta(days=1)
+        periods.append(dict(key=key,start=max(start,date(2020,1,1)),end=end,truncated=start<date(2020,1,1)))
+    return periods
+
+
+def build_flow_matrix(data,periods):
+    groups={};funds={};totals={}
+    def cell(row):
+        return {k:row[k] for k in ('net','observations','reported_observations')}
+    for period in periods:
+        key=period['key']
+        tree=flow_tree([r for r in data if r['period']==key])
+        totals[key]=cell(tree['total'])
+        for group in tree['categories']:
+            parent=groups.setdefault(group['name'],dict(name=group['name'],values={},children=[]))
+            parent['values'][key]=cell(group)
+            for child in group['children']:
+                fund=funds.setdefault(child['run'],dict(run=child['run'],name=child['name'],category=child['category'],values={}))
+                fund['values'][key]=dict(**cell(child),first_date=child['first_date'],last_date=child['last_date'])
+    for fund in funds.values():groups[fund['category']]['children'].append(fund)
+    def order(r):
+        net=r['values'].get('YTD',{}).get('net')
+        return (net is None,-(net or 0),r['name'])
+    for group in groups.values():group['children'].sort(key=order)
+    dates=[r['last_date'] for r in data]
+    return dict(categories=sorted(groups.values(),key=order),total=dict(values=totals,funds=len(funds)),
+        last_date=max(dates) if dates else None)
+
+
+@lru_cache(maxsize=32)
+def load_flow_matrix(currency,admin,end,category,bucket):
+    periods=flow_windows(end)
+    data=flow_period_data(currency,admin,end,category,[(p['key'],p['start']) for p in periods])
+    return dict(currency=currency,kind='fm',admin=admin,end=end,periods=periods,
+        **build_flow_matrix(data,periods))
+
+
+@router.get('/flows-periods')
+def administrator_flow_periods(admin: str=Query(min_length=1,max_length=300),to_date: date=Query(),
+        currency: str=Query('CLP',pattern='^(?:[A-Z]{3}|UF)$'),category: str|None=None):
+    validate_range(to_date,to_date)
+    return load_flow_matrix(currency,admin,to_date,category,int(monotonic()//60))
