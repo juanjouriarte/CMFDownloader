@@ -623,12 +623,12 @@ samples can change; point-level fund counts remain visible.
 and confirmed/auto-confirmed receiving-fund migration adjustments. Adjustments
 match currency, fund and observed flow day. Category/total rows sum their fund
 children. Only observations with both valid flow amounts contribute; missing
-flows stay null and coverage is returned. FI NNM is not inferred from NAV changes.
+flows stay null and coverage is returned. FM NNM is not inferred from NAV changes.
 All these endpoints require NAV and use current fund identities/classifications.
 Administrator responses use a bounded 60-second process cache.
 `/administrators/currencies` returns NAV-backed native currencies for the selected
-administrator/month/type/category, plus FM currencies in the five-year NNM
-history. It uses monthly summaries and current active-fund identities; availability
+administrator/month/type/category, plus FM/FI currencies separately in the five-year NNM
+history (`flow_currencies_by_kind`; the legacy FM list remains available). It uses monthly summaries and current active-fund identities; availability
 does not imply that the AGF has NAV on the market's common reporting day or
 reported flows in every window. Profile currency tabs must preserve empty states.
 `/administrators/flows-periods` returns aligned 1D/1W/1M/3M/6M/1A/5A/YTD
@@ -636,6 +636,20 @@ columns for the same end date, with category/fund/AGF totals and per-cell covera
 A single bound SQL query scans source observations once, then aggregates each
 window and its matching migrations. The existing exact-range `/flows` uses the
 same query path. Absent periods remain null; actual zero flows remain zero.
+`/flows-periods?kind=fi` uses `investment_flows.py` to estimate net flow from
+changes in implied units × current unit NAV, separately by native currency and
+fund, for both rescatables and non-rescatables. It recalculates from source NAV
+rather than relying on stored `flujo_neto`: series pairs require known matching
+source currencies, finite valid NAV, identical series sets on consecutive fund
+snapshots and at most seven calendar days between snapshots. First observations,
+series changes, currency changes and longer gaps stay unavailable; fund-cell
+exclusion counts disclose them. Aggregate rows sum only known estimates and
+return comparable/observed fund-day counts. Missing days are not filled. This is
+`methodology=nav_implied`, not reported cash flow, a capital-call confirmation or
+migration-adjusted external NNM. Distributions and corporate adjustments may not
+be captured. FI gross aportes/rescates remain null. FM remains the default.
+Read-only PostgreSQL fixture checks: `RUN_WORKSPACE_DB_TESTS=1 PYTHONPATH=.
+.venv/bin/pytest tests/test_workspace_fi_flows.py`.
 
 Tests: `tests/test_workspace_*.py`; run with `PYTHONPATH=. .venv/bin/pytest`.
 Local design/audit artifacts under `output/industry-concept/` are ignored; the

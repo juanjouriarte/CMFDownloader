@@ -1,4 +1,4 @@
-"""Exact-date NAV history and reported external FM flows for an AGF."""
+"""Exact-date NAV history, reported FM flows and estimated FI flows for an AGF."""
 from calendar import monthrange
 from collections import defaultdict
 from datetime import date, timedelta
@@ -91,7 +91,7 @@ def flow_tree(funds):
     """Every category and total sums its displayed children; missing stays missing."""
     def totals(items):
         known = [r for r in items if r['reported'] is not None]
-        return dict(**{k:sum(float(r[k]) for r in known) if known else None
+        return dict(**{k:sum(float(r[k]) for r in known if r[k] is not None) if any(r[k] is not None for r in known) else None
                      for k in ('aportes','rescates','reported','migrations','net')},
             funds=len(items), reported_funds=len(known),
             observations=sum(r['observations'] for r in items),
@@ -206,6 +206,8 @@ def build_flow_matrix(data,periods):
             for child in group['children']:
                 fund=funds.setdefault(child['run'],dict(run=child['run'],name=child['name'],category=child['category'],values={}))
                 fund['values'][key]=dict(**cell(child),first_date=child['first_date'],last_date=child['last_date'])
+                if 'missing_base' in child:
+                    fund['values'][key]['excluded']={reason:child[reason] for reason in ('missing_base','gaps','series_changes','incomparable_nav')}
     for fund in funds.values():groups[fund['category']]['children'].append(fund)
     def order(r):
         net=r['values'].get('YTD',{}).get('net')
@@ -217,15 +219,19 @@ def build_flow_matrix(data,periods):
 
 
 @lru_cache(maxsize=32)
-def load_flow_matrix(currency,admin,end,category,bucket):
+def load_flow_matrix(currency,admin,end,category,bucket,kind='fm'):
     periods=flow_windows(end)
-    data=flow_period_data(currency,admin,end,category,[(p['key'],p['start']) for p in periods])
-    return dict(currency=currency,kind='fm',admin=admin,end=end,periods=periods,
+    query=flow_period_data
+    if kind=='fi':
+        from .investment_flows import flow_period_data as query
+    data=query(currency,admin,end,category,[(p['key'],p['start']) for p in periods])
+    return dict(currency=currency,kind=kind,methodology='nav_implied' if kind=='fi' else 'reported_external',admin=admin,end=end,periods=periods,
         **build_flow_matrix(data,periods))
 
 
 @router.get('/flows-periods')
 def administrator_flow_periods(admin: str=Query(min_length=1,max_length=300),to_date: date=Query(),
-        currency: str=Query('CLP',pattern='^(?:[A-Z]{3}|UF)$'),category: str|None=None):
+        currency: str=Query('CLP',pattern='^(?:[A-Z]{3}|UF)$'),category: str|None=None,
+        kind: Literal['fm','fi']='fm'):
     validate_range(to_date,to_date)
-    return load_flow_matrix(currency,admin,to_date,category,int(monotonic()//60))
+    return load_flow_matrix(currency,admin,to_date,category,int(monotonic()//60),kind)

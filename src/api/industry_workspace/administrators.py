@@ -11,7 +11,7 @@ router = APIRouter(prefix='/administrators')
 
 @lru_cache(maxsize=64)
 def load_currencies(admin, kind, period, category, cache_bucket):
-    """NAV-backed currencies in this month, plus FM history for the NNM matrix."""
+    """NAV-backed currencies in this month, plus per-type history for the NNM matrix."""
     from .router import rows
     parts = []
     for k, table, admin_column, active in [
@@ -36,7 +36,8 @@ def load_currencies(admin, kind, period, category, cache_bucket):
     data = rows(' UNION ALL '.join(parts), dict(admin=admin, period=period,
         start=max(date(2020, 1, 1), month_shift(period, -60)), category=category))
     return dict(currencies=sorted({r['currency'] for r in data if r['current_month']}),
-        flow_currencies=sorted({r['currency'] for r in data if r['kind']=='fm'}))
+        flow_currencies=sorted({r['currency'] for r in data if r['kind']=='fm'}),
+        flow_currencies_by_kind={k:sorted({r['currency'] for r in data if r['kind']==k}) for k in ('fm','fi')})
 
 
 @router.get('/currencies')

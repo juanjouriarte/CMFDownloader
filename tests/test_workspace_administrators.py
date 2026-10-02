@@ -70,7 +70,7 @@ def test_currency_options_preserve_native_codes_and_separate_fm_history(monkeypa
                 dict(kind='fi',currency='EUR',current_month=False)]
     monkeypatch.setattr(api,'rows',query)
     result=m.load_currencies.__wrapped__('AGF', 'all', date(2026,6,1), 'Deuda', 0)
-    assert result == dict(currencies=['PEN','USD'],flow_currencies=['CLP','USD'])
+    assert result == dict(currencies=['PEN','USD'],flow_currencies=['CLP','USD'],flow_currencies_by_kind={'fm':['CLP','USD'],'fi':['EUR','PEN']})
     sql,params=calls[0]
     assert params==dict(admin='AGF',period=date(2026,6,1),start=date(2021,6,1),category='Deuda')
     assert 'f.vigente IS TRUE' in sql and 'f.fecha_termino_operaciones IS NULL' in sql
@@ -80,7 +80,7 @@ def test_currency_options_preserve_native_codes_and_separate_fm_history(monkeypa
 def test_currency_options_respect_type_and_history_floor(monkeypatch):
     api=import_module('src.api.industry_workspace.router');calls=[]
     monkeypatch.setattr(api,'rows',lambda sql,params:calls.append((sql,params)) or [])
-    assert m.load_currencies.__wrapped__('AGF','fi',date(2022,2,1),None,0)==dict(currencies=[],flow_currencies=[])
+    assert m.load_currencies.__wrapped__('AGF','fi',date(2022,2,1),None,0)==dict(currencies=[],flow_currencies=[],flow_currencies_by_kind={'fm':[],'fi':[]})
     sql,params=calls[0]
     assert 'mv_industry_monthly_fm' not in sql
     assert params['start']==date(2020,1,1)
