@@ -1,0 +1,6 @@
+{
+  "folders": [
+    { "name": "CMFDownloader", "path": "." },
+    { "name": "BTGDashboard", "path": "../BTGDashboard" }
+  ]
+}

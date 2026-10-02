@@ -1,0 +1,145 @@
+{
+  "started_at": "2026-09-25T14:48:37.111989+00:00",
+  "finished_at": "2026-09-25T15:32:47.878854+00:00",
+  "before": {
+    "cartola_diaria": "2026-09-14",
+    "valores_cuota_fi": "2026-08-26",
+    "cartera_naci": "2026-08-01",
+    "cartera_fi_nac": "2026-06-30",
+    "aportantes_fi": "2026-03-31",
+    "cuotas_fi": "2026-06-30",
+    "tac": "2026-08-31",
+    "categoria_fm": "2026-08-01",
+    "categoria_fi": "2026-06-30"
+  },
+  "after": {
+    "cartola_diaria": "2026-09-24",
+    "valores_cuota_fi": "2026-09-24",
+    "cartera_naci": "2026-08-01",
+    "cartera_fi_nac": "2026-06-30",
+    "aportantes_fi": "2026-06-30",
+    "cuotas_fi": "2026-06-30",
+    "tac": "2026-08-31",
+    "categoria_fm": "2026-08-01",
+    "categoria_fi": "2026-06-30"
+  },
+  "jobs": {
+    "ref_codes_refresh": {
+      "status": "success",
+      "rows_upserted": null,
+      "errors": null,
+      "seconds": 0.7
+    },
+    "bonds_tickers": {
+      "status": "success",
+      "rows_upserted": 1318,
+      "errors": 0,
+      "seconds": 1.4
+    },
+    "fm_identity": {
+      "status": "success",
+      "rows_upserted": 1350,
+      "errors": 0,
+      "seconds": 0.6
+    },
+    "mf_tickers": {
+      "status": "success",
+      "rows_upserted": 2408,
+      "errors": 0,
+      "seconds": 2.0
+    },
+    "fi_tickers": {
+      "status": "success",
+      "rows_upserted": 2441,
+      "errors": 0,
+      "seconds": 2.1
+    },
+    "fi_identity": {
+      "status": "success",
+      "rows_upserted": 1678,
+      "errors": 0,
+      "seconds": 3.2
+    },
+    "mf_daily_nav": {
+      "status": "success",
+      "rows_upserted": 31502,
+      "errors": 0,
+      "seconds": 129.0
+    },
+    "mf_portfolios": {
+      "status": "success",
+      "rows_upserted": 33485,
+      "errors": 0,
+      "seconds": 26.3
+    },
+    "mf_costs": {
+      "status": "success",
+      "rows_upserted": 2861,
+      "errors": 0,
+      "seconds": 15.0
+    },
+    "dividends": {
+      "status": "success",
+      "rows_upserted": 7930,
+      "errors": 0,
+      "seconds": 4.4
+    },
+    "fm_flow_adjustments": {
+      "status": "success",
+      "rows_upserted": 0,
+      "errors": 0,
+      "seconds": 0.0
+    },
+    "mf_categories": {
+      "status": "success",
+      "rows_upserted": null,
+      "errors": null,
+      "seconds": 6.2
+    },
+    "mf_rentabilidad": {
+      "status": "success",
+      "rows_upserted": 0,
+      "errors": 0,
+      "seconds": 16.1
+    },
+    "fi_daily_nav": {
+      "status": "success",
+      "rows_upserted": 51260,
+      "errors": 0,
+      "seconds": 1271.3
+    },
+    "fi_shareholders": {
+      "status": "success",
+      "rows_upserted": 37,
+      "errors": 0,
+      "seconds": 37.3
+    },
+    "fi_portfolios": {
+      "status": "success",
+      "rows_upserted": 45762,
+      "errors": 0,
+      "seconds": 1304.4
+    },
+    "fi_categories": {
+      "status": "success",
+      "rows_upserted": null,
+      "errors": null,
+      "seconds": 8.0
+    },
+    "fi_rentabilidad": {
+      "status": "success",
+      "rows_upserted": 0,
+      "errors": 0,
+      "seconds": 19.4
+    },
+    "administradores": {
+      "status": "success",
+      "rows_upserted": 0,
+      "errors": 0,
+      "seconds": 0.0
+    }
+  },
+  "excluded": [
+    "mf_nnm_email_report"
+  ]
+}
