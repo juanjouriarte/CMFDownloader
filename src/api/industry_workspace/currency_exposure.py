@@ -142,7 +142,7 @@ def nav_universe(kind, currency, start, end, admin, run=None):
             (m.month+interval '1 month - 1 day')::date period,m.aum,m.latest_data_date nav_date,
             c.tipo category_type,c.categoria category_code,COALESCE(c.nombre_cat,'Sin clasificación') category
             FROM mv_industry_monthly_{k} m JOIN {table} f USING(run_fondo)
-            LEFT JOIN LATERAL (SELECT * FROM categoria_{k} c WHERE c.run_fondo=m.run_fondo
+            LEFT JOIN LATERAL (SELECT * FROM categoria_{k}_effective c WHERE c.run_fondo=m.run_fondo
                 AND c.periodo <= (m.month+interval '1 month - 1 day')::date ORDER BY c.periodo DESC LIMIT 1) c ON true
             WHERE m.month>=:start AND m.month<=:end AND m.currency=:currency
               AND m.aum>0 AND m.aum::text NOT IN ('NaN','Infinity','-Infinity') AND {active}

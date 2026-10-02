@@ -633,7 +633,7 @@ def _nnm_base_cte(fund_type: str, rescatable: bool | None, date_filter: str) -> 
             "b.data_as_of", "CAST(:data_as_of_fm AS date)"
         )
         return f"""
-            WITH {_nnm_category_cte('categoria_fm')},
+            WITH {_nnm_category_cte('categoria_fm_effective')},
             eligible_funds AS (
                 SELECT fm.run_fondo, fm.nombre_fondo AS fund_name,
                        fm.razon_social_administradora AS administrator,
@@ -734,7 +734,7 @@ def _nnm_base_cte(fund_type: str, rescatable: bool | None, date_filter: str) -> 
               AND {non_rescatable_date_filter}
         """)
     return f"""
-        WITH {_nnm_category_cte('categoria_fi')},
+        WITH {_nnm_category_cte('categoria_fi_effective')},
         history AS (
             SELECT cf.run_fondo, cf.periodo, cf.valor_libro,
                    COALESCE(cf.cuotas_pagadas, 0) AS cuotas_pagadas,

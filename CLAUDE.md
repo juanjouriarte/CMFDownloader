@@ -36,7 +36,7 @@ ssh -i ~/.ssh/oracle_cmf.key ubuntu@146.181.47.236  # db VM
 ```
 
 ### Deploy (automatic via GitHub Actions)
-Push to `main` triggers `.github/workflows/deploy.yml` — SSHes into the app VM, pulls, migrates, and rebuilds automatically.
+Push to `main` triggers `.github/workflows/deploy.yml` — SSHes into the app VM, pulls and builds the new image, runs migrations from that image, then starts the updated services. Deployment stops on a failed build or migration.
 
 Manual deploy if needed:
 ```bash
@@ -655,3 +655,49 @@ Tests: `tests/test_workspace_*.py`; run with `PYTHONPATH=. .venv/bin/pytest`.
 Local design/audit artifacts under `output/industry-concept/` are ignored; the
 maintained frontend lives in the BTGDashboard repository. Deploy this backend
 before the frontend that depends on `/industry-workspace`.
+
+
+## Private classification administration
+
+`/classification-admin` provides authenticated session validation, FM/FI catalogs,
+fund search/detail/history and version-checked PUT lock/unlock operations. The
+frontend exposes `/admin/clasificaciones` through the module selector. The public
+read API stays available without authentication; all admin reads and writes require
+an individual bearer key and use `Cache-Control: no-store`. Missing or malformed
+`CLASSIFICATION_ADMIN_KEYS` disables admin access (503); it never bypasses auth.
+Keys are random secrets, mapped to editor names by SHA-256 hashes in that JSON env
+variable. Actor names come from authentication, never the edit payload. Use HTTPS
+in production; never embed keys or this variable in frontend builds.
+
+Provision local private access with `.venv/bin/python
+scripts/create_classification_admin.py --name Juan`. It saves only the hash in
+`.env`, writes the secret to a mode-0600 file in gitignored `.local/`, and never
+prints the secret. Restart the API to activate keys. Repeat with another editor
+name for distinct attribution. Remove a hash to revoke access, then restart API
+workers; the script refuses accidental replacement of an existing editor.
+
+Migration `y5z6a7b8c9d0` adds `classification_overrides`, append-only application
+audit history and `categoria_fm_effective` / `categoria_fi_effective` read views.
+An active per-kind/fund override replaces the category hierarchy in those views
+across reporting periods; original algorithm rows and metrics remain untouched.
+A fund without algorithm output gets a synthetic classification row only while
+its override is active. Raw CMF/NAV/portfolio data is never edited here.
+
+Classifiers continue writing raw `categoria_fm` / `categoria_fi`, including new
+periods. Public API and MCP category consumers read the effective views; the
+private admin page reads raw suggestions plus the override so differences remain
+visible. Internal migration detection retains algorithm categories; category
+corrections do not retroactively recalculate money or flow adjustments. Dashboard
+historical analyses already use current classifications: an override changes
+that grouping, not historical observations. Database audit revision participates
+in administrator cache keys across API workers. Classification-dependent public
+responses revalidate HTTP caches; leaving Admin for Industria reloads client data.
+
+The API validates category/type/group against the classifier catalogs, requires
+a reason, serializes writes per fund and rejects stale expected versions with
+409. Unlocking keeps audit history and reveals the latest automatic category.
+Tests: `tests/test_classification_admin.py`; enable rollback-isolated local DB
+checks with `RUN_WORKSPACE_DB_TESTS=1 PYTHONPATH=. .venv/bin/pytest
+ tests/test_classification_admin.py`. Apply the migration and configure private
+access in deployment before exposing the new Admin module; no production changes
+are made by local provisioning.

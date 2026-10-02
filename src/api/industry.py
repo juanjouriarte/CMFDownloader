@@ -78,10 +78,10 @@ def _snapshot_cte(include_returns: bool = True, include_ytd: bool = True) -> str
         FROM fi_nav ORDER BY run_fondo, currency, patrimonio_neto DESC NULLS LAST, serie
     ),
     fm_cat AS (
-        SELECT DISTINCT ON (run_fondo) * FROM categoria_fm ORDER BY run_fondo, periodo DESC
+        SELECT DISTINCT ON (run_fondo) * FROM categoria_fm_effective ORDER BY run_fondo, periodo DESC
     ),
     fi_cat AS (
-        SELECT DISTINCT ON (run_fondo) * FROM categoria_fi ORDER BY run_fondo, periodo DESC
+        SELECT DISTINCT ON (run_fondo) * FROM categoria_fi_effective ORDER BY run_fondo, periodo DESC
     ),
     fm_reported_raw AS (
         SELECT cd.run_fondo, {FM_CURRENCY} AS currency,
@@ -356,8 +356,8 @@ def industry_evolution(
                    and _monthly_history_is_current(fund_type))
     rows = _rows(f"""WITH
     {_evolution_sources(use_monthly)},
-    fm_cat AS (SELECT DISTINCT ON (run_fondo) * FROM categoria_fm ORDER BY run_fondo, periodo DESC),
-    fi_cat AS (SELECT DISTINCT ON (run_fondo) * FROM categoria_fi ORDER BY run_fondo, periodo DESC),
+    fm_cat AS (SELECT DISTINCT ON (run_fondo) * FROM categoria_fm_effective ORDER BY run_fondo, periodo DESC),
+    fi_cat AS (SELECT DISTINCT ON (run_fondo) * FROM categoria_fi_effective ORDER BY run_fondo, periodo DESC),
     history AS (
         SELECT :currency AS currency, 'fm'::text AS fund_type, x.month, x.aum, x.aportes, x.rescates,
                x.nnm - COALESCE(a.amount, 0) AS nnm,

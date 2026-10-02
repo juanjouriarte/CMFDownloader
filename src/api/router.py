@@ -27,3 +27,6 @@ router.include_router(emisores_router)
 router.include_router(bolsa_router)
 
 router.include_router(workspace_router)
+
+from .classification_admin import router as classification_admin_router
+router.include_router(classification_admin_router)

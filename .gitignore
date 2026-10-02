@@ -12,3 +12,6 @@ downloads/
 
 # Local design iterations and audit artifacts; promoted source lives in src/.
 output/industry-concept/
+
+# Private local administrator access keys.
+.local/

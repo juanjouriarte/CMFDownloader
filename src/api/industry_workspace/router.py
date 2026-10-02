@@ -44,7 +44,7 @@ def funds():
         c.nombre_cat category, m.currency, m.aum, m.latest_data_date data_date
         FROM (SELECT DISTINCT ON (run_fondo,currency) *, MAX(latest_data_date) OVER(PARTITION BY run_fondo) latest_fund_date FROM mv_industry_monthly_{kind}
         WHERE aum IS NOT NULL ORDER BY run_fondo,currency,month DESC) m
-        JOIN {table} f USING(run_fondo) LEFT JOIN (SELECT DISTINCT ON(run_fondo) * FROM categoria_{kind} WHERE periodo<=CURRENT_DATE ORDER BY run_fondo,periodo DESC) c USING(run_fondo)
+        JOIN {table} f USING(run_fondo) LEFT JOIN (SELECT DISTINCT ON(run_fondo) * FROM categoria_{kind}_effective WHERE periodo<=CURRENT_DATE ORDER BY run_fondo,periodo DESC) c USING(run_fondo)
         WHERE m.latest_data_date=m.latest_fund_date AND {"f.fecha_termino_operaciones IS NULL" if kind=='fm' else 'f.vigente IS TRUE'}""")
     return rows(' UNION ALL '.join(parts)+' ORDER BY currency, aum DESC NULLS LAST')
 
@@ -170,7 +170,7 @@ def capital_activity(currency: str = Query('CLP', pattern='^(?:[A-Z]{3}|UF)$'),
     previous = selected.replace(month=((selected.month-1)//3)*3+1, day=1) - timedelta(days=1)
     metadata = {r['run_fondo']: r for r in rows('''SELECT f.run_fondo, c.categoria, c.grupo
         FROM fondos_inversion f LEFT JOIN (
-            SELECT DISTINCT ON(run_fondo) run_fondo,categoria,grupo FROM categoria_fi
+            SELECT DISTINCT ON(run_fondo) run_fondo,categoria,grupo FROM categoria_fi_effective
             WHERE periodo<=CURRENT_DATE ORDER BY run_fondo,periodo DESC
         ) c USING(run_fondo) WHERE f.rescatable IS FALSE''')}
     allowed = {run for run, r in metadata.items() if strategy == 'all'
@@ -203,7 +203,7 @@ def monthly_data(currency, kind, start, end, category=None, active_only=False):
         COALESCE(f.{admin},'Sin administradora') admin,
         COALESCE(c.nombre_cat,'Sin clasificación') category
         FROM mv_industry_monthly_{k} m JOIN {table} f USING(run_fondo)
-        LEFT JOIN (SELECT DISTINCT ON(run_fondo) run_fondo,nombre_cat FROM categoria_{k}
+        LEFT JOIN (SELECT DISTINCT ON(run_fondo) run_fondo,nombre_cat FROM categoria_{k}_effective
           WHERE periodo<=CURRENT_DATE ORDER BY run_fondo,periodo DESC) c USING(run_fondo)
         WHERE m.currency=:currency AND m.month BETWEEN :start AND :end
           AND m.aum IS NOT NULL AND m.aum::text NOT IN ('NaN','Infinity','-Infinity')

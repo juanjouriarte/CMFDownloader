@@ -27,6 +27,7 @@ import src.db.models.job_runs  # noqa: F401
 import src.db.models.categoria_fi  # noqa: F401
 import src.db.models.categoria_fm  # noqa: F401
 import src.db.models.ref_codes  # noqa: F401
+import src.db.models.classification_overrides  # noqa: F401
 import src.db.models.fm_flow_adjustments  # noqa: F401
 
 config = context.config

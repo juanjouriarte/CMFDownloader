@@ -24,7 +24,7 @@ def flow_period_data(currency, admin, end, category, periods):
             AND v.patrimonio_neto>=0 THEN v.patrimonio_neto::numeric/v.valor_libro END units,
           v.patrimonio_neto IS NOT NULL AND v.patrimonio_neto>=0 has_nav
         FROM valores_cuota_fi v JOIN fondos_inversion f USING(run_fondo)
-        LEFT JOIN (SELECT DISTINCT ON(run_fondo) run_fondo,nombre_cat FROM categoria_fi
+        LEFT JOIN (SELECT DISTINCT ON(run_fondo) run_fondo,nombre_cat FROM categoria_fi_effective
           WHERE periodo<=CURRENT_DATE ORDER BY run_fondo,periodo DESC) c USING(run_fondo)
         WHERE v.fecha BETWEEN :lookback AND :end AND f.vigente IS TRUE
           AND COALESCE(f.administrador,'Sin administradora')=:admin

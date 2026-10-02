@@ -33,7 +33,7 @@ def estimate(monkeypatch):
               ), fondos_inversion AS (
                 SELECT * FROM jsonb_to_recordset(CAST(:funds AS jsonb)) AS t(
                   run_fondo text,razon_social text,administrador text,vigente boolean)
-              ), categoria_fi AS (
+              ), categoria_fi_effective AS (
                 SELECT run_fondo,'Deuda'::text nombre_cat,DATE '2026-09-01' periodo FROM fondos_inversion
               ), """
             with SessionLocal() as session:

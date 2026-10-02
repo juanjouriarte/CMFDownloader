@@ -2,7 +2,7 @@
 from collections import defaultdict
 from datetime import date
 from functools import lru_cache
-from time import monotonic
+from src.api.classification_admin import classification_cache_epoch
 from typing import Literal
 from fastapi import APIRouter, HTTPException, Query
 
@@ -24,7 +24,7 @@ def load_currencies(admin, kind, period, category, cache_bucket):
             BOOL_OR(m.month=:period) current_month
             FROM mv_industry_monthly_{k} m JOIN {table} f USING(run_fondo)
             LEFT JOIN (SELECT DISTINCT ON(run_fondo) run_fondo, nombre_cat
-                FROM categoria_{k} WHERE periodo<=CURRENT_DATE
+                FROM categoria_{k}_effective WHERE periodo<=CURRENT_DATE
                 ORDER BY run_fondo, periodo DESC) c USING(run_fondo)
             WHERE COALESCE(f.{admin_column},'Sin administradora')=:admin AND {active}
                 AND m.month BETWEEN :start AND :period
@@ -46,7 +46,7 @@ def administrator_currencies(admin: str, period: date,
     period = period.replace(day=1)
     if period > date.today() or period < date(2020, 1, 1):
         raise HTTPException(422, 'Seleccione un mes entre 2020 y el actual.')
-    return load_currencies(admin, kind, period, category, int(monotonic() // 60))
+    return load_currencies(admin, kind, period, category, classification_cache_epoch())
 
 
 def month_shift(value, offset):
@@ -141,4 +141,4 @@ def administrator_analysis(currency: str=Query('CLP', pattern='^(?:[A-Z]{3}|UF)$
         period = period.replace(day=1)
         if period > date.today() or period < date(2020,1,1):
             raise HTTPException(422, 'Seleccione un mes entre 2020 y el actual.')
-    return load_analysis(currency, kind, period, category, int(monotonic() // 60))
+    return load_analysis(currency, kind, period, category, classification_cache_epoch())

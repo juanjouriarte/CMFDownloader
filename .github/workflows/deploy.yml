@@ -16,7 +16,9 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           command_timeout: 20m
           script: |
+            set -e
             cd ~/CMFDownloader
             git pull origin main
+            sudo docker compose build
             sudo docker compose run --rm web alembic upgrade head
-            sudo docker compose up -d --build
+            sudo docker compose up -d

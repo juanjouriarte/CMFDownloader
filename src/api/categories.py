@@ -90,7 +90,7 @@ def categories_fi(
         SELECT DISTINCT ON (c.run_fondo)
                c.run_fondo, f.razon_social, f.administrador,
                c.categoria, c.grupo, c.tipo, c.nombre_cat, c.confianza, c.periodo
-        FROM categoria_fi c
+        FROM categoria_fi_effective c
         LEFT JOIN fondos_inversion f ON f.run_fondo = c.run_fondo
         WHERE 1=1 {extra}
         ORDER BY c.run_fondo, c.periodo DESC
@@ -130,7 +130,7 @@ def categories_fm(
                c.run_fondo, f.nombre_fondo,
                f.razon_social_administradora AS administrador,
                c.categoria, c.grupo, c.tipo, c.nombre_cat, c.confianza, c.periodo
-        FROM categoria_fm c
+        FROM categoria_fm_effective c
         LEFT JOIN fondo_mutuo f ON f.run_fondo = c.run_fondo
         WHERE 1=1 {extra}
         ORDER BY c.run_fondo, c.periodo DESC
@@ -167,10 +167,10 @@ def categories_catalog(
     fund_type: Literal["fm", "fi"] | None = Query(None),
 ) -> dict | list[dict]:
     if fund_type == "fm":
-        return _catalog_for("categoria_fm")
+        return _catalog_for("categoria_fm_effective")
     if fund_type == "fi":
-        return _catalog_for("categoria_fi")
+        return _catalog_for("categoria_fi_effective")
     return {
-        "fm": _catalog_for("categoria_fm"),
-        "fi": _catalog_for("categoria_fi"),
+        "fm": _catalog_for("categoria_fm_effective"),
+        "fi": _catalog_for("categoria_fi_effective"),
     }

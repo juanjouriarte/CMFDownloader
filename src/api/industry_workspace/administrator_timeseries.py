@@ -3,7 +3,7 @@ from calendar import monthrange
 from collections import defaultdict
 from datetime import date, timedelta
 from functools import lru_cache
-from time import monotonic
+from src.api.classification_admin import classification_cache_epoch
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
@@ -32,7 +32,7 @@ def load_history(currency, kind, admin, start, end, category, metric, bucket):
         parts.append(f"""SELECT '{k}' kind, {alias}.run_fondo, {alias}.fecha date,
             COALESCE(f.{name}, 'Sin administradora') admin, SUM({alias}.patrimonio_neto) aum
             FROM {table} {alias} JOIN {fund_table} f USING(run_fondo)
-            LEFT JOIN (SELECT DISTINCT ON(run_fondo) run_fondo, nombre_cat FROM categoria_{k}
+            LEFT JOIN (SELECT DISTINCT ON(run_fondo) run_fondo, nombre_cat FROM categoria_{k}_effective
               WHERE periodo<=CURRENT_DATE ORDER BY run_fondo,periodo DESC) c USING(run_fondo)
             WHERE {alias}.fecha BETWEEN :start AND :end AND {expression}=:currency AND {active}
               AND (:category IS NULL OR COALESCE(c.nombre_cat,'Sin clasificación')=:category)
@@ -84,7 +84,7 @@ def administrator_history(admin: str=Query(min_length=1,max_length=300),
         kind: Literal['all','fm','fi']='all', category: str|None=None,
         metric: Literal['aum','share']='aum'):
     validate_range(from_date,to_date)
-    return load_history(currency,kind,admin,from_date,to_date,category,metric,int(monotonic()//60))
+    return load_history(currency,kind,admin,from_date,to_date,category,metric,classification_cache_epoch())
 
 
 def flow_tree(funds):
@@ -139,7 +139,7 @@ def flow_period_data(currency,admin,end,category,periods):
                  AND cd.monto_aportado>=0 AND cd.monto_rescatado>=0
                THEN cd.monto_rescatado END rescates
         FROM cartola_diaria cd JOIN fondo_mutuo f USING(run_fondo)
-        LEFT JOIN (SELECT DISTINCT ON(run_fondo) run_fondo,nombre_cat FROM categoria_fm
+        LEFT JOIN (SELECT DISTINCT ON(run_fondo) run_fondo,nombre_cat FROM categoria_fm_effective
           WHERE periodo<=CURRENT_DATE ORDER BY run_fondo,periodo DESC) c USING(run_fondo)
         WHERE cd.fecha BETWEEN :start AND :end AND {FM_CURRENCY}=:currency
           AND COALESCE(f.razon_social_administradora,'Sin administradora')=:admin
@@ -171,7 +171,7 @@ def administrator_flows(admin: str=Query(min_length=1,max_length=300),
         from_date: date=Query(), to_date: date=Query(),
         currency: str=Query('CLP',pattern='^(?:[A-Z]{3}|UF)$'), category: str|None=None):
     validate_range(from_date,to_date)
-    return load_flows(currency,admin,from_date,to_date,category,int(monotonic()//60))
+    return load_flows(currency,admin,from_date,to_date,category,classification_cache_epoch())
 
 
 FLOW_PERIODS=('1D','1W','1M','3M','6M','1A','5A','YTD')
@@ -234,4 +234,4 @@ def administrator_flow_periods(admin: str=Query(min_length=1,max_length=300),to_
         currency: str=Query('CLP',pattern='^(?:[A-Z]{3}|UF)$'),category: str|None=None,
         kind: Literal['fm','fi']='fm'):
     validate_range(to_date,to_date)
-    return load_flow_matrix(currency,admin,to_date,category,int(monotonic()//60),kind)
+    return load_flow_matrix(currency,admin,to_date,category,classification_cache_epoch(),kind)
