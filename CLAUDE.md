@@ -659,6 +659,10 @@ before the frontend that depends on `/industry-workspace`.
 
 ## Private classification administration
 
+The workspace `/funds` response includes `category_type` and `category_group`
+alongside `category`, from the same effective classification row. The dashboard
+uses these fields for its FM/FI → type → group → category filter hierarchy.
+
 `/classification-admin` provides authenticated session validation, FM/FI catalogs,
 fund search/detail/history and version-checked PUT lock/unlock operations. The
 frontend exposes `/admin/clasificaciones` through the module selector. The public

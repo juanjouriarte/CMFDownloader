@@ -41,7 +41,8 @@ def funds():
     parts=[]
     for kind,table,name in [('fm','fondo_mutuo','nombre_fondo'),('fi','fondos_inversion','razon_social')]:
         parts.append(f"""SELECT '{kind}' kind, f.run_fondo run, f.{name} name, f.{'razon_social_administradora' if kind=='fm' else 'administrador'} admin,
-        c.nombre_cat category, m.currency, m.aum, m.latest_data_date data_date
+        c.nombre_cat category, c.tipo category_type, c.grupo category_group,
+        m.currency, m.aum, m.latest_data_date data_date
         FROM (SELECT DISTINCT ON (run_fondo,currency) *, MAX(latest_data_date) OVER(PARTITION BY run_fondo) latest_fund_date FROM mv_industry_monthly_{kind}
         WHERE aum IS NOT NULL ORDER BY run_fondo,currency,month DESC) m
         JOIN {table} f USING(run_fondo) LEFT JOIN (SELECT DISTINCT ON(run_fondo) * FROM categoria_{kind}_effective WHERE periodo<=CURRENT_DATE ORDER BY run_fondo,periodo DESC) c USING(run_fondo)
