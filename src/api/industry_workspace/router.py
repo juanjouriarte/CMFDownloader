@@ -389,3 +389,6 @@ router.include_router(administrators_router)
 
 from .administrator_timeseries import router as timeseries_router
 router.include_router(timeseries_router)
+
+from .rankings import router as rankings_router
+router.include_router(rankings_router)

@@ -656,6 +656,32 @@ Local design/audit artifacts under `output/industry-concept/` are ignored; the
 maintained frontend lives in the BTGDashboard repository. Deploy this backend
 before the frontend that depends on `/industry-workspace`.
 
+### Ranking workspace
+
+`/industry-workspace/rankings/returns?kind=fm|fi&currency=CLP` reuses existing
+return views and joins the exact series NAV on the calculation date to filter
+currency. It returns all available series (including null period values), current
+effective classification and 1D/1W/1M/1A/5A/YTD columns. FM quality-flagged series
+are excluded with a count; FI returns retain the existing rescatable coverage.
+Returns are not averaged into administrator/category returns.
+
+`/rankings/nnm` takes kind, currency and 1D/1W/1M/3M/6M/1A/5A/YTD, or inclusive
+`from_date`/`to_date`. Presets anchor to the latest monthly-summary source date
+for that currency. It reuses administrator FM reported-external/FI NAV-implied
+accounting and exposes fund metadata, observation coverage and FI exclusions.
+Full-market reads omit the administrator condition; existing administrator routes
+still require it. Ranges over 400 days use disjoint batches of at most 80 funds
+through a shared two-worker pool to bound sorts and database concurrency. Each
+fund retains the complete requested history and FI lookback, including all its
+source currencies. Currency preselection only removes funds without any matching
+currency observations. Date windows are never split between batches.
+
+Both result loaders use bounded 60-second caches with classification revisions.
+Ranking configuration is saved in the dashboard browser and embedded in share
+URLs; these endpoints remain read-only and introduce no schema changes.
+Validation: `tests/test_workspace_rankings.py`, plus the read-only PostgreSQL
+accounting fixtures in `tests/test_workspace_fi_flows.py`.
+
 
 ## Private classification administration
 

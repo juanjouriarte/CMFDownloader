@@ -23,7 +23,7 @@ def estimate(monkeypatch):
     if os.getenv('RUN_WORKSPACE_DB_TESTS')!='1':
         pytest.skip('Enable RUN_WORKSPACE_DB_TESTS=1 for read-only PostgreSQL accounting fixtures')
     from src.db.engine import SessionLocal
-    def run(data, currency='CLP', periods=None):
+    def run(data, currency='CLP', periods=None, admin='A', fund_runs=None):
         funds=[dict(run_fondo=r,razon_social=r,administrador='A',vigente=True)
                for r in sorted({v['run_fondo'] for v in data})]
         def rows(sql,params):
@@ -42,8 +42,8 @@ def estimate(monkeypatch):
                 return [dict(r) for r in session.execute(text(fixtures+sql.removeprefix('WITH ')),
                     dict(params,nav=json.dumps(data),funds=json.dumps(funds))).mappings()]
         monkeypatch.setattr(api,'rows',rows)
-        return fi.flow_period_data(currency,'A',date(2026,9,24),None,
-                                  periods or [('test',date(2026,9,21))])
+        return fi.flow_period_data(currency,admin,date(2026,9,24),None,
+                                  periods or [('test',date(2026,9,21))],fund_runs)
     return run
 
 
@@ -97,3 +97,17 @@ def test_periods_include_only_their_flows_and_preserve_missing_cells(estimate):
     assert new['values']['1W']['net'] is None
     assert new['values']['1W']['excluded']['missing_base']==1
     assert '1D' not in new['values']
+
+
+def test_market_currency_prefilter_and_fund_batches_preserve_full_history(estimate):
+    data=[nav('switch',18,100,currency='PROM'),nav('switch',21,95000),
+          nav('switch',22,110,currency='US$'),nav('switch',23,120,currency='USD'),
+          nav('other',18,100,currency='USD'),nav('other',21,110,currency='USD'),
+          nav('clp_only',18,100),nav('clp_only',21,120)]
+    direct=estimate(data,currency='USD')
+    market=estimate(data,currency='USD',admin=None)
+    batches=[r for run in ['switch','other']
+             for r in estimate(data,currency='USD',admin=None,fund_runs=[run])]
+    order=lambda rows:sorted(rows,key=lambda r:r['run'])
+    assert order(direct)==order(market)==order(batches)
+    assert sum(r['reported'] for r in market)==20

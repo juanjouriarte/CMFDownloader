@@ -119,9 +119,10 @@ def load_flows(currency, admin, start, end, category, bucket):
         last_date=max(dates) if dates else None,**flow_tree(data))
 
 
-def flow_period_data(currency,admin,end,category,periods):
+def flow_period_data(currency,admin,end,category,periods,fund_runs=None):
     from .router import rows
     params=dict(currency=currency,admin=admin,start=min(s for _,s in periods),end=end,category=category)
+    if fund_runs is not None:params['fund_runs']=fund_runs
     windows=[]
     for i,(label,start) in enumerate(periods):
         params[f'period_{i}']=label;params[f'start_{i}']=start
@@ -142,7 +143,8 @@ def flow_period_data(currency,admin,end,category,periods):
         LEFT JOIN (SELECT DISTINCT ON(run_fondo) run_fondo,nombre_cat FROM categoria_fm_effective
           WHERE periodo<=CURRENT_DATE ORDER BY run_fondo,periodo DESC) c USING(run_fondo)
         WHERE cd.fecha BETWEEN :start AND :end AND {FM_CURRENCY}=:currency
-          AND COALESCE(f.razon_social_administradora,'Sin administradora')=:admin
+          {'AND cd.run_fondo=ANY(:fund_runs)' if fund_runs is not None else ''}
+          {"AND COALESCE(f.razon_social_administradora,'Sin administradora')=:admin" if admin is not None else ''}
           AND f.fecha_termino_operaciones IS NULL
           AND (:category IS NULL OR COALESCE(c.nombre_cat,'Sin clasificación')=:category)
     ), period_observations AS (
