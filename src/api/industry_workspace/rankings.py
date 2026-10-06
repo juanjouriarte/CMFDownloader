@@ -82,8 +82,16 @@ def load_returns(kind, currency, bucket):
 
 
 @router.get('/returns')
-def returns(kind: Literal['fm','fi']='fm',
+def returns(kind: Literal['fm','fi','all']='fm',
             currency: str=Query('CLP',pattern='^(?:[A-Z]{3}|UF)$')):
+    if kind == 'all':
+        parts = [load_returns(k,currency,classification_cache_epoch()) for k in ('fm','fi')]
+        dates = {p['kind']:p['date'] for p in parts}
+        return dict(kind=kind,currency=currency,methodology='cmf_backend_return',
+            date=parts[0]['date'] if parts[0]['date']==parts[1]['date'] else None,
+            dates=dates,periods=list(PERIOD_COLUMNS),
+            excluded_suspicious=sum(p['excluded_suspicious'] for p in parts),
+            rows=[r for p in parts for r in p['rows']])
     return load_returns(kind,currency,classification_cache_epoch())
 
 
@@ -123,11 +131,33 @@ def load_nnm(kind, currency, period, start, end, bucket):
 
 
 @router.get('/nnm')
-def nnm(kind: Literal['fm','fi']='fm',currency: str=Query('CLP',pattern='^(?:[A-Z]{3}|UF)$'),
+def nnm(kind: Literal['fm','fi','all']='fm',currency: str=Query('CLP',pattern='^(?:[A-Z]{3}|UF)$'),
         period: Literal['1D','1W','1M','3M','6M','1A','5A','YTD']='1M',
         from_date: date|None=None,to_date: date|None=None):
     if from_date is not None and to_date is None:
         raise HTTPException(422,'El rango personalizado requiere ambas fechas.')
     if to_date is not None:
         validate_range(from_date or to_date,to_date)
+    if kind == 'all':
+        return load_mixed_nnm(currency,period,from_date,to_date,classification_cache_epoch())
     return load_nnm(kind,currency,period,from_date,to_date,classification_cache_epoch())
+
+
+@lru_cache(maxsize=24)
+def load_mixed_nnm(currency,period,start,end,bucket):
+    """Use one window for FM and FI, retaining type/method on every row."""
+    from .router import rows
+    if end is None:
+        cutoffs=rows("""SELECT MAX(latest_data_date) date FROM mv_industry_monthly_fm
+            WHERE currency=:currency AND latest_data_date<=CURRENT_DATE
+            UNION ALL SELECT MAX(latest_data_date) date FROM mv_industry_monthly_fi
+            WHERE currency=:currency AND latest_data_date<=CURRENT_DATE""",dict(currency=currency))
+        end=min((r['date'] for r in cutoffs if r['date'] is not None),default=None)
+    if end is None:
+        return dict(kind='all',currency=currency,start=None,end=None,last_date=None,
+                    methodology='mixed',rows=[])
+    start=start or next(w['start'] for w in flow_windows(end) if w['key']==period)
+    parts=[load_nnm(k,currency,period,start,end,bucket) for k in ('fm','fi')]
+    return dict(kind='all',currency=currency,start=start,end=end,methodology='mixed',
+        last_date=max((p['last_date'] for p in parts if p['last_date']),default=None),
+        rows=[dict(r,methodology=p['methodology']) for p in parts for r in p['rows']])

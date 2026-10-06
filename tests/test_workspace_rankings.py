@@ -78,8 +78,45 @@ def test_long_windows_partition_funds_without_splitting_date_history(monkeypatch
 @pytest.mark.parametrize('params',[
     {'from_date':'2026-01-01'},
     {'from_date':'2026-01-02','to_date':'2026-01-01'},
-    {'to_date':'2099-01-01'}, {'period':'bad'}, {'kind':'all'}, {'currency':'bad'},
+    {'to_date':'2099-01-01'}, {'period':'bad'}, {'kind':'unknown'}, {'currency':'bad'},
 ])
 def test_invalid_nnm_requests_fail_before_query(params):
     app=FastAPI();app.include_router(m.router)
     assert TestClient(app).get('/rankings/nnm',params=params).status_code==422
+
+
+def test_mixed_returns_keep_kind_series_and_distinct_cutoff_dates(monkeypatch):
+    monkeypatch.setattr(m,'classification_cache_epoch',lambda:0)
+    def load(kind,currency,bucket):
+        return dict(kind=kind,date=date(2026,9,24 if kind=='fm' else 23),
+                    excluded_suspicious=1 if kind=='fm' else 0,
+                    rows=[dict(kind=kind,currency=currency,run='1',serie='A')])
+    monkeypatch.setattr(m,'load_returns',load)
+    result=m.returns('all','USD')
+    assert result['date'] is None
+    assert result['dates']==dict(fm=date(2026,9,24),fi=date(2026,9,23))
+    assert [r['kind'] for r in result['rows']]==['fm','fi']
+    assert result['excluded_suspicious']==1
+
+
+@pytest.mark.parametrize('custom',[False,True])
+def test_mixed_nnm_uses_one_window_and_preserves_method_per_row(monkeypatch,custom):
+    calls=[]
+    monkeypatch.setattr(api,'rows',lambda *args:[dict(date=date(2026,9,24)),dict(date=date(2026,9,20))])
+    def load(kind,currency,period,start,end,bucket):
+        calls.append((kind,currency,start,end))
+        return dict(last_date=end,methodology='reported_external' if kind=='fm' else 'nav_implied',
+                    rows=[dict(kind=kind,run='1',currency=currency,net=None if kind=='fi' else 0)])
+    monkeypatch.setattr(m,'load_nnm',load);m.load_mixed_nnm.cache_clear()
+    start,end=(date(2026,8,1),date(2026,8,31)) if custom else (None,None)
+    result=m.load_mixed_nnm('CLP','YTD',start,end,0)
+    expected_start,expected_end=(start,end) if custom else (date(2026,1,1),date(2026,9,20))
+    assert calls==[(kind,'CLP',expected_start,expected_end) for kind in ('fm','fi')]
+    assert [r['net'] for r in result['rows']]==[0,None]
+    assert [r['methodology'] for r in result['rows']]==['reported_external','nav_implied']
+
+
+def test_mixed_nnm_empty_currency_does_not_invent_window(monkeypatch):
+    monkeypatch.setattr(api,'rows',lambda *args:[dict(date=None),dict(date=None)])
+    m.load_mixed_nnm.cache_clear()
+    assert m.load_mixed_nnm('PEN','1M',None,None,0)['rows']==[]
