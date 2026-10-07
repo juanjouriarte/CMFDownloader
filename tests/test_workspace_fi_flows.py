@@ -111,3 +111,37 @@ def test_market_currency_prefilter_and_fund_batches_preserve_full_history(estima
     order=lambda rows:sorted(rows,key=lambda r:r['run'])
     assert order(direct)==order(market)==order(batches)
     assert sum(r['reported'] for r in market)==20
+
+
+def test_unchanged_empty_series_contribute_zero_without_excluding_active_series(estimate):
+    data = [nav('pionero',18,100), nav('pionero',21,132,1.1)]
+    for series in ['B','C','D']:
+        data += [nav('pionero',18,0,0,series), nav('pionero',21,0,0,series)]
+    result = estimate(data)[0]
+    assert float(result['reported']) == pytest.approx(22)
+    assert result['reported_observations'] == 1
+    assert result['incomparable_nav'] == 0
+
+
+@pytest.mark.parametrize('before,after', [
+    ((0,0),(100,1)), ((100,1),(0,0)), ((None,0),(0,0)),
+    ((0,None),(0,0)), ((100,0),(0,0)), ((0,0),(0,None)),
+])
+def test_empty_transition_and_incomplete_series_still_exclude_whole_snapshot(estimate,before,after):
+    result = estimate([nav('fund',18,100),nav('fund',21,110),
+                       nav('fund',18,*before,series='B'),nav('fund',21,*after,series='B')])[0]
+    assert result['reported'] is None
+    assert result['incomparable_nav'] == 1
+
+
+def test_empty_series_currency_change_or_missing_date_cannot_pass_comparability(estimate):
+    data = [nav('fund',18,100),nav('fund',21,110),
+            nav('fund',18,0,0,'B'),nav('fund',19,0,0,'B',currency='USD'),
+            nav('fund',21,0,0,'B')]
+    result=estimate(data)[0]
+    assert result['reported'] is None and result['incomparable_nav']==1
+
+
+def test_all_empty_stable_series_are_observed_zero_not_missing(estimate):
+    result=estimate([nav('empty',18,0,0),nav('empty',21,0,0)])[0]
+    assert result['reported']==0 and result['reported_observations']==1

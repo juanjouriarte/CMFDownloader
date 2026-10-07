@@ -21,14 +21,14 @@ def finite(value):
     return float(value) if value is not None and isfinite(float(value)) else None
 
 
-def flow_data(kind,currency,start,end):
+def flow_data(kind,currency,start,end,periods=None):
     """Bound large market scans by fund, never by date: each fund keeps its
     complete baseline/history and all source currencies for FI validation.
     A shared two-worker pool caps database concurrency across requests.
     """
     from .router import rows
     query=fi_flow_period_data if kind=='fi' else flow_period_data
-    periods=[('ranking',start)]
+    periods=periods or [('ranking',start)]
     if (end-start).days<=400:
         return query(currency,None,end,None,periods)
     source,registry,alias,active,expression=(
@@ -161,3 +161,60 @@ def load_mixed_nnm(currency,period,start,end,bucket):
     return dict(kind='all',currency=currency,start=start,end=end,methodology='mixed',
         last_date=max((p['last_date'] for p in parts if p['last_date']),default=None),
         rows=[dict(r,methodology=p['methodology']) for p in parts for r in p['rows']])
+
+
+@lru_cache(maxsize=16)
+def load_nnm_periods(kind, currency, start, end, bucket, window='all'):
+    """One source scan per fund batch calculates every window at a shared cutoff."""
+    from .router import rows
+    kinds = ('fm','fi') if kind == 'all' else (kind,)
+    if end is None:
+        cutoffs = rows(' UNION ALL '.join(
+            f'SELECT MAX(latest_data_date) date FROM mv_industry_monthly_{k} '
+            'WHERE currency=:currency AND latest_data_date<=CURRENT_DATE' for k in kinds),
+            dict(currency=currency))
+        end = min((r['date'] for r in cutoffs if r['date']), default=None)
+    if end is None:
+        return dict(kind=kind,currency=currency,end=None,last_date=None,periods=[],rows=[])
+    windows = [w for w in flow_windows(end) if window=='all' or (w['key']=='5A')==(window=='long')]
+    if start and window!='long':
+        windows.append(dict(key='custom',start=start,end=end,truncated=False))
+    periods = [(w['key'],w['start']) for w in windows]
+    earliest = min(s for _,s in periods)
+    validate_range(earliest,end)
+    output = []
+    for k in kinds:
+        data = flow_data(k,currency,earliest,end,periods)
+        registry,admin = ('fondo_mutuo','razon_social_administradora') if k=='fm' else ('fondos_inversion','administrador')
+        meta = {r['run']:r for r in rows(f"""SELECT f.run_fondo run,
+            COALESCE(f.{admin},'Sin administradora') admin,c.tipo category_type,c.grupo category_group
+            FROM {registry} f LEFT JOIN (SELECT DISTINCT ON(run_fondo) run_fondo,tipo,grupo
+            FROM categoria_{k}_effective WHERE periodo<=CURRENT_DATE
+            ORDER BY run_fondo,periodo DESC) c USING(run_fondo)""")}
+        funds = {}
+        for row in data:
+            fund = funds.setdefault(row['run'],dict(kind=k,currency=currency,**meta[row['run']],
+                name=row['name'],category=row['category'],
+                methodology='nav_implied' if k=='fi' else 'reported_external',values={}))
+            reported,migrations = finite(row['reported']),finite(row['migrations'])
+            fund['values'][row['period']] = dict(
+                net=reported-migrations if reported is not None and migrations is not None else None,
+                reported=reported,migrations=migrations,observations=row['observations'],
+                reported_observations=row['reported_observations'],
+                first_date=row['first_date'],last_date=row['last_date'],
+                excluded={key:row.get(key,0) for key in ('missing_base','gaps','series_changes','incomparable_nav')})
+        output.extend(funds.values())
+    return dict(kind=kind,currency=currency,end=end,periods=windows,
+                last_date=max((c['last_date'] for f in output for c in f['values'].values()),default=None),rows=output)
+
+
+@router.get('/nnm-periods')
+def nnm_periods(kind: Literal['fm','fi','all']='all',
+               currency: str=Query('CLP',pattern='^(?:[A-Z]{3}|UF)$'),
+               from_date: date|None=None,to_date: date|None=None,
+               window: Literal['all','recent','long']='all'):
+    if from_date is not None and to_date is None:
+        raise HTTPException(422,'El rango personalizado requiere ambas fechas.')
+    if to_date is not None:
+        validate_range(from_date or to_date,to_date)
+    return load_nnm_periods(kind,currency,from_date,to_date,classification_cache_epoch(),window)

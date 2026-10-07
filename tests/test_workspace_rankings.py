@@ -120,3 +120,52 @@ def test_mixed_nnm_empty_currency_does_not_invent_window(monkeypatch):
     monkeypatch.setattr(api,'rows',lambda *args:[dict(date=None),dict(date=None)])
     m.load_mixed_nnm.cache_clear()
     assert m.load_mixed_nnm('PEN','1M',None,None,0)['rows']==[]
+
+
+def test_nnm_matrix_scans_each_kind_once_and_keeps_each_periods_adjustments(monkeypatch):
+    calls=[]
+    def rows(sql,params=None):
+        if 'MAX(latest_data_date)' in sql:
+            return [dict(date=date(2026,9,24)),dict(date=date(2026,9,20))]
+        return [dict(run='1',admin='AGF',category_type='Debt',category_group='Local')]
+    def data(kind,currency,start,end,periods):
+        calls.append((kind,currency,start,end,periods))
+        return [dict(period=p,run='1',name='Fund',category='Debt',reported=v,migrations=a,
+            observations=4,reported_observations=0 if v is None else 3,
+            first_date=end,last_date=end,incomparable_nav=1)
+            for p,v,a in [('1M',50,10),('1D',0,0),('YTD',None,None)]]
+    monkeypatch.setattr(api,'rows',rows);monkeypatch.setattr(m,'flow_data',data)
+    m.load_nnm_periods.cache_clear()
+    result=m.load_nnm_periods('all','CLP',None,None,0)
+    assert len(calls)==2 and [c[0] for c in calls]==['fm','fi']
+    assert all(c[2]==date(2021,9,21) and c[3]==date(2026,9,20) for c in calls)
+    assert all(len(c[4])==8 for c in calls)
+    assert result['rows'][0]['values']['1M']['net']==40
+    assert result['rows'][0]['values']['1D']['net']==0
+    assert result['rows'][0]['values']['YTD']['net'] is None
+    assert '5A' not in result['rows'][0]['values']  # Missing remains missing.
+    assert result['rows'][1]['methodology']=='nav_implied'
+    result=m.load_nnm_periods('all','CLP',date(2026,8,1),date(2026,8,31),1)
+    assert result['periods'][-1]==dict(key='custom',start=date(2026,8,1),end=date(2026,8,31),truncated=False)
+    assert all(c[3]==date(2026,8,31) for c in calls[-2:])
+
+
+def test_nnm_matrix_empty_currency_and_bad_range(monkeypatch):
+    monkeypatch.setattr(api,'rows',lambda *args:[dict(date=None)])
+    m.load_nnm_periods.cache_clear()
+    assert m.load_nnm_periods('all','PEN',None,None,0)['rows']==[]
+    app=FastAPI();app.include_router(m.router)
+    for params in [{'from_date':'2026-01-01'}, {'from_date':'2026-08-02','to_date':'2026-08-01'}, {'kind':'x'}]:
+        assert TestClient(app).get('/rankings/nnm-periods',params=params).status_code==422
+
+
+@pytest.mark.parametrize('window,expected', [('recent',{'1D','1W','1M','3M','6M','1A','YTD'}),('long',{'5A'})])
+def test_nnm_progressive_windows_use_identical_explicit_cutoff(monkeypatch,window,expected):
+    calls=[]
+    monkeypatch.setattr(api,'rows',lambda *args:[])
+    monkeypatch.setattr(m,'flow_data',lambda kind,currency,start,end,periods:calls.append((start,end,periods)) or [])
+    m.load_nnm_periods.cache_clear()
+    result=m.load_nnm_periods('all','CLP',None,date(2026,9,24),0,window)
+    assert {p['key'] for p in result['periods']}==expected
+    assert len(calls)==2 and all(c[1]==date(2026,9,24) for c in calls)
+    assert all({p for p,_ in c[2]}==expected for c in calls)

@@ -37,6 +37,7 @@ def flow_period_data(currency, admin, end, category, periods, fund_runs=None):
       source AS MATERIALIZED (
         SELECT v.run_fondo, v.serie, v.fecha, {_currency('v.moneda')} currency,
           v.valor_libro price,
+          COALESCE(v.valor_libro=0 AND v.patrimonio_neto=0, FALSE) empty_series,
           CASE WHEN v.valor_libro>0 AND v.valor_libro::text NOT IN ('NaN','Infinity','-Infinity')
             AND v.patrimonio_neto>=0 THEN v.patrimonio_neto::numeric/v.valor_libro END units,
           v.patrimonio_neto IS NOT NULL AND v.patrimonio_neto>=0 has_nav
@@ -44,17 +45,20 @@ def flow_period_data(currency, admin, end, category, periods, fund_runs=None):
         WHERE v.fecha BETWEEN :lookback AND :end
       ), paired AS (
         SELECT *, LAG(fecha) OVER w previous_date, LAG(currency) OVER w previous_currency,
-          LAG(units) OVER w previous_units
+          LAG(units) OVER w previous_units, LAG(empty_series) OVER w previous_empty_series
         FROM source WINDOW w AS (PARTITION BY run_fondo,serie ORDER BY fecha)
+      ), comparable AS (
+        SELECT *, COALESCE(empty_series AND previous_empty_series, FALSE) unchanged_empty
+        FROM paired
       ), daily AS (
         SELECT run_fondo,fecha,currency,
           ARRAY_AGG(serie ORDER BY serie) series,
           BOOL_OR(has_nav) has_nav,
-          BOOL_AND(units IS NOT NULL AND previous_units IS NOT NULL
+          BOOL_AND((unchanged_empty OR (units IS NOT NULL AND previous_units IS NOT NULL))
             AND currency IS NOT DISTINCT FROM previous_currency) valid_values,
           MIN(previous_date) earliest_base, MAX(previous_date) latest_base,
-          SUM((units-previous_units)*price) estimate
-        FROM paired WHERE currency=:currency GROUP BY run_fondo,fecha,currency
+          SUM(CASE WHEN unchanged_empty THEN 0 ELSE (units-previous_units)*price END) estimate
+        FROM comparable WHERE currency=:currency GROUP BY run_fondo,fecha,currency
       ), snapshots AS (
         SELECT *, LAG(fecha) OVER w previous_snapshot, LAG(series) OVER w previous_series
         FROM daily WINDOW w AS (PARTITION BY run_fondo,currency ORDER BY fecha)

@@ -710,6 +710,22 @@ remain unchanged. Each combined row retains its kind and methodology; frontend
 groups and totals stay separate for reported FM flows versus estimated FI flows.
 
 Both result loaders use bounded 60-second caches with classification revisions.
+`/rankings/nnm-periods` calculates multiple windows in one source scan per fund
+batch, retaining each cell's adjustments, coverage and exclusions. FM/FI share
+the earlier available cutoff; explicit dates override it. `window=recent` omits
+5A and `window=long` returns only 5A, enabling progressive table loading at the
+same cutoff. The default `all` returns all eight flow windows; custom ranges add
+`custom`. Missing period cells are omitted, never substituted with zero. Long
+scans use the same shared two-worker pool and disjoint batches of 80 funds.
+
+FI flow comparability permits unchanged empty series: both consecutive values
+must explicitly report patrimonio=0 and valor_libro=0, with the same currency
+and matching fund snapshot dates. Such pairs contribute zero while active series
+retain the existing checks. Empty-to-active/active-to-empty transitions, nulls,
+invalid NAV, series-set changes and long gaps remain excluded. This fixes funds
+such as Pionero without dropping their empty series from identity/date checks.
+Validated by read-only PostgreSQL fixtures in `tests/test_workspace_fi_flows.py`.
+
 The calculation endpoints remain read-only. Saved definitions now live in the
 separate authenticated shared-ranking library described below.
 Validation: `tests/test_workspace_rankings.py`, plus the read-only PostgreSQL
