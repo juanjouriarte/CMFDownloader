@@ -1,51 +1,22 @@
 """Currency-separated series returns and fund net-new-money rankings."""
 from datetime import date
-from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from math import isfinite
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from src.api.classification_admin import classification_cache_epoch
-from src.api.industry import _currency, FM_CURRENCY
-from .administrator_timeseries import flow_period_data, flow_windows, validate_range
-from .investment_flows import flow_period_data as fi_flow_period_data
+from src.api.industry import _currency
+from .administrator_timeseries import flow_windows, validate_range
+from .nnm_daily import flow_data
 
 router = APIRouter(prefix='/rankings')
-_flow_pool = ThreadPoolExecutor(max_workers=2,thread_name_prefix='ranking-flows')
 PERIOD_COLUMNS = {'1D': 'r_1d', '1W': 'r_1w', '1M': 'r_1m',
                   '1A': 'r_1y', '5A': 'r_5y', 'YTD': 'r_ytd'}
 
 
 def finite(value):
     return float(value) if value is not None and isfinite(float(value)) else None
-
-
-def flow_data(kind,currency,start,end,periods=None):
-    """Bound large market scans by fund, never by date: each fund keeps its
-    complete baseline/history and all source currencies for FI validation.
-    A shared two-worker pool caps database concurrency across requests.
-    """
-    from .router import rows
-    query=fi_flow_period_data if kind=='fi' else flow_period_data
-    periods=periods or [('ranking',start)]
-    if (end-start).days<=400:
-        return query(currency,None,end,None,periods)
-    source,registry,alias,active,expression=(
-        ('cartola_diaria','fondo_mutuo','cd','f.fecha_termino_operaciones IS NULL',FM_CURRENCY)
-        if kind=='fm' else ('valores_cuota_fi','fondos_inversion','v','f.vigente IS TRUE',_currency('v.moneda')))
-    candidates=rows(f"""SELECT DISTINCT {alias}.run_fondo run FROM {source} {alias}
-        JOIN {registry} f USING(run_fondo) WHERE {alias}.fecha BETWEEN :start AND :end
-        AND {expression}=:currency AND {active} ORDER BY {alias}.run_fondo""",
-        dict(start=start,end=end,currency=currency))
-    runs=[r['run'] for r in candidates]
-    futures=[_flow_pool.submit(query,currency,None,end,None,periods,runs[i:i+80])
-             for i in range(0,len(runs),80)]
-    try:
-        return [row for future in futures for row in future.result()]
-    except Exception:
-        for future in futures:future.cancel()
-        raise
 
 
 @lru_cache(maxsize=24)
@@ -165,7 +136,7 @@ def load_mixed_nnm(currency,period,start,end,bucket):
 
 @lru_cache(maxsize=16)
 def load_nnm_periods(kind, currency, start, end, bucket, window='all'):
-    """One source scan per fund batch calculates every window at a shared cutoff."""
+    """Daily facts calculate every window at a shared cutoff without rescanning series NAV."""
     from .router import rows
     kinds = ('fm','fi') if kind == 'all' else (kind,)
     if end is None:

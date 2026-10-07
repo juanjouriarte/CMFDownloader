@@ -697,12 +697,13 @@ differ. The frontend can select exact kind/RUN/series identities without new que
 `from_date`/`to_date`. Presets anchor to the latest monthly-summary source date
 for that currency. It reuses administrator FM reported-external/FI NAV-implied
 accounting and exposes fund metadata, observation coverage and FI exclusions.
-Full-market reads omit the administrator condition; existing administrator routes
-still require it. Ranges over 400 days use disjoint batches of at most 80 funds
-through a shared two-worker pool to bound sorts and database concurrency. Each
-fund retains the complete requested history and FI lookback, including all its
-source currencies. Currency preselection only removes funds without any matching
-currency observations. Date windows are never split between batches.
+Ranking calculations read `mv_nnm_daily_fm` / `mv_nnm_daily_fi` rather than
+rescanning series history. Daily facts retain valid/observed counts, NAV eligibility,
+FI exclusion reasons and prior snapshot dates. Current active status, names and
+effective classifications are joined when querying; confirmed FM migration
+adjustments remain live and require no fact refresh. FI request lookback boundaries
+still distinguish missing bases from long gaps. Administrator source queries remain
+available as the accounting reference.
 `kind=all` uses the earlier available FM/FI cutoff for preset windows and applies
 one identical range to both loaders. If only one kind has a cutoff, it uses that
 date; an entirely empty currency has no invented window. Explicit date ranges
@@ -710,13 +711,13 @@ remain unchanged. Each combined row retains its kind and methodology; frontend
 groups and totals stay separate for reported FM flows versus estimated FI flows.
 
 Both result loaders use bounded 60-second caches with classification revisions.
-`/rankings/nnm-periods` calculates multiple windows in one source scan per fund
-batch, retaining each cell's adjustments, coverage and exclusions. FM/FI share
+`/rankings/nnm-periods` aggregates daily facts for multiple windows, retaining each
+cell's adjustments, coverage and exclusions. FM/FI share
 the earlier available cutoff; explicit dates override it. `window=recent` omits
 5A and `window=long` returns only 5A, enabling progressive table loading at the
 same cutoff. The default `all` returns all eight flow windows; custom ranges add
 `custom`. Missing period cells are omitted, never substituted with zero. Long
-scans use the same shared two-worker pool and disjoint batches of 80 funds.
+ranking windows use the same daily-fact query path as shorter windows.
 
 FI flow comparability permits unchanged empty series: both consecutive values
 must explicitly report patrimonio=0 and valor_libro=0, with the same currency
@@ -726,10 +727,23 @@ invalid NAV, series-set changes and long gaps remain excluded. This fixes funds
 such as Pionero without dropping their empty series from identity/date checks.
 Validated by read-only PostgreSQL fixtures in `tests/test_workspace_fi_flows.py`.
 
+Migration `a7b8c9d0e1f2` builds and indexes the daily materialized views locally
+before API rollout. NAV scheduler wrappers run tracked `fm_nnm_daily` /
+`fi_nnm_daily` refreshes concurrently before publishing each monthly summary.
+Full refreshes incorporate historical/same-date corrections and preserve the last
+committed view for readers if refresh fails; failures mark the job as failed.
+API caches may retain an older result for up to 60 seconds. Manual NAV backfills
+must refresh these views as well (after the import):
+`REFRESH MATERIALIZED VIEW CONCURRENTLY mv_nnm_daily_fm;` and/or
+`REFRESH MATERIALIZED VIEW CONCURRENTLY mv_nnm_daily_fi;`.
+The initial migration/refresh is heavier than a ranking read; run it before starting
+the updated API. No production migration is performed by local development.
+
 The calculation endpoints remain read-only. Saved definitions now live in the
 separate authenticated shared-ranking library described below.
-Validation: `tests/test_workspace_rankings.py`, plus the read-only PostgreSQL
-accounting fixtures in `tests/test_workspace_fi_flows.py`.
+Validation: `tests/test_workspace_rankings.py`, `tests/test_industry_refresh.py`,
+plus read-only PostgreSQL fixtures in `tests/test_workspace_fi_flows.py` (both
+source and daily paths) and `tests/test_nnm_daily_fm.py`.
 
 ### Shared ranking library
 

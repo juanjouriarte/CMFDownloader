@@ -47,32 +47,35 @@ def test_nnm_latest_data_anchor_and_migration_adjustment_preserve_missing(monkey
         if 'MAX(latest_data_date)' in sql:return [dict(date=date(2026,9,24))]
         return [dict(run=run,admin='AGF',category_type='Debt',category_group='Local') for run in ('1','2','3')]
     calls=[]
-    def flows(currency,admin,end,category,periods):
-        calls.append((currency,admin,end,periods))
+    def flows(kind,currency,start,end,periods=None):
+        calls.append((kind,currency,start,end,periods))
         return [dict(run=run,name=run,category='Debt',reported=r,migrations=a,
                      observations=2,reported_observations=0 if r is None else 2,
                      first_date=date(2026,9,24),last_date=date(2026,9,24))
                 for run,r,a in [('1',50,10),('2',0,0),('3',None,None)]]
-    monkeypatch.setattr(api,'rows',rows);monkeypatch.setattr(m,'flow_period_data',flows)
+    monkeypatch.setattr(api,'rows',rows);monkeypatch.setattr(m,'flow_data',flows)
     m.load_nnm.cache_clear()
     r=m.load_nnm('fm','CLP','YTD',None,None,0)
-    assert calls==[('CLP',None,date(2026,9,24),[('ranking',date(2026,1,1))])]
+    assert calls==[('fm','CLP',date(2026,1,1),date(2026,9,24),None)]
     assert [v['net'] for v in r['rows']]==[40,0,None]
     assert r['methodology']=='reported_external'
 
 
-def test_long_windows_partition_funds_without_splitting_date_history(monkeypatch):
+@pytest.mark.parametrize('kind',['fm','fi'])
+def test_long_windows_read_daily_facts_and_live_classifications(monkeypatch,kind):
     calls=[]
-    monkeypatch.setattr(api,'rows',lambda *args:[dict(run=str(i)) for i in range(165)])
-    def query(currency,admin,end,category,periods,fund_runs):
-        calls.append((currency,admin,end,category,periods,fund_runs))
-        return [dict(run=run) for run in fund_runs]
-    monkeypatch.setattr(m,'fi_flow_period_data',query)
+    monkeypatch.setattr(api,'rows',lambda sql,p:calls.append((sql,p)) or [])
     start,end=date(2021,9,25),date(2026,9,24)
-    result=m.flow_data('fi','USD',start,end)
-    assert len(result)==165 and len({r['run'] for r in result})==165
-    assert len(calls)==3 and max(len(c[-1]) for c in calls)==80
-    assert all(c[:5]==('USD',None,end,None,[('ranking',start)]) for c in calls)
+    assert m.flow_data(kind,'USD',start,end)==[]
+    assert len(calls)==1
+    sql,p=calls[0]
+    assert f'mv_nnm_daily_{kind}' in sql and f'categoria_{kind}_effective' in sql
+    assert 'cartola_diaria' not in sql and 'valores_cuota_fi' not in sql
+    assert p['start']==start and p['end']==end and p['currency']=='USD'
+    if kind=='fm':
+        assert 'fm_flow_adjustments' in sql and 'o.reported_observations>0' in sql
+    else:
+        assert 'previous_snapshot<:lookback' in sql
 
 
 @pytest.mark.parametrize('params',[

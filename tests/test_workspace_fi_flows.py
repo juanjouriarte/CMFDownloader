@@ -2,6 +2,8 @@
 Run locally with RUN_WORKSPACE_DB_TESTS=1; no database data is modified.
 """
 import json
+import runpy
+from pathlib import Path
 import os
 from datetime import date
 from importlib import import_module
@@ -18,8 +20,8 @@ def nav(run, day, aum, price=1, series='A', currency='CLP'):
                 valor_libro=price,serie=series,moneda=currency)
 
 
-@pytest.fixture
-def estimate(monkeypatch):
+@pytest.fixture(params=['source','daily'])
+def estimate(monkeypatch,request):
     if os.getenv('RUN_WORKSPACE_DB_TESTS')!='1':
         pytest.skip('Enable RUN_WORKSPACE_DB_TESTS=1 for read-only PostgreSQL accounting fixtures')
     from src.db.engine import SessionLocal
@@ -27,6 +29,10 @@ def estimate(monkeypatch):
         funds=[dict(run_fondo=r,razon_social=r,administrador='A',vigente=True)
                for r in sorted({v['run_fondo'] for v in data})]
         def rows(sql,params):
+            if request.param=='daily':
+                query=runpy.run_path(str(Path(__file__).parents[1]/'alembic/versions/a7b8c9d0e1f2_add_daily_nnm.py'))['FI_SQL']
+                sql='WITH mv_nnm_daily_fi AS ('+query+'), '+sql.removeprefix('WITH ')
+
             fixtures="""WITH valores_cuota_fi AS (
                 SELECT * FROM jsonb_to_recordset(CAST(:nav AS jsonb)) AS t(
                   run_fondo text,fecha date,patrimonio_neto bigint,valor_libro numeric,serie text,moneda text)
@@ -42,8 +48,12 @@ def estimate(monkeypatch):
                 return [dict(r) for r in session.execute(text(fixtures+sql.removeprefix('WITH ')),
                     dict(params,nav=json.dumps(data),funds=json.dumps(funds))).mappings()]
         monkeypatch.setattr(api,'rows',rows)
-        return fi.flow_period_data(currency,admin,date(2026,9,24),None,
-                                  periods or [('test',date(2026,9,21))],fund_runs)
+        periods=periods or [('test',date(2026,9,21))]
+        if request.param=='daily':
+            daily=import_module('src.api.industry_workspace.nnm_daily')
+            result=daily.flow_data('fi',currency,min(s for _,s in periods),date(2026,9,24),periods)
+            return [r for r in result if fund_runs is None or r['run'] in fund_runs]
+        return fi.flow_period_data(currency,admin,date(2026,9,24),None,periods,fund_runs)
     return run
 
 
@@ -145,3 +155,13 @@ def test_empty_series_currency_change_or_missing_date_cannot_pass_comparability(
 def test_all_empty_stable_series_are_observed_zero_not_missing(estimate):
     result=estimate([nav('empty',18,0,0),nav('empty',21,0,0)])[0]
     assert result['reported']==0 and result['reported_observations']==1
+
+
+def test_history_before_query_lookback_is_missing_base_not_gap(estimate):
+    result=estimate([nav('old',1,100),nav('old',21,150)])[0]
+    assert result['reported'] is None and result['missing_base']==1 and result['gaps']==0
+
+
+def test_old_series_base_cannot_be_bridged_by_materialized_history(estimate):
+    result=estimate([nav('old',1,0,0,'B'),nav('old',18,100),nav('old',21,110),nav('old',21,0,0,'B')])[0]
+    assert result['reported'] is None and result['series_changes']==1

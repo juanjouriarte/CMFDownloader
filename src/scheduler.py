@@ -71,8 +71,12 @@ def _refresh_administradores():
 
 
 def _nav_with_industry_refresh(download, fund_type: str):
-    """Refresh monthly history after the import, including same-date corrections."""
+    """Refresh derived NAV data after imports, including same-date corrections."""
     result = download()
+    _run_tracked(
+        f"{fund_type}_nnm_daily",
+        lambda: _refresh_view(f"mv_nnm_daily_{fund_type}"),
+    )
     _run_tracked(
         f"{fund_type}_industry_monthly",
         lambda: _refresh_view(f"mv_industry_monthly_{fund_type}"),
