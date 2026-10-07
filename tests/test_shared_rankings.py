@@ -34,6 +34,15 @@ def test_config_preserves_exact_series_and_date_range():
     assert m.RankingConfig.model_validate(config).model_dump(mode='json',by_alias=True)==config
 
 
+def test_complete_group_selections_can_exceed_100_funds_without_truncation():
+    config={**CONFIG,'fundKeys':[f'fm:{i}' for i in range(2000)],'series':{'fm:1':['A']}}
+    result=m.RankingConfig.model_validate(config)
+    assert len(result.fundKeys)==2000
+    assert result.series=={'fm:1':['A']}
+    with pytest.raises(ValidationError):
+        m.RankingConfig.model_validate({**config,'fundKeys':config['fundKeys']+['fm:2000']})
+
+
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setenv('RANKINGS_KEYS',json.dumps({name:hashlib.sha256(key.encode()).hexdigest() for name,key in [('Editor A','test-a'),('Editor B','test-b')]}))

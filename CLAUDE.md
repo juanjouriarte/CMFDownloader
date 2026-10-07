@@ -707,6 +707,9 @@ Actor identity comes from authentication. Deletes hide the ranking and preserve
 its revisions. Client UUIDs make a retried create idempotent for the same editor
 and definition. Server validation preserves exact FM/FI/fund/series identities,
 currency, date ranges and limits. List pagination is 100 maximum per request.
+Definitions accept up to 2,000 concrete fund keys to support complete AGF/category
+selections, retaining the 500-explicit-series limit. Groups are saved as the funds
+selected at that time; new members are not automatically added later.
 
 `.venv/bin/python scripts/create_ranking_editor.py --name NAME` provisions a
 ranking-only key in ignored `.local/` and its hash in `.env`, retaining existing

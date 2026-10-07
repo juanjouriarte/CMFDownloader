@@ -69,7 +69,7 @@ class RankingConfig(BaseModel):
     group: Literal['fund','admin','category']
     admin: str = Field(max_length=600)
     category: str = Field(max_length=600)
-    fundKeys: list[str] = Field(default_factory=list, max_length=100)
+    fundKeys: list[str] = Field(default_factory=list, max_length=2000)
     series: dict[str,list[str | None]] = Field(default_factory=dict)
     search: str = Field(max_length=600)
     direction: Literal['desc','asc']
