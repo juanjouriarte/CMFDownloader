@@ -685,10 +685,40 @@ remain unchanged. Each combined row retains its kind and methodology; frontend
 groups and totals stay separate for reported FM flows versus estimated FI flows.
 
 Both result loaders use bounded 60-second caches with classification revisions.
-Ranking configuration is saved in the dashboard browser and embedded in share
-URLs; these endpoints remain read-only and introduce no schema changes.
+The calculation endpoints remain read-only. Saved definitions now live in the
+separate authenticated shared-ranking library described below.
 Validation: `tests/test_workspace_rankings.py`, plus the read-only PostgreSQL
 accounting fixtures in `tests/test_workspace_fi_flows.py`.
+
+### Shared ranking library
+
+`/shared-rankings` stores team definitions in PostgreSQL, not market-data snapshots.
+Migration `z6a7b8c9d0e1` adds `shared_rankings` plus revision history. Apply it before
+deploying the frontend library. GET list/detail and `/session`, POST create, PUT
+update and DELETE all require a bearer key and return no-store responses. No
+unauthenticated library browsing or mutations are allowed. `RANKINGS_KEYS` maps
+editor names to SHA-256 hashes; unset/empty falls back to existing classification
+editor keys. A malformed/nonempty ranking key configuration fails closed. Keys
+remain server-side; browsers keep entered credentials only in React memory.
+
+All authorized ranking editors share one library and can edit its rankings.
+Updates/deletes require the loaded version and return 409 on stale versions.
+Actor identity comes from authentication. Deletes hide the ranking and preserve
+its revisions. Client UUIDs make a retried create idempotent for the same editor
+and definition. Server validation preserves exact FM/FI/fund/series identities,
+currency, date ranges and limits. List pagination is 100 maximum per request.
+
+`.venv/bin/python scripts/create_ranking_editor.py --name NAME` provisions a
+ranking-only key in ignored `.local/` and its hash in `.env`, retaining existing
+editor access when first creating the separate map. It does not grant category
+administration. Restart the API after provisioning. Never commit key files.
+Docker forwards `RANKINGS_KEYS` to the web service. Existing admin access works
+without additional local provisioning. No production migration/deployment is
+performed by local setup.
+
+Validation: `RUN_WORKSPACE_DB_TESTS=1 PYTHONPATH=. .venv/bin/pytest -q
+tests/test_shared_rankings.py` exercises schema validation, auth, two-editor CRUD,
+revision history and conflicts in rollback-isolated transactions.
 
 
 ## Private classification administration

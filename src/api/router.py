@@ -30,3 +30,6 @@ router.include_router(workspace_router)
 
 from .classification_admin import router as classification_admin_router
 router.include_router(classification_admin_router)
+
+from .shared_rankings import router as shared_rankings_router
+router.include_router(shared_rankings_router)
