@@ -392,3 +392,6 @@ router.include_router(timeseries_router)
 
 from .rankings import router as rankings_router
 router.include_router(rankings_router)
+
+from .portfolio_history import router as portfolio_history_router
+router.include_router(portfolio_history_router)

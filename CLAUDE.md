@@ -656,6 +656,31 @@ Local design/audit artifacts under `output/industry-concept/` are ignored; the
 maintained frontend lives in the BTGDashboard repository. Deploy this backend
 before the frontend that depends on `/industry-workspace`.
 
+### Issuer portfolio history
+
+`/industry-workspace/portfolio-history/{kind}/{run}` reads national and foreign
+positions in one range query plus the available-period query. `months=3..60`
+defaults to 12; `period` must be an available normalized month end. Monthly FM
+and quarterly FI axes include an extra opening baseline and explicit reporting
+gaps. Each source uses its latest filing in a month; original filing dates and
+source/row/invalid-weight coverage remain visible. A bounded 60-second process
+cache avoids repeated range scans. No schema changes or ETL writes are required.
+
+Issuer keys use normalized RUT, otherwise exact reported name plus country;
+unidentified issuers are not merged into a single entity. Instruments retain type,
+reported settlement currency and source coverage. CMF currency mapping reuses
+`currency_exposure.normalize` (PROM is USD; USD is insurance-unit USD). Duplicates
+sum within a snapshot; invalid/negative/nonfinite weights propagate as missing.
+Absent positions count as zero only if all their historical source tables have
+positions in that period. Missing source reports remain null, including partial
+multi-source holdings. Weights are not renormalized; this is national/foreign
+asset exposure, excluding derivatives and equity-method participation tables.
+Frontend issuer totals propagate unknown components. Weight changes are not trades.
+
+Validation: `tests/test_workspace_portfolio_history.py`; real local FM/FI response
+weights reconcile with the selected source snapshot totals. Deploy the endpoint
+before the frontend Cartera tree/heatmap.
+
 ### Ranking workspace
 
 `/industry-workspace/rankings/returns?kind=fm|fi|all&currency=CLP` reuses existing
