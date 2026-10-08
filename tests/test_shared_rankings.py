@@ -12,13 +12,13 @@ from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 from src.api import shared_rankings as m
 
-CONFIG=dict(version=1,title='Equipo deuda',metric='returns',kind='all',currency='CLP',period='1M',
+CONFIG=dict(version=1,title='Equipo deuda',description='',metric='returns',kind='all',currency='CLP',period='1M',
     group='fund',admin='',category='',fundKeys=['fm:1','fi:1'],series={'fm:1':['A',None],'fi:1':['B']},
     search='',direction='desc',sort='value',limit=0,range=None)
 
 
 @pytest.mark.parametrize('change',[
-    dict(title='  '),dict(kind='wrong'),dict(currency='USD+CLP'),dict(period='3M'),
+    dict(title='  '),dict(description='x'*501),dict(description=None),dict(description=1),dict(kind='wrong'),dict(currency='USD+CLP'),dict(period='3M'),
     dict(fundKeys=['1']),dict(kind='fm'),dict(series={'fm:99':['A']}),
     dict(series={'fm:1':[1]}),dict(series={'fm:1':['A']*501}),dict(category='garbage'),
     dict(metric='nnm',range={'from':'2026-02-30','to':'2026-03-01'}),
@@ -82,6 +82,9 @@ def test_team_crud_conflicts_audit_and_persistence(client,monkeypatch):
             assert created.json()['version']==1
             assert client.post('/shared-rankings',headers=a,json=payload).json()['version']==1
             assert client.get('/shared-rankings/'+id,headers=b).json()['config']==CONFIG
+            # Retrying a pre-description definition remains idempotent.
+            conn.execute(text("UPDATE shared_rankings SET config=config-'description' WHERE id=:id"),dict(id=id))
+            assert client.post('/shared-rankings',headers=a,json=payload).json()['version']==1
             listing=client.get('/shared-rankings',headers=b).json()
             assert id in [row['id'] for row in listing['rows']]
             changed={**CONFIG,'title':'Actualizado por colega'}
@@ -95,4 +98,35 @@ def test_team_crud_conflicts_audit_and_persistence(client,monkeypatch):
             assert client.get('/shared-rankings/'+id,headers=a).status_code==404
             history=conn.execute(text('SELECT action,actor FROM shared_ranking_revisions WHERE ranking_id=:id ORDER BY version'),dict(id=id)).all()
             assert history==[('create','Editor A'),('update','Editor B'),('delete','Editor B')]
+        finally:txn.rollback()
+
+
+def test_description_defaults_for_legacy_rankings_and_trims_text():
+    legacy={key:value for key,value in CONFIG.items() if key!='description'}
+    assert m.RankingConfig.model_validate(legacy).description==''
+    assert m.RankingConfig.model_validate({**CONFIG,'description':'  Deuda UF\nChile  '}).description=='Deuda UF\nChile'
+
+
+@pytest.mark.skipif(os.getenv('RUN_WORKSPACE_DB_TESTS')!='1',reason='requires migrated local DB')
+def test_description_persists_and_search_filters_before_pagination(client,monkeypatch):
+    from src.db.engine import engine
+    headers={'Authorization':'Bearer test-a'}
+    marker=uuid4().hex
+    with engine.connect() as conn:
+        txn=conn.begin()
+        monkeypatch.setattr(m,'SessionLocal',sessionmaker(bind=conn,join_transaction_mode='create_savepoint'))
+        try:
+            ids=[]
+            for title,description in [('A '+marker,'Deuda UF 100%'),('B '+marker,'Acciones Chile'),('C '+marker,'Deuda UF')]:
+                result=client.post('/shared-rankings',headers=headers,json=dict(id=str(uuid4()),config={**CONFIG,'title':title,'description':description}))
+                assert result.status_code==201
+                ids.append(result.json()['id'])
+                assert client.get('/shared-rankings/'+ids[-1],headers=headers).json()['config']['description']==description
+            result=client.get('/shared-rankings',headers=headers,params=dict(search=marker,limit=1,offset=1)).json()
+            assert result['total']==3 and len(result['rows'])==1
+            result=client.get('/shared-rankings',headers=headers,params=dict(search='UF 100%')).json()
+            assert ids[0] in [r['id'] for r in result['rows']]
+            assert all('uf 100%' in (r['config']['title']+' '+r['config'].get('description','')).lower() for r in result['rows'])
+            assert client.get('/shared-rankings',headers=headers,params=dict(search='x'*121)).status_code==422
+            assert client.get('/shared-rankings',params=dict(search=marker)).status_code==401
         finally:txn.rollback()

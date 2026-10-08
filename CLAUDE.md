@@ -762,6 +762,13 @@ Actor identity comes from authentication. Deletes hide the ranking and preserve
 its revisions. Client UUIDs make a retried create idempotent for the same editor
 and definition. Server validation preserves exact FM/FI/fund/series identities,
 currency, date ranges and limits. List pagination is 100 maximum per request.
+Saved definitions also accept an optional `description` (maximum 500 characters,
+trimmed; defaults to empty for older definitions). It lives in the existing config
+JSON and revision history, requiring no schema migration. Authenticated listing
+accepts `search` (maximum 120 characters): literal, case-insensitive matching over
+name and description, applied before counts/pagination. Deploy this API update
+before the selector UI, since older API validators reject the new config field.
+
 Definitions accept up to 2,000 concrete fund keys to support complete AGF/category
 selections, retaining the 500-explicit-series limit. Groups are saved as the funds
 selected at that time; new members are not automatically added later.

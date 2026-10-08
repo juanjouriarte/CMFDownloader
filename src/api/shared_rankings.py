@@ -62,6 +62,7 @@ class RankingConfig(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     version: Literal[1]
     title: str = Field(min_length=1, max_length=80)
+    description: str = Field(default='', max_length=500)
     metric: Literal['returns','nnm']
     kind: Literal['all','fm','fi']
     currency: str = Field(pattern=r'^(?:[A-Z]{3}|UF)$')
@@ -80,6 +81,7 @@ class RankingConfig(BaseModel):
     @model_validator(mode='after')
     def validate_selection(self):
         self.title = self.title.strip()
+        self.description = self.description.strip()
         if not self.title:
             raise ValueError('Escribe un nombre para el ranking.')
         if self.metric == 'returns' and (self.period in ('3M','6M') or self.group != 'fund' or self.range is not None):
@@ -137,11 +139,14 @@ def session_info(editor: Editor):
 
 
 @router.get('')
-def list_rankings(reader: Reader, limit: int=Query(100,ge=1,le=100), offset: int=Query(0,ge=0)):
+def list_rankings(reader: Reader, limit: int=Query(100,ge=1,le=100), offset: int=Query(0,ge=0),
+                  search: str=Query('',max_length=120)):
+    params=dict(limit=limit,offset=offset,search=search.strip())
+    where="deleted_at IS NULL AND strpos(lower(concat_ws(' ',config->>'title',config->>'description')),lower(:search))>0"
     with SessionLocal() as session:
-        total=session.execute(text('SELECT count(*) FROM shared_rankings WHERE deleted_at IS NULL')).scalar_one()
-        rows=session.execute(text('''SELECT * FROM shared_rankings WHERE deleted_at IS NULL
-            ORDER BY updated_at DESC,id LIMIT :limit OFFSET :offset'''),dict(limit=limit,offset=offset)).mappings().all()
+        total=session.execute(text(f'SELECT count(*) FROM shared_rankings WHERE {where}'),params).scalar_one()
+        rows=session.execute(text(f'''SELECT * FROM shared_rankings WHERE {where}
+            ORDER BY updated_at DESC,id LIMIT :limit OFFSET :offset'''),params).mappings().all()
         return dict(total=total,rows=[dict(row) for row in rows])
 
 
@@ -160,7 +165,7 @@ def create_ranking(body: CreateRanking, editor: Editor):
             dict(id=body.id,config=json.dumps(config),actor=editor)).mappings().first()
         if row is None:
             existing=fetch_ranking(session,body.id)
-            if existing['created_by']!=editor or existing['config']!=config:
+            if existing['created_by']!=editor or {'description':'',**existing['config']}!=config:
                 raise HTTPException(409,'Este identificador ya corresponde a otro ranking.')
             return existing
         result=dict(row)
