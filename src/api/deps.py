@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from typing import Annotated
+import re
 
-from fastapi import Depends, Query, Response
+from fastapi import Depends, Query, Response, Request
 
 
 def _pagination(
@@ -12,8 +13,10 @@ def _pagination(
     return limit, offset
 
 
-def _cache_1h(response: Response) -> None:
-    response.headers["Cache-Control"] = "public, max-age=3600, s-maxage=3600"
+def _cache_1h(response: Response, request: Request) -> None:
+    classification_paths=("/industry", "/categories", "/rentability")
+    uses_classification=request.url.path.startswith(classification_paths) or re.fullmatch(r"/(mutual-funds|investment-funds)(/[^/]+)?/?",request.url.path) is not None
+    response.headers["Cache-Control"] = ("no-cache" if uses_classification else "public, max-age=3600, s-maxage=3600")
 
 
 Pagination = Annotated[tuple[int, int], Depends(_pagination)]

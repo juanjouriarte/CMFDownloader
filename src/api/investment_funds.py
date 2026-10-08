@@ -28,6 +28,7 @@ class GeoPct(BaseModel):
 
 
 class FundFIItem(BaseModel):
+    moneda: str | None = None
     run_fondo: str
     razon_social: str | None
     administrador: str | None
@@ -142,7 +143,7 @@ def list_investment_funds(
     admin: str | None = Query(None, description="Partial match on administrador name"),
     rescatable: bool | None = Query(None),
     vigente: bool | None = Query(None),
-    categoria: str | None = Query(None, description="Category code from categoria_fi"),
+    categoria: str | None = Query(None, description="Category code from categoria_fi_effective"),
     tipo: str | None = Query(None, description="Category type (e.g. 'Accionario', 'Deuda')"),
 ) -> list[FundFIItem]:
     limit, offset = pagination
@@ -167,12 +168,12 @@ def list_investment_funds(
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     sql = text(f"""
-        SELECT f.run_fondo, f.razon_social, f.administrador, f.rescatable, f.vigente,
+        SELECT f.run_fondo, f.razon_social, f.administrador, f.rescatable, f.vigente, f.moneda,
                cat.categoria, cat.tipo, cat.nombre_cat
         FROM fondos_inversion f
         LEFT JOIN LATERAL (
             SELECT categoria, tipo, nombre_cat
-            FROM categoria_fi
+            FROM categoria_fi_effective
             WHERE run_fondo = f.run_fondo
             ORDER BY periodo DESC
             LIMIT 1
@@ -192,12 +193,12 @@ def get_investment_fund(run: str, _: CacheHook) -> FundFIDetail:
     with SessionLocal() as session:
         fund_row = session.execute(
             text("""
-                SELECT f.run_fondo, f.razon_social, f.administrador, f.rescatable, f.vigente,
+                SELECT f.run_fondo, f.razon_social, f.administrador, f.rescatable, f.vigente, f.moneda,
                        cat.categoria, cat.tipo, cat.nombre_cat
                 FROM fondos_inversion f
                 LEFT JOIN LATERAL (
                     SELECT categoria, tipo, nombre_cat
-                    FROM categoria_fi
+                    FROM categoria_fi_effective
                     WHERE run_fondo = f.run_fondo
                     ORDER BY periodo DESC
                     LIMIT 1
@@ -236,7 +237,7 @@ def get_investment_fund(run: str, _: CacheHook) -> FundFIDetail:
         cat_row = session.execute(
             text("""
                 SELECT categoria, tipo, grupo, nombre_cat, confianza, periodo
-                FROM categoria_fi
+                FROM categoria_fi_effective
                 WHERE run_fondo = :run
                 ORDER BY periodo DESC
                 LIMIT 1

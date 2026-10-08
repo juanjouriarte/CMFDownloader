@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
@@ -422,234 +423,372 @@ def top_funds_by_return(
 @mcp.tool()
 def net_new_money_ranking(
     period: Literal["this_month", "last_month", "last_3m", "last_6m", "ytd", "last_12m"] = "this_month",
-    group_by: Literal["agf", "fund"] = "agf",
+    group_by: Literal["agf", "fund", "category"] = "agf",
     fund_type: Literal["fm", "fi"] = "fm",
     rescatable: bool | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
+    administrator: str | None = None,
+    category_type: str | None = None,
+    category: str | None = None,
+    currency: str | None = None,
+    include_contributors: bool = False,
+    contributors_limit: int = 5,
     limit: int = 20,
-) -> list[dict]:
+) -> dict:
     """
-    Rank AGFs or individual funds by external net new money.
+    Rank AGFs, categories, or individual funds by net new money without mixing currencies.
     Positive = attracted capital. Negative = net outflows.
-    FM results exclude confirmed internal migrations between funds of the same AGF/category.
+    FM returns reported NNM, confirmed internal migrations, and adjusted external NNM.
     fund_type: 'fm' (mutual funds, daily) or 'fi' (investment funds).
-    rescatable: FI only — True=rescatable, False=non-rescatable, None=both shown as separate rows.
-    FI method differs by type:
-      - Non-rescatable: quarter-over-quarter delta of cuotas_pagadas (capital actually called
-        from investors) × valor_libro from quarterly cuotas_fi.
-      - Rescatable: implied daily flows — cuotas = patrimonio_neto / valor_libro;
-        NNM = (cuotas_end - cuotas_start) × valor_libro_end. Strips performance from AUM change.
+    administrator: partial, case-insensitive AGF name filter.
+    category_type: exact high-level classification (for example, Accionario or Deuda).
+    category: exact category code or partial category display-name filter.
+    currency: normalized code such as CLP, USD, EUR, UF. If omitted, currencies remain separate.
+    include_contributors: for AGF/category rows, include the largest underlying fund movements.
     from_date / to_date (YYYY-MM-DD): custom date range — overrides period when provided.
-    period: for non-rescatable FI, last_3m/ytd/last_12m work best (quarterly data).
+    Preset periods are anchored to the latest available data, not the server clock.
+    Amounts are expressed in millions of the currency shown on each row.
+    limit applies independently inside each currency and FI methodology partition.
     """
-    params: dict = {"limit": limit}
+    if from_date:
+        date.fromisoformat(from_date)
+    if to_date:
+        date.fromisoformat(to_date)
+    if from_date and to_date and from_date > to_date:
+        raise ValueError("from_date must be on or before to_date")
+    if not 1 <= limit <= 100:
+        raise ValueError("limit must be between 1 and 100")
+    if not 1 <= contributors_limit <= 20:
+        raise ValueError("contributors_limit must be between 1 and 20")
 
-    if fund_type == "fi":
-        results = []
-        if rescatable is not False:
-            results += _fi_nnm_rescatable(period, group_by, from_date, to_date, params.copy())
-        if rescatable is not True:
-            results += _fi_nnm_non_rescatable(period, group_by, from_date, to_date, params.copy())
-        results.sort(key=lambda r: (r.get("net_new_money_bn_clp") or 0), reverse=True)
-        return results[:limit]
-
-    # FM — daily cartola_diaria
-    if from_date or to_date:
-        conditions = ["cd.aportes IS NOT NULL"]
-        if from_date:
-            conditions.append("cd.fecha >= :from_date")
-            params["from_date"] = from_date
-        if to_date:
-            conditions.append("cd.fecha <= :to_date")
-            params["to_date"] = to_date
-        period_filter = " AND ".join(conditions)
-    else:
-        period_filter = _PERIOD_SQL[period] + " AND cd.aportes IS NOT NULL"
-
-    if group_by == "agf":
-        return _rows(f"""
-            SELECT
-                fm.razon_social_administradora                                          AS administrador,
-                ROUND(SUM(cd.aportes)::numeric / 1e9, 2)                               AS aportes_bn_clp,
-                ROUND(SUM(cd.rescates)::numeric / 1e9, 2)                              AS rescates_bn_clp,
-                ROUND(SUM(cd.adjusted_nnm)::numeric / 1e9, 2)                          AS net_new_money_bn_clp,
-                COUNT(DISTINCT cd.run_fondo)                                            AS num_fondos,
-                MIN(cd.fecha)                                                           AS desde,
-                MAX(cd.fecha)                                                           AS hasta
-            FROM fm_daily_flows_adjusted cd
-            JOIN fondo_mutuo fm ON fm.run_fondo = cd.run_fondo
-            WHERE {period_filter}
-            GROUP BY fm.razon_social_administradora
-            ORDER BY net_new_money_bn_clp DESC NULLS LAST
-            LIMIT :limit
-        """, params)
-    else:
-        return _rows(f"""
-            SELECT
-                cd.run_fondo,
-                fm.nombre_fondo,
-                fm.razon_social_administradora                                          AS administrador,
-                ROUND(SUM(cd.aportes)::numeric / 1e9, 2)                               AS aportes_bn_clp,
-                ROUND(SUM(cd.rescates)::numeric / 1e9, 2)                              AS rescates_bn_clp,
-                ROUND(SUM(cd.adjusted_nnm)::numeric / 1e9, 2)                          AS net_new_money_bn_clp,
-                MIN(cd.fecha)                                                           AS desde,
-                MAX(cd.fecha)                                                           AS hasta
-            FROM fm_daily_flows_adjusted cd
-            JOIN fondo_mutuo fm ON fm.run_fondo = cd.run_fondo
-            WHERE {period_filter}
-            GROUP BY cd.run_fondo, fm.nombre_fondo, fm.razon_social_administradora
-            ORDER BY net_new_money_bn_clp DESC NULLS LAST
-            LIMIT :limit
-        """, params)
-
-
-def _fi_nnm_non_rescatable(
-    period: str,
-    group_by: str,
-    from_date: str | None,
-    to_date: str | None,
-    params: dict,
-) -> list[dict]:
+    params: dict = {
+        "limit": limit,
+        "administrator": f"%{administrator}%" if administrator else None,
+        "category_type": category_type,
+        "category": category,
+        "category_name": f"%{category}%" if category else None,
+        "currency": currency.upper().strip() if currency else None,
+        "from_date": from_date,
+        "to_date": to_date,
+    }
+    reference_dates = _nnm_reference_dates(fund_type, rescatable)
+    params.update(reference_dates)
+    date_filter = _nnm_date_filter(period, from_date, to_date)
+    base_cte = _nnm_base_cte(fund_type, rescatable, date_filter)
+    filters = """
+        (:administrator IS NULL OR administrator ILIKE :administrator)
+        AND (:category_type IS NULL OR category_type ILIKE :category_type)
+        AND (:category IS NULL OR category_code ILIKE :category OR category_name ILIKE :category_name)
+        AND (:currency IS NULL OR currency = :currency)
     """
-    FI non-rescatable NNM: quarter-over-quarter delta of cuotas_pagadas (capital actually
-    paid in by investors, not just authorized via cuotas_emitidas) × valor_libro.
-    cuotas_pagadas is a cumulative STOCK, so the delta is computed via LAG() over each
-    fund's full history *before* the period filter is applied — otherwise the first quarter
-    inside the window would wrongly show its entire cumulative stock as a one-quarter inflow.
+    grouping = {
+        "agf": ("administrator, currency, rescatable", "administrator"),
+        "category": (
+            "category_type, category_group, category_code, category_name, currency, rescatable",
+            "category_name",
+        ),
+        "fund": (
+            "run_fondo, fund_name, administrator, category_type, category_group, "
+            "category_code, category_name, currency, rescatable",
+            "fund_name",
+        ),
+    }[group_by]
+    group_columns, label_column = grouping
+    sql = f"""
+        {base_cte},
+        selected AS (
+            SELECT b.*
+            FROM base b
+            WHERE {date_filter} AND {filters}
+        )
+        , aggregated AS (
+            SELECT {group_columns},
+                   ROUND(SUM(aportes)::numeric / 1e6, 2) AS aportes_millions,
+                   ROUND(SUM(rescates)::numeric / 1e6, 2) AS rescates_millions,
+                   ROUND(SUM(reported_nnm)::numeric / 1e6, 2) AS reported_nnm_millions,
+                   ROUND(SUM(internal_migration)::numeric / 1e6, 2) AS internal_migrations_millions,
+                   ROUND(SUM(adjusted_nnm)::numeric / 1e6, 2) AS adjusted_nnm_millions,
+                   COUNT(DISTINCT run_fondo) AS fund_count,
+                   MIN(event_date) AS from_date,
+                   MAX(event_date) AS to_date,
+                   MAX(data_as_of) AS data_as_of,
+                   MAX(classification_period) AS classification_as_of
+            FROM selected
+            GROUP BY {group_columns}
+        ),
+        ranked AS (
+            SELECT aggregated.*,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY currency, rescatable
+                       ORDER BY adjusted_nnm_millions DESC NULLS LAST, {label_column}
+                   ) AS rank_in_currency
+            FROM aggregated
+        )
+        SELECT * FROM ranked
+        WHERE rank_in_currency <= :limit
+        ORDER BY currency, rescatable NULLS FIRST, rank_in_currency
     """
-    if from_date or to_date:
-        conditions = []
-        if from_date:
-            conditions.append("d.periodo >= :from_date")
-            params["from_date"] = from_date
-        if to_date:
-            conditions.append("d.periodo <= :to_date")
-            params["to_date"] = to_date
-        period_filter = " AND ".join(conditions) if conditions else "TRUE"
-    else:
-        period_filter = _FI_PERIOD_SQL[period].replace("cf.periodo", "d.periodo")
+    results = _rows(sql, params)
 
-    deltas_cte = """
-        WITH history AS (
+    if include_contributors and group_by != "fund" and results:
+        contributor_params = dict(params, contributors_limit=contributors_limit)
+        contributor_group = (
+            "administrator, currency, rescatable" if group_by == "agf" else
+            "category_type, category_group, category_code, category_name, currency, rescatable"
+        )
+        contributors = _rows(f"""
+            {base_cte},
+            selected AS (
+                SELECT b.*
+                FROM base b
+                WHERE {date_filter} AND {filters}
+            ),
+            fund_totals AS (
+                SELECT {contributor_group}, run_fondo, fund_name,
+                       {'' if group_by == 'agf' else 'administrator,'}
+                       ROUND(SUM(reported_nnm)::numeric / 1e6, 2) AS reported_nnm_millions,
+                       ROUND(SUM(internal_migration)::numeric / 1e6, 2) AS internal_migrations_millions,
+                       ROUND(SUM(adjusted_nnm)::numeric / 1e6, 2) AS adjusted_nnm_millions
+                FROM selected
+                GROUP BY {contributor_group}, run_fondo, fund_name, administrator
+            )
+            SELECT * FROM (
+                SELECT fund_totals.*,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY {contributor_group}
+                           ORDER BY ABS(adjusted_nnm_millions) DESC NULLS LAST, fund_name
+                       ) AS contributor_rank
+                FROM fund_totals
+            ) ranked
+            WHERE contributor_rank <= :contributors_limit
+            ORDER BY {contributor_group}, contributor_rank
+        """, contributor_params)
+        _attach_nnm_contributors(results, contributors, group_by)
+
+    return {
+        "fund_type": fund_type,
+        "group_by": group_by,
+        "period": "custom" if from_date or to_date else period,
+        "filters": {
+            "administrator": administrator,
+            "category_type": category_type,
+            "category": category,
+            "currency": params["currency"],
+            "rescatable": rescatable if fund_type == "fi" else None,
+        },
+        "data_as_of": max(
+            (row.get("data_as_of") for row in results if row.get("data_as_of")),
+            default=max((value for value in reference_dates.values() if value), default=None),
+        ),
+        "classification_as_of": max(
+            (row.get("classification_as_of") for row in results if row.get("classification_as_of")),
+            default=None,
+        ),
+        "units": "millions of the currency on each row; currencies are never combined",
+        "results": results,
+    }
+
+
+def _normalized_currency_sql(column: str) -> str:
+    return f"""CASE UPPER(TRIM({column}))
+        WHEN '$$' THEN 'CLP'
+        WHEN '$' THEN 'CLP'
+        WHEN 'PROM' THEN 'USD'
+        WHEN 'US$' THEN 'USD'
+        ELSE COALESCE(NULLIF(UPPER(TRIM({column})), ''), 'UNKNOWN')
+    END"""
+
+
+def _nnm_category_cte(table: str) -> str:
+    return f"""latest_category AS (
+        SELECT DISTINCT ON (run_fondo)
+               run_fondo, periodo, categoria, grupo, tipo, nombre_cat
+        FROM {table}
+        ORDER BY run_fondo, periodo DESC
+    )"""
+
+
+def _nnm_reference_dates(fund_type: str, rescatable: bool | None) -> dict:
+    if fund_type == "fm":
+        return {"data_as_of_fm": _scalar("SELECT MAX(fecha) FROM cartola_diaria")}
+    dates = {}
+    if rescatable is not False:
+        dates["data_as_of_fi_rescatable"] = _scalar(
+            "SELECT MAX(fecha) FROM valores_cuota_fi"
+        )
+    if rescatable is not True:
+        dates["data_as_of_fi_non_rescatable"] = _scalar(
+            "SELECT MAX(periodo) FROM cuotas_fi"
+        )
+    return dates
+
+
+def _nnm_base_cte(fund_type: str, rescatable: bool | None, date_filter: str) -> str:
+    if fund_type == "fm":
+        raw_date_filter = date_filter.replace("b.event_date", "c.fecha").replace(
+            "b.data_as_of", "CAST(:data_as_of_fm AS date)"
+        )
+        adjustment_date_filter = date_filter.replace("b.event_date", "a.event_date").replace(
+            "b.data_as_of", "CAST(:data_as_of_fm AS date)"
+        )
+        return f"""
+            WITH {_nnm_category_cte('categoria_fm_effective')},
+            eligible_funds AS (
+                SELECT fm.run_fondo, fm.nombre_fondo AS fund_name,
+                       fm.razon_social_administradora AS administrator,
+                       cat.tipo AS category_type, cat.grupo AS category_group,
+                       cat.categoria AS category_code, cat.nombre_cat AS category_name,
+                       cat.periodo AS classification_period
+                FROM fondo_mutuo fm
+                LEFT JOIN latest_category cat ON cat.run_fondo = fm.run_fondo
+                WHERE (:administrator IS NULL OR fm.razon_social_administradora ILIKE :administrator)
+                  AND (:category_type IS NULL OR cat.tipo ILIKE :category_type)
+                  AND (:category IS NULL OR cat.categoria ILIKE :category OR cat.nombre_cat ILIKE :category_name)
+            ),
+            reported AS (
+                SELECT c.run_fondo, c.fecha, c.moneda,
+                       SUM(c.monto_aportado) AS aportes,
+                       SUM(c.monto_rescatado) AS rescates,
+                       SUM(c.monto_aportado - c.monto_rescatado) AS reported_nnm
+                FROM cartola_diaria c
+                JOIN eligible_funds ef ON ef.run_fondo = c.run_fondo
+                WHERE c.monto_aportado IS NOT NULL
+                  AND {raw_date_filter}
+                  AND (:currency IS NULL OR {_normalized_currency_sql('c.moneda')} = :currency)
+                GROUP BY c.run_fondo, c.fecha, c.moneda
+            ),
+            adjustments AS (
+                SELECT a.target_run_fondo AS run_fondo, a.event_date AS fecha,
+                       a.currency, SUM(a.amount) AS internal_migration
+                FROM fm_flow_adjustments a
+                JOIN eligible_funds ef ON ef.run_fondo = a.target_run_fondo
+                WHERE a.status IN ('auto_confirmed', 'confirmed')
+                  AND {adjustment_date_filter}
+                GROUP BY a.target_run_fondo, a.event_date, a.currency
+            ),
+            base AS (
+                SELECT r.run_fondo, r.fecha AS event_date,
+                       ef.fund_name, ef.administrator,
+                       {_normalized_currency_sql('r.moneda')} AS currency,
+                       NULL::boolean AS rescatable,
+                       ef.category_type, ef.category_group,
+                       ef.category_code, ef.category_name,
+                       ef.classification_period,
+                       CAST(:data_as_of_fm AS date) AS data_as_of,
+                       r.aportes, r.rescates, r.reported_nnm,
+                       COALESCE(a.internal_migration, 0) AS internal_migration,
+                       r.reported_nnm - COALESCE(a.internal_migration, 0) AS adjusted_nnm
+                FROM reported r
+                JOIN eligible_funds ef ON ef.run_fondo = r.run_fondo
+                LEFT JOIN adjustments a
+                  ON a.run_fondo = r.run_fondo
+                 AND a.fecha = r.fecha
+                 AND a.currency = {_normalized_currency_sql('r.moneda')}
+            )
+        """
+
+    parts: list[str] = []
+    if rescatable is not False:
+        rescatable_date_filter = date_filter.replace("b.event_date", "v.fecha").replace(
+            "b.data_as_of", "CAST(:data_as_of_fi_rescatable AS date)"
+        )
+        parts.append(f"""
+            SELECT v.run_fondo, v.fecha AS event_date,
+                   fi.razon_social AS fund_name, fi.administrador AS administrator,
+                   {_normalized_currency_sql("COALESCE(NULLIF(v.moneda, '0'), fi.moneda)")} AS currency,
+                   true AS rescatable,
+                   cat.tipo AS category_type, cat.grupo AS category_group,
+                   cat.categoria AS category_code, cat.nombre_cat AS category_name,
+                   cat.periodo AS classification_period,
+                   CAST(:data_as_of_fi_rescatable AS date) AS data_as_of,
+                   NULL::numeric AS aportes, NULL::numeric AS rescates,
+                   v.flujo_neto AS reported_nnm, 0::numeric AS internal_migration,
+                   v.flujo_neto AS adjusted_nnm
+            FROM valores_cuota_fi v
+            JOIN fondos_inversion fi ON fi.run_fondo = v.run_fondo
+            LEFT JOIN latest_category cat ON cat.run_fondo = v.run_fondo
+            WHERE fi.rescatable = true AND v.flujo_neto IS NOT NULL
+              AND {rescatable_date_filter}
+        """)
+    if rescatable is not True:
+        non_rescatable_date_filter = date_filter.replace("b.event_date", "d.periodo").replace(
+            "b.data_as_of", "CAST(:data_as_of_fi_non_rescatable AS date)"
+        )
+        parts.append(f"""
+            SELECT d.run_fondo, d.periodo AS event_date,
+                   fi.razon_social AS fund_name, fi.administrador AS administrator,
+                   {_normalized_currency_sql('fi.moneda')} AS currency,
+                   false AS rescatable,
+                   cat.tipo AS category_type, cat.grupo AS category_group,
+                   cat.categoria AS category_code, cat.nombre_cat AS category_name,
+                   cat.periodo AS classification_period,
+                   CAST(:data_as_of_fi_non_rescatable AS date) AS data_as_of,
+                   NULL::numeric AS aportes, NULL::numeric AS rescates,
+                   d.capital_called AS reported_nnm, 0::numeric AS internal_migration,
+                   d.capital_called AS adjusted_nnm
+            FROM deltas d
+            JOIN fondos_inversion fi ON fi.run_fondo = d.run_fondo
+            LEFT JOIN latest_category cat ON cat.run_fondo = d.run_fondo
+            WHERE fi.rescatable = false
+              AND {non_rescatable_date_filter}
+        """)
+    return f"""
+        WITH {_nnm_category_cte('categoria_fi_effective')},
+        history AS (
             SELECT cf.run_fondo, cf.periodo, cf.valor_libro,
                    COALESCE(cf.cuotas_pagadas, 0) AS cuotas_pagadas,
-                   LAG(COALESCE(cf.cuotas_pagadas, 0)) OVER (PARTITION BY cf.run_fondo ORDER BY cf.periodo) AS prev_pagadas
+                   LAG(COALESCE(cf.cuotas_pagadas, 0)) OVER (
+                       PARTITION BY cf.run_fondo ORDER BY cf.periodo
+                   ) AS previous_cuotas_pagadas
             FROM cuotas_fi cf
             WHERE cf.valor_libro IS NOT NULL AND cf.valor_libro > 0
         ),
         deltas AS (
             SELECT run_fondo, periodo,
-                   (cuotas_pagadas - COALESCE(prev_pagadas, cuotas_pagadas)) * valor_libro AS capital_called_clp
+                   (cuotas_pagadas - COALESCE(previous_cuotas_pagadas, cuotas_pagadas))
+                   * valor_libro AS capital_called
             FROM history
-        )
+        ),
+        base AS ({' UNION ALL '.join(parts)})
     """
 
-    if group_by == "agf":
-        return _rows(f"""
-            {deltas_cte}
-            SELECT
-                fi.administrador,
-                false::boolean                                          AS rescatable,
-                NULL::numeric                                           AS aportes_bn_clp,
-                NULL::numeric                                           AS rescates_bn_clp,
-                ROUND(SUM(d.capital_called_clp) / 1e9, 2)              AS net_new_money_bn_clp,
-                COUNT(DISTINCT d.run_fondo)                             AS num_fondos,
-                MIN(d.periodo)                                          AS desde,
-                MAX(d.periodo)                                          AS hasta
-            FROM deltas d
-            JOIN fondos_inversion fi ON fi.run_fondo = d.run_fondo
-            WHERE {period_filter} AND fi.rescatable = false
-            GROUP BY fi.administrador
-            ORDER BY net_new_money_bn_clp DESC NULLS LAST
-            LIMIT :limit
-        """, params)
-    else:
-        return _rows(f"""
-            {deltas_cte}
-            SELECT
-                d.run_fondo,
-                fi.razon_social                                         AS nombre_fondo,
-                fi.administrador,
-                false::boolean                                          AS rescatable,
-                NULL::numeric                                           AS aportes_bn_clp,
-                NULL::numeric                                           AS rescates_bn_clp,
-                ROUND(SUM(d.capital_called_clp) / 1e9, 2)              AS net_new_money_bn_clp,
-                MIN(d.periodo)                                          AS desde,
-                MAX(d.periodo)                                          AS hasta
-            FROM deltas d
-            JOIN fondos_inversion fi ON fi.run_fondo = d.run_fondo
-            WHERE {period_filter} AND fi.rescatable = false
-            GROUP BY d.run_fondo, fi.razon_social, fi.administrador
-            ORDER BY net_new_money_bn_clp DESC NULLS LAST
-            LIMIT :limit
-        """, params)
 
-
-def _fi_nnm_rescatable(
-    period: str,
-    group_by: str,
-    from_date: str | None,
-    to_date: str | None,
-    params: dict,
-) -> list[dict]:
-    """
-    FI rescatable NNM: SUM(flujo_neto) over the period.
-    flujo_neto is pre-computed daily in valores_cuota_fi as:
-      (cuotas_t - cuotas_{t-1}) * valor_libro_t  where cuotas = patrimonio_neto / valor_libro.
-    Same pattern as FM monto_aportado/monto_rescatado — just a filtered aggregate.
-    """
+def _nnm_date_filter(period: str, from_date: str | None, to_date: str | None) -> str:
     if from_date or to_date:
-        conditions = ["v.flujo_neto IS NOT NULL"]
+        conditions = []
         if from_date:
-            conditions.append("v.fecha >= :from_date")
-            params["from_date"] = from_date
+            conditions.append("b.event_date >= :from_date")
         if to_date:
-            conditions.append("v.fecha <= :to_date")
-            params["to_date"] = to_date
-        period_filter = " AND ".join(conditions)
-    else:
-        period_filter = _FI_RESCATABLE_PERIOD_SQL[period] + " AND v.flujo_neto IS NOT NULL"
+            conditions.append("b.event_date <= :to_date")
+        return " AND ".join(conditions)
+    return {
+        "this_month": "b.event_date >= DATE_TRUNC('month', b.data_as_of)",
+        "last_month": (
+            "b.event_date >= DATE_TRUNC('month', b.data_as_of - INTERVAL '1 month') "
+            "AND b.event_date < DATE_TRUNC('month', b.data_as_of)"
+        ),
+        "last_3m": "b.event_date >= b.data_as_of - INTERVAL '3 months'",
+        "last_6m": "b.event_date >= b.data_as_of - INTERVAL '6 months'",
+        "ytd": "b.event_date >= DATE_TRUNC('year', b.data_as_of)",
+        "last_12m": "b.event_date >= b.data_as_of - INTERVAL '12 months'",
+    }[period]
 
-    if group_by == "agf":
-        return _rows(f"""
-            SELECT
-                fi.administrador,
-                true::boolean                                        AS rescatable,
-                NULL::numeric                                        AS aportes_bn_clp,
-                NULL::numeric                                        AS rescates_bn_clp,
-                ROUND(SUM(v.flujo_neto) / 1e9, 2)                   AS net_new_money_bn_clp,
-                COUNT(DISTINCT v.run_fondo)                         AS num_fondos,
-                MIN(v.fecha)                                         AS desde,
-                MAX(v.fecha)                                         AS hasta
-            FROM valores_cuota_fi v
-            JOIN fondos_inversion fi ON fi.run_fondo = v.run_fondo
-            WHERE {period_filter}
-              AND fi.rescatable = true
-            GROUP BY fi.administrador
-            ORDER BY net_new_money_bn_clp DESC NULLS LAST
-            LIMIT :limit
-        """, params)
-    else:
-        return _rows(f"""
-            SELECT
-                v.run_fondo,
-                fi.razon_social                                      AS nombre_fondo,
-                fi.administrador,
-                true::boolean                                        AS rescatable,
-                NULL::numeric                                        AS aportes_bn_clp,
-                NULL::numeric                                        AS rescates_bn_clp,
-                ROUND(SUM(v.flujo_neto) / 1e9, 2)                   AS net_new_money_bn_clp,
-                MIN(v.fecha)                                         AS desde,
-                MAX(v.fecha)                                         AS hasta
-            FROM valores_cuota_fi v
-            JOIN fondos_inversion fi ON fi.run_fondo = v.run_fondo
-            WHERE {period_filter}
-              AND fi.rescatable = true
-            GROUP BY v.run_fondo, fi.razon_social, fi.administrador
-            ORDER BY net_new_money_bn_clp DESC NULLS LAST
-            LIMIT :limit
-        """, params)
+
+def _attach_nnm_contributors(
+    results: list[dict], contributors: list[dict], group_by: str
+) -> None:
+    key_fields = (
+        ("administrator", "currency", "rescatable") if group_by == "agf" else
+        ("category_type", "category_group", "category_code", "category_name", "currency", "rescatable")
+    )
+    by_key: dict[tuple, list[dict]] = {}
+    for contributor in contributors:
+        key = tuple(contributor.get(field) for field in key_fields)
+        contributor.pop("contributor_rank", None)
+        by_key.setdefault(key, []).append(contributor)
+    for row in results:
+        row["contributors"] = by_key.get(tuple(row.get(field) for field in key_fields), [])
 
 
 @mcp.tool()

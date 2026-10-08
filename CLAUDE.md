@@ -36,7 +36,7 @@ ssh -i ~/.ssh/oracle_cmf.key ubuntu@146.181.47.236  # db VM
 ```
 
 ### Deploy (automatic via GitHub Actions)
-Push to `main` triggers `.github/workflows/deploy.yml` — SSHes into the app VM, pulls, migrates, and rebuilds automatically.
+Push to `main` triggers `.github/workflows/deploy.yml` — SSHes into the app VM, pulls and builds the new image, runs migrations from that image, then starts the updated services. Deployment stops on a failed build or migration.
 
 Manual deploy if needed:
 ```bash
@@ -239,6 +239,16 @@ The DB is the sole source of truth — ephemeral disk is just a staging area.
 Set automatically on first fetch result. Vigente funds are never marked `False`.
 This eliminates wasted requests for the ~750 non-vigente funds with no CMF portal data.
 
+### FI shareholder import completeness
+
+The shareholder downloader skips a fund/quarter only when **both** `cuotas_fi`
+and `aportantes_fi` contain records for that exact pair. Cuota data alone does not
+prove shareholders were imported. Empty shareholder responses remain eligible
+for retry, including legitimate empty filings; no completion marker is inferred.
+This presence check does not certify that all source shareholder rows are present.
+The incremental shareholder job revisits the two previous completed quarters to
+catch late filings, and quarter iteration excludes future quarter-end dates.
+
 ### Job tracking
 
 Every scheduler job writes a row to `job_runs` on start and updates it on finish via `_run_tracked()` in `scheduler.py`. Fields: `job_id`, `started_at`, `finished_at`, `status` (running/success/error), `rows_upserted`, `errors`, `error_detail`.
@@ -281,6 +291,29 @@ r = (VL_end - VL_start + SUM(dividends in period)) / VL_start × 100
 
 Both pick the **most recent date whose fund count is ≥ 90% of the maximum seen in the last 7 days** as reference. This tolerates a handful of late-publishing funds while still preferring recency (e.g. one fund missing on a newer date no longer anchors the MV to an older date). Note: raw CMF data occasionally has corrupt `valor_cuota` jumps for individual fund/series — the views reflect source data faithfully and do not mask these.
 
+### Industria monthly history
+
+`mv_industry_monthly_fm` and `mv_industry_monthly_fi` store monthly history per
+fund and normalized native currency. Each row contains the latest available
+fund AUM in that month and full-month raw FM flows. The API joins current fund
+classifications and confirmed flow adjustments at read time, so changes to
+those dimensions do not require rebuilding history.
+
+The scheduled NAV jobs refresh their corresponding view **after** importing,
+using `REFRESH MATERIALIZED VIEW CONCURRENTLY`; child job runs are tracked as
+`fm_industry_monthly` / `fi_industry_monthly`. This also incorporates corrections
+to already-loaded dates. After manual NAV imports/backfills, refresh the matching
+view explicitly with `src.scheduler._refresh_view('mv_industry_monthly_fm')`
+(or the FI counterpart).
+
+`/industry/evolution` uses these summaries for month-start ranges ending today
+or later. It compares the latest source date with the summary date before use;
+if a newer source date is present, or a request needs partial historical months,
+it falls back to the original exact daily query. Same-date source corrections
+become visible after the post-import refresh. The response and currency contract
+are identical on both paths. Migration `x4y5z6a7b8c9` builds the initial history
+and unique indexes required for concurrent refresh.
+
 ### `mv_administradores` materialized view
 
 Unified administradora dimension derived entirely from existing tables (no new download). Joins `fondo_mutuo` (FM, has admin RUT) with `fondos_inversion` (FI, name only) via `LOWER(TRIM(nombre))` match — name matching works because both come from the same CMF source. ~50 rows, refreshed daily at 09:20. Columns: `rut`, `nombre`, `funds_fm`, `funds_fm_vigente`, `funds_fi`, `funds_fi_vigente`, `funds_total`.
@@ -300,7 +333,7 @@ FastMCP server exposing 16 tools for AI-driven fund-market analysis. Runs as the
 | `search_funds` | Find FM/FI funds by name or admin |
 | `compare_funds` | Side-by-side returns for 2+ funds |
 | `top_funds_by_return` | Rankings by 1D/1W/1M/1Y/5Y/YTD. Optional `as_of_date` (YYYY-MM-DD) computes returns dynamically from raw data for any historical date (FM: total return with factor_reparto; FI: NAV-only) |
-| `net_new_money_ranking` | Net new money by AGF or fund. `fund_type`: `fm` (daily, explicit aportes+rescates) or `fi` (rescatable: daily implied via `flujo_neto`; non-rescatable: quarterly `cuotas_fi`). `rescatable` filter for FI. Optional `from_date`/`to_date` overrides `period` preset |
+| `net_new_money_ranking` | Net new money by AGF, category, or fund. Returns a structured response with explicit data/classification dates and amounts in millions, always separated and ranked within normalized currency. `limit` applies per currency/methodology partition. Supports AGF, high-level type, category, currency, rescatable, and custom-date filters plus optional fund contributors. FM exposes reported NNM, confirmed internal migrations, and adjusted external NNM; FI uses daily implied `flujo_neto` for rescatables and quarterly `cuotas_fi` for non-rescatables. Preset periods anchor to each source's latest loaded date rather than the server clock |
 | `fi_equity_activity` | Equity events for non-rescatable FI funds: `raising` (new cuotas issued), `returning` (cuotas paid back), `pending_calls` (cuotas subscribed but not yet paid). Returns `capital_raised_bn_clp`, `capital_returned_bn_clp`, `net_equity_change_bn_clp`, `pending_calls_bn_clp`, `num_contratos_promesa`, `num_promitentes`. Group by fund or AGF |
 | `get_fund_full_picture` | Identity, returns, flows, portfolio, shareholders |
 | `get_administrator_full_picture` | AUM, market share, best/worst funds, flows, shareholders, `top_fm_positions` (top 15 holdings across all admin FM funds, enriched) |
@@ -313,7 +346,7 @@ FastMCP server exposing 16 tools for AI-driven fund-market analysis. Runs as the
 | `emisor_fund_exposure` | Given a company (RUT or name), list every fund holding it with weight and instrument type. Covers domestic (naci) + foreign (extr) portfolios — foreign matched by nombre_emisor when searching by name; results tagged with `source=naci/extr` |
 | `portfolio_overlap` | Jaccard overlap score + shared positions between two funds |
 
-AUM figures are CLP. FM external net new money uses `fm_daily_flows_adjusted`, which preserves reported aportes/rescates and subtracts confirmed internal migrations stored in `fm_flow_adjustments`. FI rescatable NNM uses `valores_cuota_fi.flujo_neto` (daily implied flow, pre-computed at load time). FI non-rescatable uses quarterly `cuotas_fi`. The `mcp` container only needs `DATABASE_URL`.
+AUM figures are CLP. MCP NNM amounts are returned in millions of the explicit currency on each row and currencies are never aggregated together. FM external net new money preserves reported aportes/rescates and subtracts confirmed internal migrations stored in `fm_flow_adjustments`; its MCP query reads the indexed raw date range and joins those adjustments to avoid full-history view scans. FI rescatable NNM uses `valores_cuota_fi.flujo_neto` (daily implied flow, pre-computed at load time). FI non-rescatable uses quarterly `cuotas_fi`. The `mcp` container only needs `DATABASE_URL`.
 
 ### Scheduler jobs (America/Santiago)
 
@@ -370,9 +403,10 @@ Public database endpoints return `Cache-Control: public, max-age=3600` and all e
 | `GET /categories/fi` | FI fund classifications. Filters: `categoria`, `tipo`, `admin` |
 | `GET /categories/fm` | FM fund classifications. Filters: `categoria`, `tipo`, `admin` |
 | `GET /categories/catalog` | Hierarchical category catalog with fund counts. Optional `?fund_type=fm\|fi` returns just that side's tree; omitted returns `{fm: [...], fi: [...]}` combined |
-| `GET /industry/overview` | Market snapshot: total AUM, active funds, admins, flows. Filters: `fund_type`, `categoria`, `tipo`. Returns `aportes_month_clp`, `rescates_month_clp`, `neto_month_clp` (FM gross flows) + `top_administrators` (with `nnm_ytd_clp`) + `category_aum_breakdown` (with `nnm_ytd_clp`) |
-| `GET /industry/funds` | Unified FM/FI screener with classification, AUM, returns, and flows. Filters: `fund_type`, `type`, `group`, `category`, `admin`, `rescatable`, `vigente` |
-| `GET /industry/evolution` | Monthly AUM history grouped by market/admin/category. Filters: `fund_type`, `categoria`, `tipo`, `from_date`, `to_date`. Returns `aportes_clp`, `rescates_clp`, `nnm_clp` per month point (FM only; FI flows are null) |
+| `GET /industry/currencies` | Normalized reporting currencies present in the latest FM/FI NAV data |
+| `GET /industry/overview` | Single-currency snapshot (default CLP): AUM, counts, monthly flows, top ten admins, independent BTG aggregate, category breakdown, and source dates. Filters: `currency`, `fund_type`, `categoria`, `tipo`, `nombre_cat`, `admin`, `rescatable`. `include_ytd=false` restricts flow scans to the source's current month and returns null YTD fields; defaults to true for existing consumers. FM external flows subtract confirmed internal migrations; FI flows cover rescatable funds only. |
+| `GET /industry/funds` | Unified FM/FI screener with classification, AUM, returns, and flows. Filters: `currency`, `fund_type`, `type`, `group`, `category`, `admin`, `rescatable`, `vigente`. Without currency filtering, results remain partitioned by currency. |
+| `GET /industry/evolution` | Monthly AUM history within one currency (default CLP). Filters: `currency`, `fund_type`, `categoria`, `tipo`, `nombre_cat`, `admin`, `rescatable`, `from_date`, `to_date`; group by market/admin/category. Uses last available fund AUM per month and sums full-month FM flows, subtracting confirmed migrations. FI flows remain null. |
 | `GET /ref-codes` | All CMF reference codes. Filter: `?domain=country\|currency\|instrument`. Returns `domain`, `code`, `name`, `updated_at` |
 | `GET /admins` | List administradoras with FM+FI fund counts. Filter: `search` |
 | `GET /admins/{rut}` | Single administradora by RUT |
@@ -398,6 +432,8 @@ Public database endpoints return `Cache-Control: public, max-age=3600` and all e
 | `GET /emisores/{rut}/history` | Monthly (FM) + quarterly (FI) time series of total market exposure. Filters: `fund_type`, `tipo_instrumento` (drill-down by instrument type), `from_date`. Powers exposure timeline chart |
 | `GET /emisores/{rut}/funds/{run_fondo}/history` | Time series of how much a **specific fund** has held a **specific company** — one row per period × instrument type. Filters: `fund_type`, `from_date` |
 | `GET /emisores/{rut}/concentration` | Herfindahl index of company exposure across AGFs. Label: `diversified` (<1500), `moderate` (1500-2500), `concentrated` (>2500). Returns `agfs[]` with `pct_of_total` |
+
+**Industria currency contract**: generic amount fields (`aum`, `total_aum`, `nnm`, etc.) are in native units of the explicit currency. No FX conversion is performed. Legacy `*_clp` aliases are populated only for CLP; they are null for other currencies. Source symbols `$`/`$$` normalize to CLP, `US$`/`PROM` to USD. The FI fund list includes `moneda` so the dashboard can filter its universe correctly.
 
 **Shareholder AUM formula**: `pct_propiedad / 100 × fund_aum`. Fund AUM is estimated as the median of `valorizacion_cierre × 100 / pct_activo_fondo` across all `cartera_fi_nac` + `cartera_fi_ext` positions for that fund/quarter.
 
@@ -448,6 +484,26 @@ Public database endpoints return `Cache-Control: public, max-age=3600` and all e
 | `mv_administradores` (MV) | ~50 | Admin dimension: FM+FI fund counts per administradora. Refreshed daily |
 
 ## Git Workflow
+
+### Working with BTGDashboard
+
+The frontend lives in the sibling repository `../BTGDashboard`. Backend and
+frontend work can be coordinated from this checkout. Read that repository's
+`AGENTS.md` and `CLAUDE.md` before changing frontend files; its instructions apply
+there. Keep changes and commits scoped to their respective repositories and
+preserve existing local work in each.
+
+Open `BTG.code-workspace` in an editor that supports multi-root workspaces to
+browse both repositories. This file does not change sandbox write permissions;
+access outside the active writable roots still requires tool approval.
+
+Run the API here with `.venv/bin/uvicorn main:app --reload` and, in a second
+terminal from this directory, run `npm --prefix ../BTGDashboard run dev`.
+The dashboard's development `/api/cmf` proxy targets `http://127.0.0.1:8000`.
+Validate frontend changes with `npm --prefix ../BTGDashboard run build` and
+the relevant lint checks. Coordinate API contract changes across both repos.
+
+### Branches and commits
 
 - Always develop on a feature branch, never directly on `main`.
 - Branch naming: `feature/<short-description>`
@@ -544,3 +600,280 @@ print(DividendosDownloader().backfill())
 
 Set locally via `.env`. Production environment variables are configured for the
 Oracle-hosted Docker Compose services.
+
+## Connected industry workspace
+
+`src/api/industry_workspace/` is mounted under `/industry-workspace` in the public
+API. It promotes the reviewed design's read-only fund, portfolio, instrument,
+shareholder, capital-activity, competitive-analysis and currency-exposure queries.
+The production frontend uses `/api/cmf/industry-workspace`; no separate preview
+service or localhost proxy is needed. Queries set a read-only transaction and a
+20-second statement timeout. No schema or ETL changes are part of this promotion.
+
+Administrator endpoints: `/administrators/analysis` provides the monthly ranking
+and FM/FI strategy map; `/administrators/history` takes exact inclusive dates,
+current active-fund/category identity and one native currency, returning daily
+NAV points for spans up to 400 days. Longer spans use common reporting dates
+from the monthly NAV views, with an exact daily query for the final boundary
+month so a custom end date never includes later data. Share denominators use the same reporting day and currency. There
+is no carried-forward NAV or synthetic zero for an absent administrator. History
+samples can change; point-level fund counts remain visible.
+
+`/administrators/flows` aggregates observed FM contributions minus redemptions
+and confirmed/auto-confirmed receiving-fund migration adjustments. Adjustments
+match currency, fund and observed flow day. Category/total rows sum their fund
+children. Only observations with both valid flow amounts contribute; missing
+flows stay null and coverage is returned. FM NNM is not inferred from NAV changes.
+All these endpoints require NAV and use current fund identities/classifications.
+Administrator responses use a bounded 60-second process cache.
+`/administrators/currencies` returns NAV-backed native currencies for the selected
+administrator/month/type/category, plus FM/FI currencies separately in the five-year NNM
+history (`flow_currencies_by_kind`; the legacy FM list remains available). It uses monthly summaries and current active-fund identities; availability
+does not imply that the AGF has NAV on the market's common reporting day or
+reported flows in every window. Profile currency tabs must preserve empty states.
+`/administrators/flows-periods` returns aligned 1D/1W/1M/3M/6M/1A/5A/YTD
+columns for the same end date, with category/fund/AGF totals and per-cell coverage.
+A single bound SQL query scans source observations once, then aggregates each
+window and its matching migrations. The existing exact-range `/flows` uses the
+same query path. Absent periods remain null; actual zero flows remain zero.
+`/flows-periods?kind=fi` uses `investment_flows.py` to estimate net flow from
+changes in implied units × current unit NAV, separately by native currency and
+fund, for both rescatables and non-rescatables. It recalculates from source NAV
+rather than relying on stored `flujo_neto`: series pairs require known matching
+source currencies, finite valid NAV, identical series sets on consecutive fund
+snapshots and at most seven calendar days between snapshots. First observations,
+series changes, currency changes and longer gaps stay unavailable; fund-cell
+exclusion counts disclose them. Aggregate rows sum only known estimates and
+return comparable/observed fund-day counts. Missing days are not filled. This is
+`methodology=nav_implied`, not reported cash flow, a capital-call confirmation or
+migration-adjusted external NNM. Distributions and corporate adjustments may not
+be captured. FI gross aportes/rescates remain null. FM remains the default.
+Read-only PostgreSQL fixture checks: `RUN_WORKSPACE_DB_TESTS=1 PYTHONPATH=.
+.venv/bin/pytest tests/test_workspace_fi_flows.py`.
+
+Tests: `tests/test_workspace_*.py`; run with `PYTHONPATH=. .venv/bin/pytest`.
+Local design/audit artifacts under `output/industry-concept/` are ignored; the
+maintained frontend lives in the BTGDashboard repository. Deploy this backend
+before the frontend that depends on `/industry-workspace`.
+
+### Issuer portfolio history
+
+`/industry-workspace/portfolio-history/{kind}/{run}` reads national and foreign
+positions in one range query plus the available-period query. `months=3..60`
+defaults to 12; `period` must be an available normalized month end. Monthly FM
+and quarterly FI axes include an extra opening baseline and explicit reporting
+gaps. Each source uses its latest filing in a month; original filing dates and
+source/row/invalid-weight coverage remain visible. A bounded 60-second process
+cache avoids repeated range scans. No schema changes or ETL writes are required.
+
+Issuer keys use normalized RUT, otherwise exact reported name plus country;
+unidentified issuers are not merged into a single entity. Instruments retain type,
+reported settlement currency and source coverage. CMF currency mapping reuses
+`currency_exposure.normalize` (PROM is USD; USD is insurance-unit USD). Duplicates
+sum within a snapshot; invalid/negative/nonfinite weights propagate as missing.
+Absent positions count as zero only if all their historical source tables have
+positions in that period. Missing source reports remain null, including partial
+multi-source holdings. Weights are not renormalized; this is national/foreign
+asset exposure, excluding derivatives and equity-method participation tables.
+Frontend issuer totals propagate unknown components. Weight changes are not trades.
+
+History also returns `quantities`, `quantity_units` and per-instrument
+`report_dates` arrays on the same axis. Quantities read FM `cantidad_unidades`
+and FI `cant_unidades`, preserving raw `tipo_unidades` codes (these are not
+necessarily settlement currencies or security counts). Duplicate quantities
+sum only with a single known unit and valid nonnegative finite values; mixed
+units, invalid values and unidentified multi-row groups remain null. Source
+gaps retain null and observed absences retain zero, independently of weights.
+Coverage includes `invalid_quantities` for rows with invalid amounts or missing
+units. Consumers must reject quantity comparisons across unit changes and
+unidentified securities, and must not sum quantities across issuer instruments.
+The calendar uses available normalized closing dates; FM month-start source
+dates are reporting-month labels, not daily holdings. Only positions actually
+present in the selected period belong in its cartola. No daily interpolation
+or transaction inference is performed.
+
+Validation: `tests/test_workspace_portfolio_history.py`; real local FM/FI response
+weights reconcile with the selected source snapshot totals. Deploy the endpoint
+before the frontend Cartera tree/heatmap.
+
+### Instrument holder history
+
+`/industry-workspace/instrument-history` takes exact `identifier`, nullable
+`instrument_type`, required `issuer` (including an explicit blank string) and
+`months=3..60` (default 12). It uses the same resolved issuer identity as the
+instrument directory and returns separate FM monthly / FI quarterly axes, each
+with an opening baseline and its latest completed reporting-month cutoff.
+Every historical holder in the window is included, not just the latest holders.
+Rows separate fund kind/RUN and normalized settlement currency. Quantity units
+remain raw CMF codes. Arrays include weights, quantities, units, presence and
+actual fund/source report dates; no daily/monthly interpolation is performed.
+
+Three batched read-only queries load source cutoffs, matching instrument rows,
+and source-filing presence for all historical holders. The instrument subset is
+materialized before dimension joins to avoid an unstable broad join plan. Source
+coverage scans only funds that held the instrument in that source. Latest filing
+per fund/source/month wins. Missing source reports retain null; observed absence
+can be zero only when all historical sources for that row report. Duplicate
+quantities require a common known unit; invalid or mixed-unit quantities remain
+null independently of weights. Consumers compare quantities only in matching
+units and distinguish zero-base entries from percentage changes. A bounded
+60-second cache avoids repeated scans; no new table or migration is required.
+
+Validation: `tests/test_workspace_instrument_history.py`, existing portfolio
+history/quantity helper tests and real FM/FI reconciliation against individual
+fund histories. Deploy this endpoint before the instrument heatmap frontend.
+
+### Ranking workspace
+
+`/industry-workspace/rankings/returns?kind=fm|fi|all&currency=CLP` reuses existing
+return views and joins the exact series NAV on the calculation date to filter
+currency. It returns all available series (including null period values), current
+effective classification and 1D/1W/1M/1A/5A/YTD columns. FM quality-flagged series
+are excluded with a count; FI returns retain the existing rescatable coverage.
+Returns are not averaged into administrator/category returns.
+`kind=all` combines FM and FI series while retaining their kind and actual return
+dates. `dates` contains each type's cutoff; the shared `date` is null when they
+differ. The frontend can select exact kind/RUN/series identities without new queries.
+
+`/rankings/nnm` takes kind, currency and 1D/1W/1M/3M/6M/1A/5A/YTD, or inclusive
+`from_date`/`to_date`. Presets anchor to the latest monthly-summary source date
+for that currency. It reuses administrator FM reported-external/FI NAV-implied
+accounting and exposes fund metadata, observation coverage and FI exclusions.
+Ranking calculations read `mv_nnm_daily_fm` / `mv_nnm_daily_fi` rather than
+rescanning series history. Daily facts retain valid/observed counts, NAV eligibility,
+FI exclusion reasons and prior snapshot dates. Current active status, names and
+effective classifications are joined when querying; confirmed FM migration
+adjustments remain live and require no fact refresh. FI request lookback boundaries
+still distinguish missing bases from long gaps. Administrator source queries remain
+available as the accounting reference.
+`kind=all` uses the earlier available FM/FI cutoff for preset windows and applies
+one identical range to both loaders. If only one kind has a cutoff, it uses that
+date; an entirely empty currency has no invented window. Explicit date ranges
+remain unchanged. Each combined row retains its kind and methodology; frontend
+groups and totals stay separate for reported FM flows versus estimated FI flows.
+
+Both result loaders use bounded 60-second caches with classification revisions.
+`/rankings/nnm-periods` aggregates daily facts for multiple windows, retaining each
+cell's adjustments, coverage and exclusions. FM/FI share
+the earlier available cutoff; explicit dates override it. `window=recent` omits
+5A and `window=long` returns only 5A, enabling progressive table loading at the
+same cutoff. The default `all` returns all eight flow windows; custom ranges add
+`custom`. Missing period cells are omitted, never substituted with zero. Long
+ranking windows use the same daily-fact query path as shorter windows.
+
+FI flow comparability permits unchanged empty series: both consecutive values
+must explicitly report patrimonio=0 and valor_libro=0, with the same currency
+and matching fund snapshot dates. Such pairs contribute zero while active series
+retain the existing checks. Empty-to-active/active-to-empty transitions, nulls,
+invalid NAV, series-set changes and long gaps remain excluded. This fixes funds
+such as Pionero without dropping their empty series from identity/date checks.
+Validated by read-only PostgreSQL fixtures in `tests/test_workspace_fi_flows.py`.
+
+Migration `a7b8c9d0e1f2` builds and indexes the daily materialized views locally
+before API rollout. NAV scheduler wrappers run tracked `fm_nnm_daily` /
+`fi_nnm_daily` refreshes concurrently before publishing each monthly summary.
+Full refreshes incorporate historical/same-date corrections and preserve the last
+committed view for readers if refresh fails; failures mark the job as failed.
+API caches may retain an older result for up to 60 seconds. Manual NAV backfills
+must refresh these views as well (after the import):
+`REFRESH MATERIALIZED VIEW CONCURRENTLY mv_nnm_daily_fm;` and/or
+`REFRESH MATERIALIZED VIEW CONCURRENTLY mv_nnm_daily_fi;`.
+The initial migration/refresh is heavier than a ranking read; run it before starting
+the updated API. No production migration is performed by local development.
+
+The calculation endpoints remain read-only. Saved definitions now live in the
+separate authenticated shared-ranking library described below.
+Validation: `tests/test_workspace_rankings.py`, `tests/test_industry_refresh.py`,
+plus read-only PostgreSQL fixtures in `tests/test_workspace_fi_flows.py` (both
+source and daily paths) and `tests/test_nnm_daily_fm.py`.
+
+### Shared ranking library
+
+`/shared-rankings` stores team definitions in PostgreSQL, not market-data snapshots.
+Migration `z6a7b8c9d0e1` adds `shared_rankings` plus revision history. Apply it before
+deploying the frontend library. GET list/detail/search are public and return
+no-store responses, independently of editor credentials or key configuration.
+`/session`, POST create, PUT update and DELETE require an editor bearer key.
+Only authenticated editors may change saved definitions. `RANKINGS_KEYS` maps
+editor names to SHA-256 hashes; unset/empty falls back to existing classification
+editor keys. A malformed/nonempty ranking key configuration fails closed for editing. Keys
+remain server-side; browsers keep entered credentials only in React memory.
+
+All authorized ranking editors share one library and can edit its rankings.
+Updates/deletes require the loaded version and return 409 on stale versions.
+Actor identity comes from authentication. Deletes hide the ranking and preserve
+its revisions. Client UUIDs make a retried create idempotent for the same editor
+and definition. Server validation preserves exact FM/FI/fund/series identities,
+currency, date ranges and limits. List pagination is 100 maximum per request.
+Saved definitions also accept an optional `description` (maximum 500 characters,
+trimmed; defaults to empty for older definitions). It lives in the existing config
+JSON and revision history, requiring no schema migration. Public listing
+accepts `search` (maximum 120 characters): literal, case-insensitive matching over
+name and description, applied before counts/pagination. Deploy this API update
+before the selector UI, since older API validators reject the new config field.
+
+Definitions accept up to 2,000 concrete fund keys to support complete AGF/category
+selections, retaining the 500-explicit-series limit. Groups are saved as the funds
+selected at that time; new members are not automatically added later.
+
+`.venv/bin/python scripts/create_ranking_editor.py --name NAME` provisions a
+ranking-only key in ignored `.local/` and its hash in `.env`, retaining existing
+editor access when first creating the separate map. It does not grant category
+administration. Restart the API after provisioning. Never commit key files.
+Docker forwards `RANKINGS_KEYS` to the web service. Existing admin access works
+without additional local provisioning. No production migration/deployment is
+performed by local setup.
+
+Validation: `RUN_WORKSPACE_DB_TESTS=1 PYTHONPATH=. .venv/bin/pytest -q
+tests/test_shared_rankings.py` exercises schema validation, auth, two-editor CRUD,
+revision history and conflicts in rollback-isolated transactions.
+
+
+## Private classification administration
+
+The workspace `/funds` response includes `category_type` and `category_group`
+alongside `category`, from the same effective classification row. The dashboard
+uses these fields for its FM/FI → type → group → category filter hierarchy.
+
+`/classification-admin` provides authenticated session validation, FM/FI catalogs,
+fund search/detail/history and version-checked PUT lock/unlock operations. The
+frontend exposes `/admin/clasificaciones` through the module selector. The public
+read API stays available without authentication; all admin reads and writes require
+an individual bearer key and use `Cache-Control: no-store`. Missing or malformed
+`CLASSIFICATION_ADMIN_KEYS` disables admin access (503); it never bypasses auth.
+Keys are random secrets, mapped to editor names by SHA-256 hashes in that JSON env
+variable. Actor names come from authentication, never the edit payload. Use HTTPS
+in production; never embed keys or this variable in frontend builds.
+
+Provision local private access with `.venv/bin/python
+scripts/create_classification_admin.py --name Juan`. It saves only the hash in
+`.env`, writes the secret to a mode-0600 file in gitignored `.local/`, and never
+prints the secret. Restart the API to activate keys. Repeat with another editor
+name for distinct attribution. Remove a hash to revoke access, then restart API
+workers; the script refuses accidental replacement of an existing editor.
+
+Migration `y5z6a7b8c9d0` adds `classification_overrides`, append-only application
+audit history and `categoria_fm_effective` / `categoria_fi_effective` read views.
+An active per-kind/fund override replaces the category hierarchy in those views
+across reporting periods; original algorithm rows and metrics remain untouched.
+A fund without algorithm output gets a synthetic classification row only while
+its override is active. Raw CMF/NAV/portfolio data is never edited here.
+
+Classifiers continue writing raw `categoria_fm` / `categoria_fi`, including new
+periods. Public API and MCP category consumers read the effective views; the
+private admin page reads raw suggestions plus the override so differences remain
+visible. Internal migration detection retains algorithm categories; category
+corrections do not retroactively recalculate money or flow adjustments. Dashboard
+historical analyses already use current classifications: an override changes
+that grouping, not historical observations. Database audit revision participates
+in administrator cache keys across API workers. Classification-dependent public
+responses revalidate HTTP caches; leaving Admin for Industria reloads client data.
+
+The API validates category/type/group against the classifier catalogs, requires
+a reason, serializes writes per fund and rejects stale expected versions with
+409. Unlocking keeps audit history and reveals the latest automatic category.
+Tests: `tests/test_classification_admin.py`; enable rollback-isolated local DB
+checks with `RUN_WORKSPACE_DB_TESTS=1 PYTHONPATH=. .venv/bin/pytest
+ tests/test_classification_admin.py`. Apply the migration and configure private
+access in deployment before exposing the new Admin module; no production changes
+are made by local provisioning.

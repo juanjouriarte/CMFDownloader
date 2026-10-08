@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import random
 import threading
 import time
@@ -12,7 +13,7 @@ from sqlalchemy import select
 from src.base import BaseDownloader, DownloadResult
 from src.config import DOWNLOADS_DIR
 from src.db.engine import SessionLocal
-from src.db.models.aportantes_fi import CuotasFI
+from src.db.models.aportantes_fi import AportanteFI, CuotasFI
 from src.db.models.fondos_inversion import FondoInversion
 from src.http import fetch, make_session
 from src.etl.investmentFunds.loaders.aportantes import load_aportantes, parse_html
@@ -29,17 +30,19 @@ def _quarter_end(year: int, month: int) -> date:
 
 
 def _iter_quarters(start: date, end: date):
-    year = start.year
-    for month in QUARTER_MONTHS:
-        if date(year, month, 1) >= start:
-            break
-    while (year, month) <= (end.year, end.month):
-        yield year, month
-        idx = QUARTER_MONTHS.index(month)
-        if idx == len(QUARTER_MONTHS) - 1:
-            month, year = QUARTER_MONTHS[0], year + 1
-        else:
-            month = QUARTER_MONTHS[idx + 1]
+    for year in range(start.year, end.year + 1):
+        for month in QUARTER_MONTHS:
+            if start <= _quarter_end(year, month) <= end:
+                yield year, month
+
+
+def _incremental_start(today: date) -> date:
+    # Revisit two completed quarters so late filings are not lost at rollover.
+    current = today.year * 4 + (today.month - 1) // 3
+    if today == _quarter_end(today.year, ((today.month - 1) // 3 + 1) * 3):
+        current += 1
+    year, quarter = divmod(current - 2, 4)
+    return date(year, quarter * 3 + 1, 1)
 
 
 def _tipo(rescatable: bool) -> str:
@@ -51,13 +54,23 @@ def _vig(vigente: bool) -> str:
 
 
 def _already_loaded(run_fondo: str, periodo: date) -> bool:
+    """Both datasets must exist for this exact fund/quarter before skipping.
+
+    A cuota-only filing may precede shareholders. Empty shareholder responses
+    remain eligible for retry; they are not evidence of a completed import.
+    """
     with SessionLocal() as s:
-        return s.execute(
-            select(CuotasFI).where(
+        cuotas, aportantes = s.execute(select(
+            select(CuotasFI.run_fondo).where(
                 CuotasFI.run_fondo == run_fondo,
                 CuotasFI.periodo == periodo,
-            )
-        ).first() is not None
+            ).exists(),
+            select(AportanteFI.id).where(
+                AportanteFI.run_fondo == run_fondo,
+                AportanteFI.periodo == periodo,
+            ).exists(),
+        )).one()
+        return bool(cuotas and aportantes)
 
 
 def _fetch_fund(fund: FondoInversion, months: list[tuple[int, int]],
@@ -94,6 +107,9 @@ def _fetch_fund(fund: FondoInversion, months: list[tuple[int, int]],
                 mark_has_data(run_fondo, False)
             result += DownloadResult(downloaded=1, rows_upserted=rows)
         except Exception:
+            logging.getLogger(__name__).exception(
+                "Failed to load shareholders for %s %s", run_fondo, periodo,
+            )
             result += DownloadResult(errors=1)
 
         time.sleep(random.uniform(0.05, 0.15) if fast else random.uniform(0.3, 0.8))
@@ -109,9 +125,7 @@ class AportantesDownloader(BaseDownloader):
 
     def run(self) -> DownloadResult:
         today = date.today()
-        last_quarter = max((m for m in QUARTER_MONTHS if m <= today.month), default=12)
-        year = today.year if last_quarter <= today.month else today.year - 1
-        result = self._download_all(date(year, last_quarter, 1), today,
+        result = self._download_all(_incremental_start(today), today,
                                     only_vigentes=True, workers=1, fast=False)
         refresh_entidades()
         return result

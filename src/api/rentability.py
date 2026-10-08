@@ -52,7 +52,7 @@ def rentability_fm(
     _: CacheHook,
     sort: str = Query("r_1y", description="Sort field: r_1d | r_1w | r_1m | r_1y | r_5y | r_ytd"),
     admin: str | None = Query(None, description="Partial match on administrador name"),
-    categoria: str | None = Query(None, description="Category code from categoria_fm"),
+    categoria: str | None = Query(None, description="Category code from categoria_fm_effective"),
     tipo: str | None = Query(None, description="Category type (e.g. 'Accionario', 'Deuda')"),
     include_suspicious: bool = Query(
         False,
@@ -81,7 +81,7 @@ def rentability_fm(
     sql = text(f"""
         WITH latest_cat AS (
             SELECT DISTINCT ON (run_fondo) run_fondo, categoria, tipo
-            FROM categoria_fm ORDER BY run_fondo, periodo DESC
+            FROM categoria_fm_effective ORDER BY run_fondo, periodo DESC
         )
         SELECT r.run_fondo, r.serie, r.nombre_fondo, r.administrador, r.valor_actual,
                r.fecha_calculo, r.r_1d, r.r_1w, r.r_1m, r.r_1y, r.r_5y, r.r_ytd,
@@ -104,7 +104,7 @@ def rentability_fi(
     _: CacheHook,
     sort: str = Query("r_1y", description="Sort field: r_1d | r_1w | r_1m | r_1y | r_5y | r_ytd"),
     admin: str | None = Query(None, description="Partial match on administrador name"),
-    categoria: str | None = Query(None, description="Category code from categoria_fi"),
+    categoria: str | None = Query(None, description="Category code from categoria_fi_effective"),
     tipo: str | None = Query(None, description="Category type (e.g. 'Accionario', 'Deuda')"),
 ) -> list[RentFIItem]:
     if sort not in _VALID_SORT:
@@ -127,7 +127,7 @@ def rentability_fi(
     sql = text(f"""
         WITH latest_cat AS (
             SELECT DISTINCT ON (run_fondo) run_fondo, categoria, tipo
-            FROM categoria_fi ORDER BY run_fondo, periodo DESC
+            FROM categoria_fi_effective ORDER BY run_fondo, periodo DESC
         )
         SELECT r.run_fondo, r.serie, f.razon_social, r.administrador, r.valor_actual,
                r.fecha_calculo, r.r_1d, r.r_1w, r.r_1m, r.r_1y, r.r_5y, r.r_ytd

@@ -70,6 +70,20 @@ def _refresh_administradores():
     return _refresh_view("mv_administradores")
 
 
+def _nav_with_industry_refresh(download, fund_type: str):
+    """Refresh derived NAV data after imports, including same-date corrections."""
+    result = download()
+    _run_tracked(
+        f"{fund_type}_nnm_daily",
+        lambda: _refresh_view(f"mv_nnm_daily_{fund_type}"),
+    )
+    _run_tracked(
+        f"{fund_type}_industry_monthly",
+        lambda: _refresh_view(f"mv_industry_monthly_{fund_type}"),
+    )
+    return result
+
+
 def register_jobs(scheduler: BaseScheduler) -> None:
     """Register all cron jobs on the given scheduler instance."""
 
@@ -125,7 +139,7 @@ def register_jobs(scheduler: BaseScheduler) -> None:
         "cron", hour=8, minute=20, id="fi_identity",
     )
     scheduler.add_job(
-        _job("mf_daily_nav", lambda: CartolaDownloader().run()),
+        _job("mf_daily_nav", lambda: _nav_with_industry_refresh(CartolaDownloader().run, "fm")),
         "cron", hour=8, minute=30, id="mf_daily_nav",
     )
     scheduler.add_job(
@@ -161,7 +175,7 @@ def register_jobs(scheduler: BaseScheduler) -> None:
         "cron", hour=11, minute=15, id="mf_nnm_email_report",
     )
     scheduler.add_job(
-        _job("fi_daily_nav", lambda: ValoresCuotaFIDownloader().run()),
+        _job("fi_daily_nav", lambda: _nav_with_industry_refresh(ValoresCuotaFIDownloader().run, "fi")),
         "cron", hour=9, minute=30, id="fi_daily_nav",
     )
     scheduler.add_job(

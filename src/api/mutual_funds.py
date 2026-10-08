@@ -146,7 +146,7 @@ def list_funds(
     admin: str | None = Query(None, description="Partial match on administrador name"),
     tipo_fondo: str | None = Query(None),
     vigente: bool | None = Query(None),
-    categoria: str | None = Query(None, description="Category code from categoria_fm"),
+    categoria: str | None = Query(None, description="Category code from categoria_fm_effective"),
     tipo: str | None = Query(None, description="Category type (e.g. 'Accionario', 'Deuda')"),
 ) -> list[FundFMItem]:
     limit, offset = pagination
@@ -182,7 +182,7 @@ def list_funds(
         FROM fondo_mutuo f
         LEFT JOIN LATERAL (
             SELECT categoria, tipo, nombre_cat
-            FROM categoria_fm
+            FROM categoria_fm_effective
             WHERE run_fondo = f.run_fondo
             ORDER BY periodo DESC
             LIMIT 1
@@ -210,7 +210,7 @@ def get_fund(run: str, _: CacheHook) -> FundFMDetail:
                 FROM fondo_mutuo f
                 LEFT JOIN LATERAL (
                     SELECT categoria, tipo, nombre_cat
-                    FROM categoria_fm
+                    FROM categoria_fm_effective
                     WHERE run_fondo = f.run_fondo
                     ORDER BY periodo DESC
                     LIMIT 1
@@ -247,7 +247,7 @@ def get_fund(run: str, _: CacheHook) -> FundFMDetail:
         cat_row = session.execute(
             text("""
                 SELECT categoria, tipo, grupo, nombre_cat, confianza, periodo
-                FROM categoria_fm
+                FROM categoria_fm_effective
                 WHERE run_fondo = :run
                 ORDER BY periodo DESC
                 LIMIT 1
