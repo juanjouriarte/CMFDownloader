@@ -38,6 +38,11 @@ ssh -i ~/.ssh/oracle_cmf.key ubuntu@146.181.47.236  # db VM
 ### Deploy (automatic via GitHub Actions)
 Push to `main` triggers `.github/workflows/deploy.yml` — SSHes into the app VM, pulls and builds the new image, runs migrations from that image, then starts the updated services. Deployment stops on a failed build or migration.
 
+SQLAlchemy stays on the tested 2.0 series with `psycopg2-binary`. Version 2.1
+changes the default driver for `postgresql://` to psycopg 3, which also changes
+parameter binding. Treat that upgrade as a separate migration with database
+integration tests, rather than allowing a fresh Docker build to select it.
+
 Manual deploy if needed:
 ```bash
 ssh -i ~/.ssh/oracle_cmf.key ubuntu@146.181.34.54
