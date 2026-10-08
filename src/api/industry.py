@@ -48,6 +48,8 @@ def _reference(table: str) -> str:
 
 def _snapshot_cte(include_returns: bool = True, include_ytd: bool = True) -> str:
     flow_period = "year" if include_ytd else "month"
+    # Scalar date bounds become InitPlans, allowing indexed range scans instead
+    # of joining the reference row against the entire daily-history tables.
     return f"""WITH
     fm_ref AS (SELECT ({_reference('cartola_diaria')}) AS fecha),
     fi_ref AS (SELECT ({_reference('valores_cuota_fi')}) AS fecha),
@@ -91,7 +93,9 @@ def _snapshot_cte(include_returns: bool = True, include_ytd: bool = True) -> str
                    FILTER (WHERE cd.fecha >= DATE_TRUNC('month', ref.fecha)) AS nnm_month,
                {'SUM(cd.monto_aportado - cd.monto_rescatado)' if include_ytd else 'NULL::numeric'} AS nnm_ytd
         FROM cartola_diaria cd JOIN fondo_mutuo f USING (run_fondo) CROSS JOIN fm_ref ref
-        WHERE :fund_type != 'fi' AND cd.fecha >= DATE_TRUNC('{flow_period}', ref.fecha) AND cd.fecha <= ref.fecha
+        WHERE :fund_type != 'fi'
+          AND cd.fecha >= (SELECT DATE_TRUNC('{flow_period}', fecha) FROM fm_ref)
+          AND cd.fecha <= (SELECT fecha FROM fm_ref)
           AND (:currency IS NULL OR {FM_CURRENCY} = :currency)
         GROUP BY cd.run_fondo, cd.moneda, f.moneda
     ),
@@ -116,7 +120,8 @@ def _snapshot_cte(include_returns: bool = True, include_ytd: bool = True) -> str
                {'SUM(v.flujo_neto)' if include_ytd else 'NULL::numeric'} AS nnm_ytd
         FROM valores_cuota_fi v JOIN fondos_inversion f USING (run_fondo) CROSS JOIN fi_ref ref
         WHERE :fund_type != 'fm' AND f.rescatable = true
-          AND v.fecha >= DATE_TRUNC('{flow_period}', ref.fecha) AND v.fecha <= ref.fecha
+          AND v.fecha >= (SELECT DATE_TRUNC('{flow_period}', fecha) FROM fi_ref)
+          AND v.fecha <= (SELECT fecha FROM fi_ref)
           AND (:currency IS NULL OR {FI_CURRENCY} = :currency)
         GROUP BY v.run_fondo, {FI_CURRENCY}
     ),
