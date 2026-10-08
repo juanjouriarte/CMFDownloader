@@ -298,6 +298,12 @@ Both pick the **most recent date whose fund count is ≥ 90% of the maximum seen
 
 ### Industria monthly history
 
+Industry snapshot flow scans use scalar reference-date subqueries for their
+inclusive date bounds. Keep those bounds indexable: joining date ranges directly
+to the reference CTE can make PostgreSQL scan all daily history on production,
+even for a monthly overview. Validate query-plan changes against matching results
+for FM/FI, native currencies and monthly/YTD windows.
+
 `mv_industry_monthly_fm` and `mv_industry_monthly_fi` store monthly history per
 fund and normalized native currency. Each row contains the latest available
 fund AUM in that month and full-month raw FM flows. The API joins current fund

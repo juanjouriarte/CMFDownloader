@@ -130,7 +130,7 @@ def test_overview_keeps_ytd_enabled_for_existing_api_consumers():
     from src.api.industry import industry_overview
     with patch("src.api.industry._rows", return_value=[]) as rows:
         result = industry_overview(None)
-    assert "cd.fecha >= DATE_TRUNC('year', ref.fecha)" in rows.call_args.args[0]
+    assert "cd.fecha >= (SELECT DATE_TRUNC('year', fecha) FROM fm_ref)" in rows.call_args.args[0]
     assert result["includes_ytd"] is True
 
 
