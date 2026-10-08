@@ -677,6 +677,21 @@ multi-source holdings. Weights are not renormalized; this is national/foreign
 asset exposure, excluding derivatives and equity-method participation tables.
 Frontend issuer totals propagate unknown components. Weight changes are not trades.
 
+History also returns `quantities`, `quantity_units` and per-instrument
+`report_dates` arrays on the same axis. Quantities read FM `cantidad_unidades`
+and FI `cant_unidades`, preserving raw `tipo_unidades` codes (these are not
+necessarily settlement currencies or security counts). Duplicate quantities
+sum only with a single known unit and valid nonnegative finite values; mixed
+units, invalid values and unidentified multi-row groups remain null. Source
+gaps retain null and observed absences retain zero, independently of weights.
+Coverage includes `invalid_quantities` for rows with invalid amounts or missing
+units. Consumers must reject quantity comparisons across unit changes and
+unidentified securities, and must not sum quantities across issuer instruments.
+The calendar uses available normalized closing dates; FM month-start source
+dates are reporting-month labels, not daily holdings. Only positions actually
+present in the selected period belong in its cartola. No daily interpolation
+or transaction inference is performed.
+
 Validation: `tests/test_workspace_portfolio_history.py`; real local FM/FI response
 weights reconcile with the selected source snapshot totals. Deploy the endpoint
 before the frontend Cartera tree/heatmap.

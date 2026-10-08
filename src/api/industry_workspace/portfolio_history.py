@@ -46,9 +46,10 @@ def valid_weight(value):
 def build_history(records, periods, dates):
     """Keep absent reports null; infer absence only in observed source tables."""
     coverage = {d: dict(period=d, sources=set(), rows=0, invalid_weights=0,
-                       reported_weight=0., report_dates=set()) for d in dates}
+                       reported_weight=0., invalid_quantities=0, report_dates=set()) for d in dates}
     instruments = {}
     values = defaultdict(list)
+    quantities = defaultdict(list)
     for p in sorted(records, key=lambda p: p['periodo']):
         period = end_month(p['periodo'])
         if period not in coverage:
@@ -56,7 +57,7 @@ def build_history(records, periods, dates):
         issuer_id, key, identified, currency = identity(p)
         instrument = instruments.setdefault(key, dict(
             id=key, issuer_id=issuer_id, issuer_identified=identified,
-            sources=set(), weights=[], present=[]))
+            sources=set(), weights=[], present=[], quantities=[], quantity_units=[], report_dates=[]))
         instrument.update({field: p.get(field) for field in (
             'kind', 'run', 'periodo', 'identifier', 'instrument_type', 'instrument_name',
             'issuer', 'issuer_rut', 'country', 'fund_name', 'admin')})
@@ -64,11 +65,15 @@ def build_history(records, periods, dates):
         instrument['sources'].add(p['source'])
         weight = valid_weight(p['weight'])
         values[(key, period)].append(weight)
+        quantity = valid_weight(p.get('quantity'))
+        unit = clean(p.get('quantity_unit')).upper() or None
+        quantities[(key, period)].append((quantity, unit, p['periodo']))
         c = coverage[period]
         c['sources'].add(p['source'])
         c['report_dates'].add(p['periodo'])
         c['rows'] += 1
         c['invalid_weights'] += int(weight is None)
+        c['invalid_quantities'] += int(quantity is None or unit is None)
         c['reported_weight'] += weight or 0.
     for key, item in instruments.items():
         for d in dates:
@@ -78,6 +83,18 @@ def build_history(records, periods, dates):
             weight = (sum(weights) if weights and None not in weights else 0. if not weights else None) if observed else None
             item['weights'].append(weight)
             item['present'].append(bool(weights))
+            reported = quantities.get((key, d), [])
+            units = {unit for _, unit, _ in reported}
+            unit = next(iter(units)) if len(units) == 1 else None
+            # Never add unlike unit types. Unidentified groups may contain
+            # different securities, so their quantities cannot be aggregated.
+            comparable = unit is not None and all(q is not None for q, _, _ in reported)
+            identified = bool(clean(item['identifier']))
+            quantity = (sum(q for q, _, _ in reported) if comparable and (identified or len(reported) == 1)
+                        else None) if reported else 0.
+            item['quantities'].append(quantity if observed else None)
+            item['quantity_units'].append(unit)
+            item['report_dates'].append(sorted({d for _, _, d in reported}))
         item['sources'] = sorted(item['sources'])
     for c in coverage.values():
         c['sources'] = sorted(c['sources'])
@@ -112,10 +129,13 @@ def load_history(kind, run, period, months, bucket):
     for k, table, identifier, rut, issuer, weight in sources:
         currency = 'moneda_liquidacion' if k == 'fm' else 'cod_moneda_liquidacion'
         country = 'codigo_pais_emisor' if k == 'fm' else 'cod_pais'
+        quantity = 'cantidad_unidades' if k == 'fm' else 'cant_unidades'
         parts.append(f"""SELECT '{k}' kind, '{table}' source, c.run_fondo run,
             c.periodo, {identifier} identifier, {rut} issuer_rut, {issuer} issuer_name,
             tipo_instrumento instrument_type, {country} country_code, {currency} currency_code,
-            CASE WHEN trim(c.{weight}::text) ~ :numeric THEN c.{weight}::numeric END weight
+            CASE WHEN trim(c.{weight}::text) ~ :numeric THEN c.{weight}::numeric END weight,
+            CASE WHEN trim(c.{quantity}::text) ~ :numeric THEN c.{quantity}::numeric END quantity,
+            c.tipo_unidades quantity_unit
             FROM {table} c JOIN (
                 SELECT date_trunc('month',periodo) AS report_month, max(periodo) periodo FROM {table}
                 WHERE run_fondo=:run AND periodo BETWEEN :start AND :end GROUP BY 1

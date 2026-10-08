@@ -56,6 +56,53 @@ def test_currency_codes_do_not_confuse_usd_insurance_and_dollars():
     assert m.identity({**position(), 'currency_code': 'USD'})[3] == 'USD_SEGURO'
 
 
+def test_quantities_keep_reported_units_and_do_not_follow_valuation_changes():
+    a = position(quantity=100, quantity_unit='UF')
+    data = m.build_history([a, {**a, 'periodo': D[1], 'weight': 9},
+                            {**a, 'periodo': D[2], 'quantity': 70}], D, D)
+    h = data['instruments'][0]
+    assert h['weights'] == [4, 9, 4]
+    assert h['quantities'] == [100, 100, 70]
+    assert h['quantity_units'] == ['UF'] * 3
+    assert h['report_dates'] == [[d] for d in D]
+
+
+def test_quantity_duplicates_require_same_known_unit_and_valid_numbers():
+    a = position(quantity=100, quantity_unit='UF')
+    result = m.build_history([a, a, {**a, 'periodo': D[1]},
+                             {**a, 'periodo': D[1], 'quantity_unit': '$$'},
+                             {**a, 'periodo': D[2], 'quantity': float('inf')}], D, D)
+    h = result['instruments'][0]
+    assert h['weights'] == [8, 8, 4]
+    assert h['quantities'] == [200, None, None]
+    assert h['quantity_units'] == ['UF', None, 'UF']
+    assert result['coverage'][2]['invalid_quantities'] == 1
+    for value in [None, -1, 'invalid', float('nan')]:
+        h = m.build_history([{**a, 'quantity': value}], D, D)['instruments'][0]
+        assert h['quantities'][0] is None
+    assert m.build_history([{**a, 'quantity_unit': None}], D, D)['instruments'][0]['quantities'][0] is None
+
+
+def test_quantity_absence_zero_requires_source_and_unknown_groups_are_not_summed():
+    a = position(quantity=100, quantity_unit='UF')
+    other = {**a, 'identifier': 'OTHER', 'periodo': D[1]}
+    data = m.build_history([a, other], D, D)
+    assert data['instruments'][0]['quantities'] == [100, 0, None]
+    unknown = {**a, 'identifier': None}
+    assert m.build_history([unknown, unknown], D, D)['instruments'][0]['quantities'][0] is None
+    data = m.build_history([a, {**a, 'source': 'cartera_extr'}, {**a, 'periodo': D[1]}], D, D)
+    assert data['instruments'][0]['quantities'] == [200, None, None]
+
+
+def test_quantity_is_independent_of_weight_validity_and_preserves_unit_changes():
+    a = position(quantity=100, quantity_unit='UF', weight=float('nan'))
+    data = m.build_history([a, {**a, 'periodo': D[1], 'quantity_unit': '$$'}], D, D)
+    h = data['instruments'][0]
+    assert h['weights'] == [None, None, None]
+    assert h['quantities'] == [100, 100, None]
+    assert h['quantity_units'] == ['UF', '$$', None]
+
+
 @pytest.mark.parametrize('kind,months,count,baseline', [
     ('fm', 12, 13, date(2025, 6, 30)), ('fi', 12, 5, date(2025, 6, 30)),
 ])
@@ -74,6 +121,8 @@ def test_loader_batches_dates_and_includes_opening_baseline(monkeypatch, kind, m
     assert calls[1][1]['start'] == baseline.replace(day=1)
     assert 'max(periodo)' in calls[1][0]  # One filing per source/month.
     assert 'run_fondo=:run' in calls[1][0]
+    assert ('cantidad_unidades' if kind == 'fm' else 'cant_unidades') in calls[1][0]
+    assert 'c.tipo_unidades quantity_unit' in calls[1][0]
     m.load_history.cache_clear()
 
 
