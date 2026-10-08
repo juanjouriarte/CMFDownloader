@@ -395,3 +395,6 @@ router.include_router(rankings_router)
 
 from .portfolio_history import router as portfolio_history_router
 router.include_router(portfolio_history_router)
+
+from .instrument_history import router as instrument_history_router
+router.include_router(instrument_history_router)

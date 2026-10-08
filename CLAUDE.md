@@ -696,6 +696,33 @@ Validation: `tests/test_workspace_portfolio_history.py`; real local FM/FI respon
 weights reconcile with the selected source snapshot totals. Deploy the endpoint
 before the frontend Cartera tree/heatmap.
 
+### Instrument holder history
+
+`/industry-workspace/instrument-history` takes exact `identifier`, nullable
+`instrument_type`, required `issuer` (including an explicit blank string) and
+`months=3..60` (default 12). It uses the same resolved issuer identity as the
+instrument directory and returns separate FM monthly / FI quarterly axes, each
+with an opening baseline and its latest completed reporting-month cutoff.
+Every historical holder in the window is included, not just the latest holders.
+Rows separate fund kind/RUN and normalized settlement currency. Quantity units
+remain raw CMF codes. Arrays include weights, quantities, units, presence and
+actual fund/source report dates; no daily/monthly interpolation is performed.
+
+Three batched read-only queries load source cutoffs, matching instrument rows,
+and source-filing presence for all historical holders. The instrument subset is
+materialized before dimension joins to avoid an unstable broad join plan. Source
+coverage scans only funds that held the instrument in that source. Latest filing
+per fund/source/month wins. Missing source reports retain null; observed absence
+can be zero only when all historical sources for that row report. Duplicate
+quantities require a common known unit; invalid or mixed-unit quantities remain
+null independently of weights. Consumers compare quantities only in matching
+units and distinguish zero-base entries from percentage changes. A bounded
+60-second cache avoids repeated scans; no new table or migration is required.
+
+Validation: `tests/test_workspace_instrument_history.py`, existing portfolio
+history/quantity helper tests and real FM/FI reconciliation against individual
+fund histories. Deploy this endpoint before the instrument heatmap frontend.
+
 ### Ranking workspace
 
 `/industry-workspace/rankings/returns?kind=fm|fi|all&currency=CLP` reuses existing
