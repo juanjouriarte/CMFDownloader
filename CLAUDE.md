@@ -749,11 +749,12 @@ source and daily paths) and `tests/test_nnm_daily_fm.py`.
 
 `/shared-rankings` stores team definitions in PostgreSQL, not market-data snapshots.
 Migration `z6a7b8c9d0e1` adds `shared_rankings` plus revision history. Apply it before
-deploying the frontend library. GET list/detail and `/session`, POST create, PUT
-update and DELETE all require a bearer key and return no-store responses. No
-unauthenticated library browsing or mutations are allowed. `RANKINGS_KEYS` maps
+deploying the frontend library. GET list/detail/search are public and return
+no-store responses, independently of editor credentials or key configuration.
+`/session`, POST create, PUT update and DELETE require an editor bearer key.
+Only authenticated editors may change saved definitions. `RANKINGS_KEYS` maps
 editor names to SHA-256 hashes; unset/empty falls back to existing classification
-editor keys. A malformed/nonempty ranking key configuration fails closed. Keys
+editor keys. A malformed/nonempty ranking key configuration fails closed for editing. Keys
 remain server-side; browsers keep entered credentials only in React memory.
 
 All authorized ranking editors share one library and can edit its rankings.
@@ -764,7 +765,7 @@ and definition. Server validation preserves exact FM/FI/fund/series identities,
 currency, date ranges and limits. List pagination is 100 maximum per request.
 Saved definitions also accept an optional `description` (maximum 500 characters,
 trimmed; defaults to empty for older definitions). It lives in the existing config
-JSON and revision history, requiring no schema migration. Authenticated listing
+JSON and revision history, requiring no schema migration. Public listing
 accepts `search` (maximum 120 characters): literal, case-insensitive matching over
 name and description, applied before counts/pagination. Deploy this API update
 before the selector UI, since older API validators reject the new config field.

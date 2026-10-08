@@ -37,13 +37,12 @@ def require_editor(response: Response, credentials: Credentials):
     raise HTTPException(401, 'Clave de acceso inválida.', headers={'WWW-Authenticate':'Bearer','Cache-Control':'no-store'})
 
 
-def require_reader(response: Response, credentials: Credentials):
+def public_reader(response: Response):
     response.headers['Cache-Control'] = 'no-store'
-    return require_editor(response, credentials)
 
 
 Editor = Annotated[str, Depends(require_editor)]
-Reader = Annotated[str | None, Depends(require_reader)]
+Reader = Annotated[None, Depends(public_reader)]
 
 
 class DateRange(BaseModel):

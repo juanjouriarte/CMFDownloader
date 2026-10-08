@@ -46,14 +46,13 @@ def test_complete_group_selections_can_exceed_100_funds_without_truncation():
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setenv('RANKINGS_KEYS',json.dumps({name:hashlib.sha256(key.encode()).hexdigest() for name,key in [('Editor A','test-a'),('Editor B','test-b')]}))
-    monkeypatch.setenv('RANKINGS_ACCESS','private')
     app=FastAPI();app.include_router(m.router)
     return TestClient(app)
 
 
-def test_all_routes_require_private_access(client):
+def test_writes_and_editor_session_require_key(client):
     id=str(uuid4())
-    for method,path,body in [('get','',None),('get','/'+id,None),('post','',dict(id=id,config=CONFIG)),
+    for method,path,body in [('get','/session',None),('post','',dict(id=id,config=CONFIG)),
                             ('put','/'+id,dict(config=CONFIG,expected_version=1)),('delete','/'+id+'?expected_version=1',None)]:
         response=client.request(method,'/shared-rankings'+path,json=body)
         assert response.status_code==401
@@ -64,7 +63,7 @@ def test_all_routes_require_private_access(client):
 
 def test_invalid_auth_config_fails_closed(client,monkeypatch):
     monkeypatch.setenv('RANKINGS_KEYS','invalid')
-    assert client.get('/shared-rankings',headers={'Authorization':'Bearer test-a'}).status_code==503
+    assert client.get('/shared-rankings/session',headers={'Authorization':'Bearer test-a'}).status_code==503
 
 
 @pytest.mark.skipif(os.getenv('RUN_WORKSPACE_DB_TESTS')!='1',reason='requires migrated local DB')
@@ -128,5 +127,36 @@ def test_description_persists_and_search_filters_before_pagination(client,monkey
             assert ids[0] in [r['id'] for r in result['rows']]
             assert all('uf 100%' in (r['config']['title']+' '+r['config'].get('description','')).lower() for r in result['rows'])
             assert client.get('/shared-rankings',headers=headers,params=dict(search='x'*121)).status_code==422
-            assert client.get('/shared-rankings',params=dict(search=marker)).status_code==401
+            assert client.get('/shared-rankings',params=dict(search=marker)).json()['total']==3
+        finally:txn.rollback()
+
+
+@pytest.mark.skipif(os.getenv('RUN_WORKSPACE_DB_TESTS')!='1',reason='requires migrated local DB')
+def test_public_list_detail_search_and_protected_delete(client,monkeypatch):
+    from src.db.engine import engine
+    editor={'Authorization':'Bearer test-a'}
+    with engine.connect() as conn:
+        txn=conn.begin()
+        monkeypatch.setattr(m,'SessionLocal',sessionmaker(bind=conn,join_transaction_mode='create_savepoint'))
+        try:
+            id=str(uuid4());config={**CONFIG,'title':'Public '+id,'description':'Visible sin clave'}
+            assert client.post('/shared-rankings',headers=editor,json=dict(id=id,config=config)).status_code==201
+            for settings in [None,'invalid','{}']:
+                if settings is not None:monkeypatch.setenv('RANKINGS_KEYS',settings)
+                for headers in [{},{'Authorization':'Bearer invalid-key'}]:
+                    listing=client.get('/shared-rankings',headers=headers,params=dict(search=id))
+                    assert listing.status_code==200 and listing.headers['cache-control']=='no-store'
+                    assert listing.json()['total']==1 and listing.json()['rows'][0]['config']==config
+                    detail=client.get('/shared-rankings/'+id,headers=headers)
+                    assert detail.status_code==200 and detail.json()['config']==config
+                    assert detail.headers['cache-control']=='no-store'
+            monkeypatch.setenv('RANKINGS_KEYS',json.dumps({'Editor A':hashlib.sha256(b'test-a').hexdigest()}))
+            for headers in [{},{'Authorization':'Bearer invalid-key'}]:
+                assert client.delete('/shared-rankings/'+id+'?expected_version=1',headers=headers).status_code==401
+                assert client.put('/shared-rankings/'+id,headers=headers,json=dict(config=config,expected_version=1)).status_code==401
+                assert client.post('/shared-rankings',headers=headers,json=dict(id=str(uuid4()),config=config)).status_code==401
+                assert client.get('/shared-rankings/'+id).status_code==200
+            assert client.delete('/shared-rankings/'+id+'?expected_version=1',headers=editor).status_code==200
+            assert client.get('/shared-rankings/'+id).status_code==404
+            assert client.get('/shared-rankings',params=dict(search=id)).json()['total']==0
         finally:txn.rollback()
