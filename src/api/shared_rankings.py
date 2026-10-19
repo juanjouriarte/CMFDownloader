@@ -73,7 +73,7 @@ class RankingConfig(BaseModel):
     series: dict[str,list[str | None]] = Field(default_factory=dict)
     search: str = Field(max_length=600)
     direction: Literal['desc','asc']
-    sort: Literal['value','name']
+    sort: Literal['value','name','aum']
     limit: Literal[0,10,25,50,100]
     range: DateRange | None
 
@@ -83,6 +83,8 @@ class RankingConfig(BaseModel):
         self.description = self.description.strip()
         if not self.title:
             raise ValueError('Escribe un nombre para el ranking.')
+        if self.sort == 'aum' and self.group != 'fund':
+            raise ValueError('El orden por AUM está disponible por fondo.')
         if self.metric == 'returns' and (self.period in ('3M','6M') or self.group != 'fund' or self.range is not None):
             raise ValueError('Configuración de rentabilidad inválida.')
         if any(not re.fullmatch(r'(fm|fi):\d{1,12}',key) or

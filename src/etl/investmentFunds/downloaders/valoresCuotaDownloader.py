@@ -2,21 +2,28 @@ from __future__ import annotations
 
 import time
 import random
-from datetime import date, timedelta
+from calendar import monthrange
+from datetime import date
 
-from sqlalchemy import select, func, text
+from sqlalchemy import select
 
 from src.base import BaseDownloader, DownloadResult
 from src.config import DOWNLOADS_DIR
 from src.db.engine import SessionLocal
 from src.db.models.fondos_inversion import FondoInversion
-from src.db.models.valores_cuota_fi import ValorCuotaFI
 from src.http import make_session
 from src.etl.investmentFunds.loaders.valores_cuota import parse_html, load_valores_cuota
 from src.etl.investmentFunds.loaders.utils import mark_has_data
 
 BASE_URL  = "https://www.cmfchile.cl/institucional/mercados/entidad.php"
 BACKFILL_START = date(2020, 1, 1)
+
+
+def _incremental_start(today: date) -> date:
+    """Three calendar months, clamped for shorter destination months."""
+    month = today.year * 12 + today.month - 1 - 3
+    year, month0 = divmod(month, 12)
+    return date(year, month0 + 1, min(today.day, monthrange(year, month0 + 1)[1]))
 
 
 def _tipo(rescatable: bool) -> str:
@@ -43,8 +50,8 @@ class ValoresCuotaFIDownloader(BaseDownloader):
 
     def run(self) -> DownloadResult:
         today = date.today()
-        # Re-fetch last 7 days to catch any late-posted values
-        from_date = today - timedelta(days=7)
+        # Revisit the whole window, including late filings and partial imports.
+        from_date = _incremental_start(today)
         return self._download_all(from_date, today, only_vigentes=True)
 
     def backfill(self, from_date: date = BACKFILL_START) -> DownloadResult:
@@ -60,25 +67,20 @@ class ValoresCuotaFIDownloader(BaseDownloader):
             rescatable = fund.rescatable if fund.rescatable is not None else True
             vigente = fund.vigente if fund.vigente is not None else True
 
-            # For incremental run, skip if already up to date
-            if not self.force:
-                last = self._last_fecha(run_fondo)
-                effective_from = last if last and last > from_date else from_date
-            else:
-                effective_from = from_date
-
-            if effective_from >= to_date:
+            # MAX(fecha) does not prove earlier dates/series are complete. This
+            # also lets backfill repair holes behind the latest observation.
+            if from_date > to_date:
                 total += DownloadResult(skipped=1)
                 continue
 
             self.logger.debug("[%d/%d] %s (%s)", i, len(funds), run_fondo, fund.razon_social or "")
 
             try:
-                records = self._fetch(run_fondo, rescatable, vigente, effective_from, to_date)
+                records = self._fetch(run_fondo, rescatable, vigente, from_date, to_date)
                 rows = load_valores_cuota(records)
                 if rows:
                     mark_has_data(run_fondo, True)
-                elif not vigente:
+                elif not vigente and from_date <= BACKFILL_START:
                     mark_has_data(run_fondo, False)
                 total += DownloadResult(downloaded=1, rows_upserted=rows)
             except Exception as exc:
@@ -115,9 +117,3 @@ class ValoresCuotaFIDownloader(BaseDownloader):
             for f in funds:
                 session.expunge(f)
             return funds
-
-    def _last_fecha(self, run_fondo: str) -> date | None:
-        with SessionLocal() as session:
-            return session.execute(
-                select(func.max(ValorCuotaFI.fecha)).where(ValorCuotaFI.run_fondo == run_fondo)
-            ).scalar_one_or_none()

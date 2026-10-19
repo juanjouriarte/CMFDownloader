@@ -103,6 +103,7 @@ def register_jobs(scheduler: BaseScheduler) -> None:
     from src.etl.mutualFunds.mutualFundsCategories import run_and_save as fm_categorize
     from src.etl.mutualFunds.flow_adjustments import run as detect_fm_migrations
     from src.etl.cmf.ref_codes import run as refresh_ref_codes
+    from src.etl.insiders.downloader import InsidersDownloader
     from src.reports.mf_nnm_email import run as send_mf_nnm_reports
 
 
@@ -145,6 +146,11 @@ def register_jobs(scheduler: BaseScheduler) -> None:
     scheduler.add_job(
         _job("mf_rentabilidad", _refresh_rentabilidad_fm),
         "cron", hour=9, minute=15, id="mf_rentabilidad",
+    )
+    scheduler.add_job(
+        _job("insiders_transactions", lambda: InsidersDownloader().run()),
+        "cron", hour=8, minute=45, id="insiders_transactions",
+        max_instances=1, coalesce=True, misfire_grace_time=3600,
     )
     scheduler.add_job(
         _job("administradores", _refresh_administradores),

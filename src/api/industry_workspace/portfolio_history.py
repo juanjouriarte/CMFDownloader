@@ -10,6 +10,8 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from .currency_exposure import end_month, shift, normalize
+from .portfolio_debt import instrument_terms, profile
+from .portfolio_denomination import denomination_weights
 
 router = APIRouter()
 
@@ -50,6 +52,8 @@ def build_history(records, periods, dates):
     instruments = {}
     values = defaultdict(list)
     quantities = defaultdict(list)
+    debt_records = defaultdict(list)
+    period_records = defaultdict(list)
     for p in sorted(records, key=lambda p: p['periodo']):
         period = end_month(p['periodo'])
         if period not in coverage:
@@ -57,14 +61,18 @@ def build_history(records, periods, dates):
         issuer_id, key, identified, currency = identity(p)
         instrument = instruments.setdefault(key, dict(
             id=key, issuer_id=issuer_id, issuer_identified=identified,
-            sources=set(), weights=[], present=[], quantities=[], quantity_units=[], report_dates=[]))
+            sources=set(), weights=[], present=[], quantities=[], quantity_units=[], report_dates=[], debt_terms=[],
+            denomination_weights=[]))
         instrument.update({field: p.get(field) for field in (
             'kind', 'run', 'periodo', 'identifier', 'instrument_type', 'instrument_name',
-            'issuer', 'issuer_rut', 'country', 'fund_name', 'admin')})
+            'issuer', 'issuer_rut', 'country', 'fund_name', 'admin',
+            'underlying_fund_name', 'underlying_fund_run', 'underlying_fund_kind')})
         instrument.update(currency=currency, currency_code=p.get('currency_code'))
         instrument['sources'].add(p['source'])
         weight = valid_weight(p['weight'])
         values[(key, period)].append(weight)
+        debt_records[(key, period)].append(p)
+        period_records[period].append(p)
         quantity = valid_weight(p.get('quantity'))
         unit = clean(p.get('quantity_unit')).upper() or None
         quantities[(key, period)].append((quantity, unit, p['periodo']))
@@ -95,13 +103,16 @@ def build_history(records, periods, dates):
             item['quantities'].append(quantity if observed else None)
             item['quantity_units'].append(unit)
             item['report_dates'].append(sorted({d for _, _, d in reported}))
+            item['debt_terms'].append(instrument_terms(debt_records.get((key, d), []), observed))
+            item['denomination_weights'].append(denomination_weights(debt_records.get((key, d), []), observed))
         item['sources'] = sorted(item['sources'])
     for c in coverage.values():
         c['sources'] = sorted(c['sources'])
         c['report_dates'] = sorted(c['report_dates'])
         if not c['rows']:
             c['reported_weight'] = None
-    return dict(periods=periods, dates=dates, coverage=list(coverage.values()), instruments=list(instruments.values()))
+    return dict(periods=periods, dates=dates, coverage=list(coverage.values()), instruments=list(instruments.values()),
+                debt_profiles=[profile(period_records[d], d) for d in dates])
 
 
 @lru_cache(maxsize=32)
@@ -130,12 +141,16 @@ def load_history(kind, run, period, months, bucket):
         currency = 'moneda_liquidacion' if k == 'fm' else 'cod_moneda_liquidacion'
         country = 'codigo_pais_emisor' if k == 'fm' else 'cod_pais'
         quantity = 'cantidad_unidades' if k == 'fm' else 'cant_unidades'
+        yield_column = 'tir' if k == 'fm' else 'tir_val_par_precio'
+        valuation = 'codigo_valorizacion' if k == 'fm' else 'cod_valorizacion'
         parts.append(f"""SELECT '{k}' kind, '{table}' source, c.run_fondo run,
             c.periodo, {identifier} identifier, {rut} issuer_rut, {issuer} issuer_name,
             tipo_instrumento instrument_type, {country} country_code, {currency} currency_code,
             CASE WHEN trim(c.{weight}::text) ~ :numeric THEN c.{weight}::numeric END weight,
             CASE WHEN trim(c.{quantity}::text) ~ :numeric THEN c.{quantity}::numeric END quantity,
-            c.tipo_unidades quantity_unit
+            c.tipo_unidades quantity_unit, c.fecha_vencimiento maturity_date,
+            c.{yield_column}::text reported_yield, c.{valuation} valuation_code,
+            c.base_tasa rate_base, c.tipo_interes interest_type
             FROM {table} c JOIN (
                 SELECT date_trunc('month',periodo) AS report_month, max(periodo) periodo FROM {table}
                 WHERE run_fondo=:run AND periodo BETWEEN :start AND :end GROUP BY 1

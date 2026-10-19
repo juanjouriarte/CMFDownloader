@@ -41,7 +41,7 @@ def flow_period_data(currency, admin, end, category, periods, fund_runs=None):
           CASE WHEN v.valor_libro>0 AND v.valor_libro::text NOT IN ('NaN','Infinity','-Infinity')
             AND v.patrimonio_neto>=0 THEN v.patrimonio_neto::numeric/v.valor_libro END units,
           v.patrimonio_neto IS NOT NULL AND v.patrimonio_neto>=0 has_nav
-        FROM valores_cuota_fi v JOIN eligible f USING(run_fondo)
+        FROM v_fi_nav_canonical v JOIN eligible f USING(run_fondo)
         WHERE v.fecha BETWEEN :lookback AND :end
       ), paired AS (
         SELECT *, LAG(fecha) OVER w previous_date, LAG(currency) OVER w previous_currency,

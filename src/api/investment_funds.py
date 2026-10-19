@@ -94,6 +94,7 @@ class FlowPointFI(BaseModel):
 
 
 class NavFI(BaseModel):
+    first_date: date | None = None
     serie: str | None
     moneda: str | None
     fecha: date
@@ -122,11 +123,13 @@ class FundFIDetail(FundFIItem):
     rentability: list[RentFI]
     category: CategoryInfo | None
     geo_breakdown: list[GeoPct]
+    series_links: list[dict] = []
 
 
 class ReturnPointFI(BaseModel):
     fecha: date
     return_pct: float
+    source_serie: str | None = None
 
 
 class NavPointFI(BaseModel):
@@ -211,12 +214,16 @@ def get_investment_fund(run: str, _: CacheHook) -> FundFIDetail:
         if not fund_row:
             raise HTTPException(404, "Investment fund not found")
 
+        from .series_continuity import read_links
+        series_links = read_links(session, run)
         series_rows = session.execute(
             text("""
-                SELECT DISTINCT ON (serie) serie, moneda, fecha,
+                SELECT DISTINCT ON (serie) serie, moneda, fecha, min(fecha) OVER (PARTITION BY serie) first_date,
                        valor_libro AS valor_cuota, patrimonio_neto, num_aportantes
-                FROM valores_cuota_fi
-                WHERE run_fondo = :run
+                FROM valores_cuota_fi v
+                WHERE run_fondo = :run AND NOT EXISTS (
+                  SELECT 1 FROM fi_series_links l WHERE l.run_fondo=v.run_fondo
+                  AND l.source_serie=v.serie AND l.effective_date<=CURRENT_DATE)
                 ORDER BY serie, fecha DESC
             """),
             {"run": run},
@@ -227,7 +234,7 @@ def get_investment_fund(run: str, _: CacheHook) -> FundFIDetail:
                 SELECT r.run_fondo, r.serie, f.razon_social, r.administrador,
                        r.valor_actual, r.fecha_calculo,
                        r.r_1d, r.r_1w, r.r_1m, r.r_1y, r.r_5y, r.r_ytd
-                FROM mv_rentabilidad_fi r
+                FROM v_rentabilidad_fi_continuous r
                 LEFT JOIN fondos_inversion f ON f.run_fondo = r.run_fondo
                 WHERE r.run_fondo = :run
             """),
@@ -275,6 +282,7 @@ def get_investment_fund(run: str, _: CacheHook) -> FundFIDetail:
     return FundFIDetail(
         **dict(fund_row),
         series=[NavFI(**dict(r)) for r in series_rows],
+        series_links=series_links,
         rentability=[RentFI(**dict(r)) for r in rent_rows],
         category=CategoryInfo(**dict(cat_row)) if cat_row else None,
         geo_breakdown=[GeoPct(**dict(r)) for r in geo_rows],
@@ -610,113 +618,42 @@ def get_investment_fund_return_series(
     _: CacheHook,
     serie: str | None = Query(None),
     from_date: date | None = Query(None),
-    to_date: date | None = Query(None, description=(
-        "Cap the series at this date. Pass fecha_calculo from the fund detail rentability "
-        "object to align the last point exactly with r_1y / r_1m etc."
-    )),
+    to_date: date | None = Query(None),
+    linked: bool = Query(True, description="Include confirmed predecessor series; false returns original series only."),
 ) -> list[ReturnPointFI]:
-    """Cumulative total-return series (NAV + dividends) from from_date to to_date.
+    """Additive NAV + distributions, in the selected series' unit basis.
 
-    Methodology mirrors mv_rentabilidad_fi:
-      cumulative_return = (VL_d - VL_start + SUM(dividends with fec_lim in (start, d])) / VL_start × 100
-    Only meaningful for rescatable funds. First point is always 0.0.
-    Returns [] if no data exists for the range.
-
-    To align the last point with a point-in-time return (e.g. r_1y):
-      from_date = fecha_calculo - 365 days
-      to_date   = fecha_calculo
-    Both values come from the rentability[] array in the fund detail response.
+    Confirmed chains adjust NAV and distributions by documented conversion ratios.
+    Raw observations and patrimonio remain unchanged. Baseline is the latest valid
+    NAV on/before from_date; missing baselines never become synthetic zero returns.
     """
     effective_from = from_date or (date.today() - timedelta(days=365))
-
+    end = min(to_date or date.today(), date.today())
+    if effective_from > end:
+        raise HTTPException(422, "La fecha inicial debe ser anterior a la fecha final.")
     with SessionLocal() as session:
         if not serie:
-            serie = session.execute(
-                text("""
-                    SELECT serie FROM valores_cuota_fi
-                    WHERE run_fondo = :run
-                      AND fecha = (SELECT MAX(fecha) FROM valores_cuota_fi WHERE run_fondo = :run)
-                    ORDER BY patrimonio_neto DESC NULLS LAST
-                    LIMIT 1
-                """),
-                {"run": run},
-            ).scalar_one_or_none()
-            if not serie:
+            serie = session.execute(text("""SELECT serie FROM valores_cuota_fi
+                WHERE run_fondo=:run AND fecha<=:end
+                ORDER BY fecha DESC,patrimonio_neto DESC NULLS LAST LIMIT 1"""),
+                dict(run=run,end=end)).scalar_one_or_none()
+            if serie is None:
                 return []
-
-        rows = session.execute(
-            text("""
-                WITH
-                -- Fund reporting currency — needed to match dividends (no FX conversion required)
-                fund_currency AS (
-                    SELECT moneda
-                    FROM valores_cuota_fi
-                    WHERE run_fondo = :run AND serie = :serie AND moneda IS NOT NULL
-                    ORDER BY fecha DESC
-                    LIMIT 1
-                ),
-                -- Nearest date with data on or before from_date
-                start_row AS (
-                    SELECT fecha AS start_fecha, valor_libro AS vl_start
-                    FROM valores_cuota_fi
-                    WHERE run_fondo = :run AND serie = :serie
-                      AND fecha <= :from_date
-                      AND valor_libro IS NOT NULL AND valor_libro > 0
-                    ORDER BY fecha DESC
-                    LIMIT 1
-                ),
-                -- Dividends matched by currency (same logic as mv_rentabilidad_fi)
-                divs AS (
-                    SELECT d.fec_lim::date AS fec_lim, d.val_acc
-                    FROM dividendos d
-                    JOIN nemotecnicos_fi n
-                        ON REPLACE(n.nemotecnico, '-', '') = REPLACE(d.nemo, '-', '')
-                    CROSS JOIN fund_currency fc
-                    WHERE n.run_fondo = :run AND n.serie = :serie
-                      AND d.val_acc > 0
-                      AND d.fec_lim IS NOT NULL
-                      AND (
-                          (d.moneda = '$'   AND fc.moneda = '$$')
-                          OR
-                          (d.moneda = 'US$' AND fc.moneda = 'PROM')
-                      )
-                ),
-                -- All NAV rows from start date forward (optionally capped by to_date)
-                nav_with_divs AS (
-                    SELECT
-                        v.fecha,
-                        v.valor_libro,
-                        COALESCE(d_agg.div_on_date, 0) AS div_on_date
-                    FROM valores_cuota_fi v
-                    JOIN start_row sr ON v.fecha >= sr.start_fecha
-                    LEFT JOIN (
-                        SELECT fec_lim, SUM(val_acc) AS div_on_date
-                        FROM divs
-                        GROUP BY fec_lim
-                    ) d_agg ON d_agg.fec_lim = v.fecha
-                    WHERE v.run_fondo = :run AND v.serie = :serie
-                      AND v.valor_libro IS NOT NULL
-                      AND (:to_date IS NULL OR v.fecha <= :to_date)
-                ),
-                -- Cumulative dividends: exclude start_fecha itself (consistent with MV formula)
-                nav_cum AS (
-                    SELECT
-                        nwd.fecha,
-                        nwd.valor_libro,
-                        SUM(
-                            CASE WHEN nwd.fecha > sr.start_fecha THEN nwd.div_on_date ELSE 0 END
-                        ) OVER (ORDER BY nwd.fecha ROWS UNBOUNDED PRECEDING) AS cum_divs
-                    FROM nav_with_divs nwd, start_row sr
-                )
-                SELECT
-                    nc.fecha,
-                    ROUND(((nc.valor_libro - sr.vl_start + nc.cum_divs)
-                            / sr.vl_start * 100)::numeric, 4) AS return_pct
-                FROM nav_cum nc, start_row sr
-                WHERE sr.vl_start > 0
-                ORDER BY nc.fecha
-            """),
-            {"run": run, "serie": serie, "from_date": effective_from, "to_date": to_date},
-        ).mappings().all()
-
-    return [ReturnPointFI(**dict(r)) for r in rows]
+        rows = session.execute(text("""
+          WITH nav AS MATERIALIZED (SELECT * FROM fi_nav_history(:run,:serie,:end,:linked)),
+          base AS (
+            SELECT * FROM nav WHERE fecha<=:start AND fecha>=CAST(:start AS date)-7 AND valor_libro>0
+            AND valor_libro::text NOT IN ('NaN','Infinity','-Infinity')
+            AND currency ~ '^(?:[A-Z]{3}|UF)$' ORDER BY fecha DESC LIMIT 1
+          ), divs AS MATERIALIZED (SELECT * FROM fi_series_distributions(:run,:serie,:end,:linked))
+          SELECT n.fecha,n.source_serie,
+            round((n.valor_libro-b.valor_libro+COALESCE((SELECT sum(d.amount) FROM divs d
+              WHERE d.fecha>b.fecha AND d.fecha<=n.fecha AND d.currency=b.currency),0))
+              /b.valor_libro*100,4) return_pct
+          FROM nav n CROSS JOIN base b WHERE n.fecha>=b.fecha AND n.valor_libro>0
+            AND n.valor_libro::text NOT IN ('NaN','Infinity','-Infinity') AND n.currency=b.currency
+            AND NOT EXISTS(SELECT 1 FROM nav other WHERE other.fecha BETWEEN b.fecha AND n.fecha
+                AND other.currency IS DISTINCT FROM b.currency)
+          ORDER BY n.fecha
+        """),dict(run=run,serie=serie,start=effective_from,end=end,linked=linked)).mappings().all()
+    return [ReturnPointFI(**dict(row)) for row in rows]

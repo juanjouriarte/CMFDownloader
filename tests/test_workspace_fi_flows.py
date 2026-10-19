@@ -31,12 +31,12 @@ def estimate(monkeypatch,request):
         def rows(sql,params):
             if request.param=='daily':
                 query=runpy.run_path(str(Path(__file__).parents[1]/'alembic/versions/a7b8c9d0e1f2_add_daily_nnm.py'))['FI_SQL']
-                sql='WITH mv_nnm_daily_fi AS ('+query+'), '+sql.removeprefix('WITH ')
+                sql='WITH v_nnm_daily_fi_continuous AS ('+query+'), '+sql.removeprefix('WITH ')
 
             fixtures="""WITH valores_cuota_fi AS (
                 SELECT * FROM jsonb_to_recordset(CAST(:nav AS jsonb)) AS t(
                   run_fondo text,fecha date,patrimonio_neto bigint,valor_libro numeric,serie text,moneda text)
-              ), fondos_inversion AS (
+              ), v_fi_nav_canonical AS (SELECT * FROM valores_cuota_fi), fondos_inversion AS (
                 SELECT * FROM jsonb_to_recordset(CAST(:funds AS jsonb)) AS t(
                   run_fondo text,razon_social text,administrador text,vigente boolean)
               ), categoria_fi_effective AS (

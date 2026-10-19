@@ -1,5 +1,6 @@
 """Currency-separated series returns and fund net-new-money rankings."""
 from datetime import date
+from calendar import monthrange
 from functools import lru_cache
 from math import isfinite
 from typing import Literal
@@ -26,8 +27,8 @@ def load_returns(kind, currency, bucket):
         ('v_rentabilidad_fm_quality', 'cartola_diaria', 'fondo_mutuo',
          'nombre_fondo', 'razon_social_administradora', 'f.fecha_termino_operaciones IS NULL')
         if kind == 'fm' else
-        ('mv_rentabilidad_fi', 'valores_cuota_fi', 'fondos_inversion',
-         'razon_social', 'administrador', 'f.vigente IS TRUE AND f.rescatable IS TRUE'))
+        ('v_rentabilidad_fi_continuous', 'valores_cuota_fi', 'fondos_inversion',
+         'razon_social', 'administrador', 'f.vigente IS TRUE'))
     data = rows(f"""SELECT r.run_fondo run, r.serie, r.fecha_calculo date,
         f.{name} name, COALESCE(f.{admin},'Sin administradora') admin,
         c.nombre_cat category, c.tipo category_type, c.grupo category_group,
@@ -44,10 +45,16 @@ def load_returns(kind, currency, bucket):
           AND n.patrimonio_neto::text NOT IN ('NaN','Infinity','-Infinity')
         ORDER BY r.run_fondo,r.serie""", dict(currency=currency))
     valid = [r for r in data if not r['suspicious']]
+    from src.api.series_continuity import series_history
+    links_by_run = {}
+    if kind == 'fi':
+        for link in rows('SELECT * FROM fi_series_links ORDER BY effective_date', {}):
+            links_by_run.setdefault(link['run_fondo'], []).append(link)
     return dict(kind=kind, currency=currency, methodology='cmf_backend_return',
         date=max((r['date'] for r in data), default=None),
         periods=list(PERIOD_COLUMNS), excluded_suspicious=sum(r['suspicious'] for r in data),
         rows=[dict(kind=kind, currency=currency,
+            series_history=series_history(links_by_run.get(r['run'], []), r['serie'], r['date']),
             **{k: r[k] for k in ('run','serie','name','admin','category','category_type','category_group','date')},
             values={period: finite(r[column]) for period, column in PERIOD_COLUMNS.items()}) for r in valid])
 
@@ -134,8 +141,21 @@ def load_mixed_nnm(currency,period,start,end,bucket):
         rows=[dict(r,methodology=p['methodology']) for p in parts for r in p['rows']])
 
 
+def calendar_windows(end, year=None):
+    year = year or end.year
+    if year > end.year:
+        return []
+    cutoff = min(end, date(year, 12, 31))
+    windows = [dict(key='YTD', start=date(year, 1, 1), end=cutoff, truncated=False)]
+    for month in range(1, cutoff.month+1):
+        closing = date(year, month, monthrange(year, month)[1])
+        windows.append(dict(key=f'{month:02}', start=date(year, month, 1),
+                            end=min(closing, cutoff), truncated=cutoff < closing))
+    return windows
+
+
 @lru_cache(maxsize=16)
-def load_nnm_periods(kind, currency, start, end, bucket, window='all'):
+def load_nnm_periods(kind, currency, start, end, bucket, window='all', year=None):
     """Daily facts calculate every window at a shared cutoff without rescanning series NAV."""
     from .router import rows
     kinds = ('fm','fi') if kind == 'all' else (kind,)
@@ -147,11 +167,17 @@ def load_nnm_periods(kind, currency, start, end, bucket, window='all'):
         end = min((r['date'] for r in cutoffs if r['date']), default=None)
     if end is None:
         return dict(kind=kind,currency=currency,end=None,last_date=None,periods=[],rows=[])
-    windows = [w for w in flow_windows(end) if window=='all' or (w['key']=='5A')==(window=='long')]
-    if start and window!='long':
+    if window == 'calendar':
+        windows = calendar_windows(end, year)
+        if not windows:
+            return dict(kind=kind,currency=currency,end=end,last_date=None,periods=[],rows=[])
+        end = windows[0]['end']
+    else:
+        windows = [w for w in flow_windows(end) if window=='all' or (w['key']=='5A')==(window=='long')]
+    if start and window not in ('long', 'calendar'):
         windows.append(dict(key='custom',start=start,end=end,truncated=False))
-    periods = [(w['key'],w['start']) for w in windows]
-    earliest = min(s for _,s in periods)
+    periods = [(w['key'],w['start'],w['end']) if window=='calendar' else (w['key'],w['start']) for w in windows]
+    earliest = min(w['start'] for w in windows)
     validate_range(earliest,end)
     output = []
     for k in kinds:
@@ -183,9 +209,14 @@ def load_nnm_periods(kind, currency, start, end, bucket, window='all'):
 def nnm_periods(kind: Literal['fm','fi','all']='all',
                currency: str=Query('CLP',pattern='^(?:[A-Z]{3}|UF)$'),
                from_date: date|None=None,to_date: date|None=None,
-               window: Literal['all','recent','long']='all'):
+               window: Literal['all','recent','long','calendar']='all',
+               year: int|None=Query(None,ge=2020,le=date.today().year)):
+    if year is not None and window != 'calendar':
+        raise HTTPException(422,'El año sólo se admite en la tabla mensual.')
+    if from_date is not None and window == 'calendar':
+        raise HTTPException(422,'La tabla mensual utiliza meses calendario completos.')
     if from_date is not None and to_date is None:
         raise HTTPException(422,'El rango personalizado requiere ambas fechas.')
     if to_date is not None:
         validate_range(from_date or to_date,to_date)
-    return load_nnm_periods(kind,currency,from_date,to_date,classification_cache_epoch(),window)
+    return load_nnm_periods(kind,currency,from_date,to_date,classification_cache_epoch(),window,year)

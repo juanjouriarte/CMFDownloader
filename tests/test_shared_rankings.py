@@ -34,6 +34,16 @@ def test_config_preserves_exact_series_and_date_range():
     assert m.RankingConfig.model_validate(config).model_dump(mode='json',by_alias=True)==config
 
 
+@pytest.mark.parametrize('metric',['returns','nnm'])
+@pytest.mark.parametrize('direction',['asc','desc'])
+def test_aum_sort_round_trips_for_fund_rankings(metric,direction):
+    config={**CONFIG,'metric':metric,'sort':'aum','direction':direction}
+    assert m.RankingConfig.model_validate(config).model_dump(mode='json',by_alias=True)==config
+    for group in ['admin','category']:
+        with pytest.raises(ValidationError):
+            m.RankingConfig.model_validate({**config,'group':group})
+
+
 def test_complete_group_selections_can_exceed_100_funds_without_truncation():
     config={**CONFIG,'fundKeys':[f'fm:{i}' for i in range(2000)],'series':{'fm:1':['A']}}
     result=m.RankingConfig.model_validate(config)

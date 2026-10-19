@@ -83,6 +83,7 @@ def _build_run_fondo_lookup() -> dict[tuple[str, str], str]:
 
 def load_tac(path: Path, year: int, month: int) -> int:
     periodo = date(year, month, 1)
+    next_period = date(year + (month == 12), 1 if month == 12 else month + 1, 1)
 
     book = xlrd.open_workbook(str(path), encoding_override="latin-1")
     sheet = book.sheet_by_index(0)
@@ -113,6 +114,8 @@ def load_tac(path: Path, year: int, month: int) -> int:
         return date(int(s[:4]), int(s[4:6]), int(s[6:8]))
 
     df["periodo"] = df["periodo_raw"].apply(parse_periodo)
+    if not df["periodo"].map(lambda p: periodo <= p < next_period).all():
+        raise ValueError(f"TAC source contains dates outside {year}-{month:02d}")
 
     # TAC numeric columns
     for col in TAC_NUMERIC:
@@ -153,7 +156,9 @@ def load_tac(path: Path, year: int, month: int) -> int:
     ]].where(pd.notna(df), None).to_dict(orient="records")
 
     with SessionLocal() as session:
-        session.execute(delete(Tac).where(Tac.periodo == periodo))
+        # CMF cells carry month-end dates. Replace the requested reporting month
+        # atomically; deleting only its first day leaves duplicates on reload.
+        session.execute(delete(Tac).where(Tac.periodo >= periodo, Tac.periodo < next_period))
         for start in range(0, len(records), 5000):
             session.execute(insert(Tac).values(records[start: start + 5000]))
         session.commit()

@@ -258,6 +258,28 @@ catch late filings, and quarter iteration excludes future quarter-end dates.
 
 Every scheduler job writes a row to `job_runs` on start and updates it on finish via `_run_tracked()` in `scheduler.py`. Fields: `job_id`, `started_at`, `finished_at`, `status` (running/success/error), `rows_upserted`, `errors`, `error_detail`.
 
+FI daily NAV requests the full last **three calendar months**, including the
+start date, with month-end clamping. It does not shorten that range to a fund's
+latest stored NAV: that date cannot establish completeness of prior dates or
+series. Explicit NAV backfills also revisit the entire requested range without
+requiring `force=True`. An empty recent-range response cannot mark an inactive
+fund permanently empty; that requires a full-history request.
+
+For a local-only fund data reload, use
+`PYTHONPATH=. .venv/bin/python scripts/reload_local_data.py --since YYYY-MM-DD`.
+The command rejects non-local DB hosts, uses the normal tracked loaders, refreshes
+reference/identity data, NAV, portfolios, TAC, shareholders/quotas, classifications,
+dividends (annual source granularity) and derived dashboard views. FI NAV uses up
+to four disjoint workers; FI quarterly imports use two. `--only` supports retrying
+`fm`, `fm_nav`, `fi_nav`, `fi_reports`, or `derived`. FM NAV exports use monthly
+chunks and split interrupted transfers into smaller ranges. JSON/log reports are written under
+`output/local-refresh/`. It never starts the scheduler or sends report emails.
+TAC reloads atomically replace the requested month, using the source's month-end
+dates; a source with dates outside that month is rejected before deletion. This
+prevents duplicate TAC rows on repeated imports.
+Tests: `tests/test_fi_nav_downloader.py`, `tests/test_industry_refresh.py`,
+`tests/test_local_reload.py`, `tests/test_tac_loader.py` (DB fixture opt-in).
+
 ### FI Fund Classifier (`investmentFundsCategories.py`)
 
 Classifies all FI funds based on IFRS quarterly cartera positions using `pct_activo_fondo` as portfolio weight. 34 subcategories across 6 high-level types:
@@ -288,7 +310,7 @@ r = (VC_end × PRODUCT(factor_reparto in period)) / VC_start - 1
 ```
 - `factor_reparto` is the daily reinvestment multiplier for distributions; cumulative product via `EXP(SUM(LN(factor)))` over valid factors only (NaN/NULL/0 → neutral 1.0).
 
-**`mv_rentabilidad_fi`** (rescatable Investment Funds only) — NAV + dividends:
+**`mv_rentabilidad_fi`** (active Investment Funds with valid NAV, rescatable and non-rescatable) — NAV + dividends:
 ```
 r = (VL_end - VL_start + SUM(dividends in period)) / VL_start × 100
 ```
@@ -378,7 +400,7 @@ AUM figures are CLP. MCP NNM amounts are returned in millions of the explicit cu
 | `dividends` | Daily 09:00 | Dividends + capital changes (Bolsa de Santiago) |
 | `fm_flow_adjustments` | Daily 10:45 | Incrementally detect and persist high-confidence internal FM migrations; full current-year safety scan weekly |
 | `mf_nnm_email_report` | Daily 11:15 | Three BTG-styled flow emails: mutual funds; FI Accionario/Balanceado/Deuda; and FI Alternativo/Fondo de Fondos/Otro. FM external NNM excludes high-confidence internal fund migrations detected from official terminations and stored in `fm_flow_adjustments`; raw CMF rows remain unchanged. FI categories aggregate rescatable and non-rescatable funds together. Each email includes its high-level overview, detailed categories, and AGF breakdown by subcategory, with daily/1W/MTD/YTD split by reported currency |
-| `fi_daily_nav` | Daily 09:30 | FI daily NAV/AUM (vigente funds only) |
+| `fi_daily_nav` | Daily 09:30 | FI daily NAV/AUM; rechecks three calendar months (vigente funds only) |
 | `fi_rentabilidad` | Daily 10:00 | Refresh `mv_rentabilidad_fi` (FI returns) |
 | `fi_shareholders` | Day 5 of month 10:00 | FI quarterly shareholders + cuotas (vigente only) |
 | `fi_portfolios` | Day 5 of month 10:30 | FI quarterly IFRS portfolio positions (vigente only) |
@@ -397,7 +419,7 @@ Public database endpoints return `Cache-Control: public, max-age=3600` and all e
 | `GET /mutual-funds` | List FM funds. Filters: `admin`, `tipo_fondo`, `vigente`, `categoria`, `tipo`. Each item includes `categoria`, `tipo`, `nombre_cat` from `categoria_fm` |
 | `GET /mutual-funds/{run}` | FM fund detail: identity + latest NAV per serie (field: `series[]`) + rentability + `category` (full object: `categoria`, `tipo`, `grupo`, `nombre_cat`, `confianza`, `periodo`) + `geo_breakdown` (`[{pais, pct_peso}]` from latest portfolio) + `latest_tac` (`tac_total`, `tac_rem_fija`, `tac_rem_var`, `tac_gastos_op`, `periodo`) |
 | `GET /mutual-funds/{run}/nav` | FM NAV history for charts. Filters: `serie`, `from_date`, `to_date`. Field: `valor_cuota` |
-| `GET /mutual-funds/{run}/tac` | FM TAC history — last 24 months descending (`periodo`, `serie`, `tac_total`, `tac_rem_fija`, `tac_rem_var`, `tac_gastos_op`). Secondary sort by `serie`. |
+| `GET /mutual-funds/{run}/tac` | FM TAC history — all series in the last 24 reported periods, descending (`periodo`, `serie`, `tac_total`, `tac_rem_fija`, `tac_rem_var`, `tac_gastos_op`). Secondary sort by `serie`. |
 | `GET /mutual-funds/{run}/flows` | Monthly aportes/rescates/NNM. Fund-level responses expose `nnm_reportado`, `migraciones_internas`, and adjusted external `nnm`; `serie` requests remain raw because migrations cannot be assigned reliably to one share class. Filters: `serie`, `from_date`, `to_date` |
 | `GET /mutual-funds/{run}/portfolio` | FM portfolio (naci + extr), SII-enriched. Optional `?period=YYYY-MM-DD` (any date in the month resolves to first-of-month). Fields per position: `tir`, `fecha_vencimiento`, `cantidad_unidades`, `tipo_unidades`, `moneda_liquidacion`, `porcentaje_valor_par`, `tipo_interes`, `codigo_pais_emisor`, `situacion_instrumento`, `porcentaje_capital_emisor`, `porcentaje_activos_emisor`, `codigo_grupo_empresarial` |
 | `GET /mutual-funds/{run}/portfolio/history` | All FM monthly portfolio positions across every period. Flat list with `periodo` field per row. Paginated. |
@@ -669,6 +691,15 @@ before the frontend that depends on `/industry-workspace`.
 
 ### Issuer portfolio history
 
+Workspace portfolio snapshots, histories and instrument search expose optional
+`underlying_fund_name`, `underlying_fund_run` and `underlying_fund_kind` for quota
+instruments (`CF*`). The CMF FM/FI ticker registries resolve names, ignoring only
+case, whitespace and hyphens; ambiguous normalized tickers remain unresolved.
+The grouped lookup preserves row counts, weights and instrument/issuer identity.
+`fund_name` remains the owning fund; `instrument_name` remains the CMF type label.
+Resolved names are current registry labels, not historical legal names. No schema
+changes or ETL writes are required.
+
 `/industry-workspace/portfolio-history/{kind}/{run}` reads national and foreign
 positions in one range query plus the available-period query. `months=3..60`
 defaults to 12; `period` must be an available normalized month end. Monthly FM
@@ -703,9 +734,38 @@ dates are reporting-month labels, not daily holdings. Only positions actually
 present in the selected period belong in its cartola. No daily interpolation
 or transaction inference is performed.
 
+`portfolio_debt.py` adds aligned `debt_terms` per instrument and whole-fund
+`debt_profiles` per period using the same range query (no additional DB calls).
+Maturity buckets use the selected month-end and final reported maturity; weighted
+remaining years exclude expired, perpetual and missing maturities (not duration).
+Reported yields require a recognized debt type and valuation code 1. Code 2 is
+par and code 3 is price/relevant value, never yield. Rate averages require known
+quantity denomination, interest type (NL/NC/RL/RC) and positive base days; each
+convention is a separate group, with no annualization or FX conversion. Values
+may be zero or negative. Missing source/period observations remain null; duplicate
+instrument terms with incompatible rates or maturities stay explicitly mixed.
+Weight coverage and unknown instrument types are exposed; profiles do not
+look through fund units or include derivatives. Portfolio weights are not
+renormalized. Tests: `tests/test_workspace_portfolio_debt.py`.
+
 Validation: `tests/test_workspace_portfolio_history.py`; real local FM/FI response
 weights reconcile with the selected source snapshot totals. Deploy the endpoint
 before the frontend Cartera tree/heatmap.
+
+### Fund portfolio denomination
+
+Portfolio history also returns aligned `denomination_weights` maps for each holding,
+using raw `tipo_unidades` independently of settlement currency and TIR convention.
+CMF aliases reuse `currency_exposure.normalize`; fund and ETF types are grouped
+as `FUND_UNITS` without look-through, unknown units as `UNKNOWN`. Duplicate rows
+retain separate denomination weights and reconcile to the instrument total. Invalid
+weights or partial instrument sources return null; an observed absence returns an
+empty map. This is additive to the existing two-query response; no migration, extra
+DB query or change to the legacy currency-exposure API. Frontend aggregation rejects
+missing reports, historical source gaps, invalid positions and totals above 105% for
+composition comparisons; reported weights are never renormalized. The fund
+frontend always uses the denomination view (no legacy-view selector). Tests:
+`tests/test_workspace_portfolio_denomination.py`.
 
 ### Instrument holder history
 
@@ -740,7 +800,7 @@ fund histories. Deploy this endpoint before the instrument heatmap frontend.
 return views and joins the exact series NAV on the calculation date to filter
 currency. It returns all available series (including null period values), current
 effective classification and 1D/1W/1M/1A/5A/YTD columns. FM quality-flagged series
-are excluded with a count; FI returns retain the existing rescatable coverage.
+are excluded with a count; FI returns cover active rescatable and non-rescatable funds with valid NAV.
 Returns are not averaged into administrator/category returns.
 `kind=all` combines FM and FI series while retaining their kind and actual return
 dates. `dates` contains each type's cutoff; the shared `date` is null when they
@@ -811,6 +871,9 @@ editor keys. A malformed/nonempty ranking key configuration fails closed for edi
 remain server-side; browsers keep entered credentials only in React memory.
 
 All authorized ranking editors share one library and can edit its rankings.
+Saved fund rankings also accept `sort=aum`, with either direction. AUM sorting
+uses the frontend's latest native-currency fund snapshot; reject it for grouped
+administrator/category rankings. No schema migration is required.
 Updates/deletes require the loaded version and return 409 on stale versions.
 Actor identity comes from authentication. Deletes hide the ranking and preserve
 its revisions. Client UUIDs make a retried create idempotent for the same editor
@@ -888,3 +951,327 @@ checks with `RUN_WORKSPACE_DB_TESTS=1 PYTHONPATH=. .venv/bin/pytest
  tests/test_classification_admin.py`. Apply the migration and configure private
 access in deployment before exposing the new Admin module; no production changes
 are made by local provisioning.
+
+### Ownership workspace
+
+`/industry-workspace/ownership` provides paginated directory, quarterly movements
+and concentration (`view=directory|movements|concentration`, quarter, exact AGF,
+J/N holder type, search, state and BTG relationship filters). It reads reported FI
+ownership with a bounded 60-second per-quarter cache. Distinct RUT/fund positions
+aggregate duplicate rows only with valid percentages; invalid/incomplete shares
+stay null. Concentration includes unidentified reported holders and rejects
+incomplete or inconsistent totals. No HHI or currency-valued AUM is inferred.
+Movements use the preceding calendar quarter and whole-fund reporting presence
+before applying holder-type filters. Not-listed is not a sale, missing reports
+are not zero, and deltas require both reported percentages. Counts remain distinct.
+`/ownership/{rut}` exposes eight quarter-end periods with per-fund presence and
+reporting coverage, exact ownership percentages, and fund/AGF count history.
+No schema change is required. Tests: `tests/test_workspace_ownership.py`.
+
+Ownership directory adds `currency=CLP`, `sort=aum|funds|admins|max_weight` and
+`direction=asc|desc`, defaulting to descending estimated AUM before pagination.
+The explicit NAV age selector accommodates gaps in the local time series. AUM is reported ownership percentage times the fund's summed series patrimonio
+on one NAV snapshot at/before quarter end (maximum age `nav_days=7|31`, default 31). All series
+on that snapshot must have nonnegative patrimonio and one known native currency;
+no per-series carry-forward or FX conversion is used. Missing NAV/ownership stays
+unvalued. Per-owner totals expose valued/unvalued/other-currency fund counts and
+actual NAV dates, preserving zero and sorting unavailable values last. Other
+currencies are excluded from that amount, not from the ownership directory.
+The owner profile exposes the same estimate for its full reported fund set.
+These are proportional estimates, not audited investor assets or beneficial-owner
+wealth. Existing share/count history and movement semantics remain unchanged.
+
+## Insiders / CMF Article 12 disclosures
+
+`src/etl/insiders/` imports the public Article 12 transactions endpoint directly:
+`https://www.cmfchile.cl/institucional/inc/tra/art_12_val.php`.
+Explicit inclusive `desde`/`hasta` (`dd/mm/yyyy`), empty `soc`/`dias`, and **both**
+`vig=VI` and `vig=NV` are requested in monthly windows from January 2020.
+The explicit ranges filter transaction dates; communication dates are stored
+separately and can be outside the requested transaction-date window.
+
+Tables: `insider_transactions` (typed disclosures + raw cells, full-row fingerprint,
+source occurrence, correction reference and current/superseded state),
+`insider_imports` (successful atomic windows, source URLs/checksums/counts/times),
+and `insider_codes` (Article 12 relationship, transaction, security and entity-status
+labels from the CMF technical sheet, pages 3–5). Financial values use PostgreSQL
+NUMERIC / Python Decimal. The source labels amounts as pesos; unit price may instead
+be a rate, so it must not automatically be multiplied by quantity to infer cash.
+Unknown codes remain verbatim and can be shown without a translated label.
+
+VI/NV are source entity lists, not whether a transaction is valid. Historical
+aliases can overlap: Camanchaca appeared under both its current and former name.
+Identical fingerprints + occurrence across those lists merge into one disclosure,
+with **all** `source_entities` preserved; VI/name takes display precedence.
+Identical multiple rows within one list retain their multiplicity. Different
+informants/roles can report the same economic transaction; do not sum this dataset
+as a deduplicated trading tape. `is_amendment` is CMF's “Modifica Información Enviada”
+flag, with a bitácora reference when exposed. There is no stable ID for every source
+row, so no inferred old-to-new amendment linkage is claimed.
+
+Each window validates both complete pages before any mutation, and commits both
+lists together under an advisory lock. Repeated loads reactivate the same keys;
+changed/removed rows become `is_current=false` and remain available for audit.
+A slower older snapshot cannot overwrite a newer import. Invalid layouts,
+truncated responses, ambiguous numeric fields and out-of-window dates fail the
+tracked job; a genuine `SIN INFORMACION` page is accepted. Known malformed HTML in
+observations is handled without including a nested cell's text in its parent.
+Calendar dates accept both `dd/mm/yyyy` and CMF's `dd/mm/yyyy HH:MM:SS`
+rendering, validating the complete value and retaining the original raw cells.
+The time suffix does not change disclosure identity or date-window checks.
+
+The `insiders_transactions` job runs daily **08:45 America/Santiago**, rechecking
+100 days rounded back to month start plus any missing historical windows. On day 1
+of each month it rechecks all history for older corrections/issuer aliases. The job
+is registered in the normal worker; importing modules/using the CLI does not start
+a scheduler or send emails. Manual local import:
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.etl.insiders.downloader --since 2020-01-01
+# Bounded retry (inclusive dates)
+PYTHONPATH=. .venv/bin/python -m src.etl.insiders.downloader --since 2023-02-01 --until 2023-02-28
+# Daily plan, including missing historical months
+PYTHONPATH=. .venv/bin/python -m src.etl.insiders.downloader --daily
+```
+
+The manual CLI rejects remote DB hosts. Deployment uses the usual migration and
+worker rollout; this feature has only been loaded locally until explicitly deployed.
+
+Read API:
+- `GET /insiders/transactions`: current disclosures, newest first; date range and
+  transaction/communication date basis, issuer/informant RUT (without DV), ticker,
+  relationship, transaction/security type, preferred entity status, amendment and
+  text filters; `limit` (max 500) / `offset`. Exact financial decimals are strings.
+  Includes translated code labels, both source aliases and correction links.
+- `GET /insiders/codes`: code dictionary + technical-sheet source link.
+- `GET /insiders/coverage`: import windows, counts, source provenance and missing
+  expected windows. Coverage concerns downloaded source snapshots, not proof that
+  every legally required disclosure was filed.
+
+`tests/test_insiders.py` covers parsing, exact decimals, null/zero distinctions,
+malformed pages, duplicate multiplicity, source aliases, amendment replacement,
+atomic rollback, stale fetches, schedule/catch-up, API filters and coverage.
+Set `RUN_WORKSPACE_DB_TESTS=1` for local PostgreSQL temp-table/rollback checks.
+
+
+### Insiders explorer
+
+`src/api/insiders_explorer.py` supplies the Industria Insiders workspace:
+`/insiders/directory` (company/informant RUT options and code labels),
+`/insiders/explorer` (multi-select company/informant filters, search, both date bases,
+source-list status, operation/security/role, amendments, owner-only filter, sorted
+pagination plus monthly disclosure counts and leading companies), and
+`/insiders/connections?rut=&as_of=` (reported FI participations).
+Filtering is OR within each RUT list and AND between dimensions; max 50 RUTs per
+list. Ordering/counts apply before pagination. Financial decimals remain strings.
+VI/NV filtering includes all observed source aliases of merged disclosures.
+
+Aportantes links require an exact numeric RUT body after removing formatting and
+leading zeros; unidentified/invalid RUTs never link. Connections use the latest
+universe-wide source quarter at or before the requested end date, with last-seen
+history explicitly separate. They do not fall back to older holdings as current,
+sum ownership percentages across funds, or identify beneficial ownership. The
+informant directory marks historical matches with their last source date.
+Fund navigation requires an active FI with NAV. Directory/owner indexes have a
+60-second process-local cache; source imports remain the authority. These endpoints
+reuse existing tables and need no additional migration beyond the Insiders schema.
+Both disclosure endpoints enrich the returned page with `broker_name` and
+`broker_name_source` using one exact normalized-RUT lookup in the existing SII
+`emisores` registry. Raw `broker_rut` remains unchanged; unmatched or unidentified
+brokers retain null names. This is the registry name, not a transaction-date name
+history. No new scraper, migration, or changes to disclosure identity/counts.
+Regression tests include multi-select intersections, sorting, empty pages, exact
+decimals, source duplicates, alias status and as-of ownership joins.
+
+
+### Ownership investment analysis and AGF comparison
+
+`ownership_analysis.py` adds `/industry-workspace/ownership-analysis` (scoped
+investment distribution and paginated quarterly activity), `/ownership-analysis/{rut}`
+(eight quarters of estimates, current fund allocations and change decomposition),
+and `/ownership-comparison` (two exact AGF names, one quarter, shared/exclusive RUTs
+and a static combined scenario). All reuse the existing FI ownership and NAV tables;
+no migration or new ETL job is required. Category filters use the latest effective
+classification at or before the quarter, including manual overrides. Administrator
+labels come from the current fund registry, not a historical corporate-group model.
+
+Comparison identity is a normalized numeric RUT body, never fuzzy name matching.
+Unidentified/invalid IDs are excluded from owner unions. The combined count is
+A + B minus their intersection; amounts sum distinct fund/owner positions, not
+client counts. This is not a beneficial-owner or economic look-through model.
+No inter-fund holdings elimination, retention assumption or merger forecast.
+Both AGFs share the requested quarter and native currency; funds without usable
+NAV retain ownership relationships but no invented monetary estimate. Coverage
+includes valued, missing and other-currency position counts. Global sorting in the
+client precedes comparison pagination; the response includes fund drill-downs.
+
+Estimated investments use ownership percentage × whole-fund NAV patrimonio at or
+before the cutoff (7/31-day maximum). Reported fund totals above 100.01% preserve
+source percentages but exclude their monetary valuation, consistently in the
+directory, profile and new analytics. Missing or unlisted histories remain null.
+BTG percentages and combined top-five concentration use known amounts only and
+must be labelled as shares of observed/valued investments, not total wealth.
+Changes decompose exactly as w0 × (A1 − A0) plus (w1 − w0) × A1, only for comparable
+weights, currencies and NAVs. Patrimonio effects include fund flows as well as
+valuation. Neither term is confirmed investor cash flow.
+Tests: `tests/test_ownership_analysis.py`, `tests/test_workspace_ownership.py`.
+
+### Calendar-month NNM rankings
+
+`/industry-workspace/rankings/nnm-periods?window=calendar&year=YYYY` returns
+YTD followed by disjoint calendar-month windows at the common FM/FI cutoff.
+An optional `to_date` pins that cutoff; `year` is calendar-only and `from_date`
+is rejected in this mode. Previous years end on December 31. Months after the
+cutoff are omitted, never filled with zero. The last incomplete month includes
+its actual end date and `truncated=true`. Currency, current eligible universe,
+methods, classifications, adjustments and coverage follow the existing rankings.
+
+`nnm_daily.flow_data` accepts optional `(key,start,end)` windows as well as the
+existing `(key,start)` rolling windows. Bounded windows filter both daily facts
+and confirmed FM migration adjustments by their own inclusive dates. FI bounded
+windows use their own seven-day baseline lookback. Each fund kind is queried
+once for the year; no new table, migration, or ETL is required. Tests in
+`test_nnm_calendar.py` cover leap years, cutoffs, request validation and read-only
+PostgreSQL reconciliation against standalone ranges. Enable these fixtures with
+`RUN_WORKSPACE_DB_TESTS=1`. Deploy this API support before the monthly frontend.
+
+### FI return coverage
+
+Migration `d0e1f2a3b4c5` rebuilds `mv_rentabilidad_fi` for all active FI with
+positive finite series NAV, nonnegative patrimonio and identified native currency,
+including non-rescatables. The near-complete reference date now counts both FI
+types and ignores future NAV dates. Existing exact-date 1D/1W/1M/1A/5A/YTD
+baselines and additive NAV-plus-distributions accounting remain; missing, zero,
+non-finite or different-currency baselines yield null per period. Confirmed series continuity is applied by the separate layer described below. Current zero-NAV series are excluded.
+
+Dividend ticker mappings deduplicate normalized fund/series/ticker identities.
+Distributions match the current series currency and ex-date within each period,
+including its closing date and excluding later announcements' future ex-dates.
+The migration restores the unique and return-sort indexes required by concurrent
+scheduled refreshes. No additional job is needed. `/rankings/returns` also removes
+its rescatable-only predicate; existing API shapes and currency filters remain.
+Apply the migration before rolling out this API/frontend coverage change.
+Validation: `tests/test_fi_return_coverage.py` (read-only PostgreSQL fixtures via
+`RUN_WORKSPACE_DB_TESTS=1`) and `tests/test_workspace_rankings.py`, then local
+Vinci Compass Small Cap Chile (7031) and Pionero (7010) API/UI series checks.
+
+### Fund distribution history
+
+Fund TAC history accepts `GET /mutual-funds/{run}/tac?full_history=true` to
+return all stored monthly reports and their series for the detail calendar and
+3Y/5Y charts. The default retains the last 24 reported periods for existing
+consumers. This is a read-only query extension with no migration or new job.
+Tests in `test_tac_history.py` cover the default and full-history paths over
+seven years, keeping all series per period and isolating the requested fund.
+
+`fund_distributions.py` implements `/mutual-funds/{run}/dividends` and
+`/investment-funds/{run}/dividends`, with optional exact `serie`, `from_date` and
+`to_date` filters. FI matches normalized official tickers to Bolsa dividend/reparto
+events, deduplicating ticker aliases while excluding subscriptions and exchanges.
+Dates use payment date, falling back to the reported limit date; both are returned.
+Amounts/currencies remain original, without continuity-link rescaling or invented
+fund-level payment totals. FM returns valid non-neutral reparto factors from CMF
+cartola, leaving cash amounts null. Existing tables/jobs suffice; no migration.
+Validation: `tests/test_fund_distributions.py` and real local FM/FI API requests.
+
+### Confirmed FI series continuity
+
+Migration `e1f2a3b4c5d6` adds `fi_series_link_sets`, `fi_series_links` and an
+append-only `fi_series_link_audit`. Links represent confirmed whole-series renames
+or conversions within one FI. They preserve original NAV and accept chains such
+as B → A → O. Each link records its effective date, official source URL, reason,
+and successor units per predecessor unit. Rename ratios must be one. The initial
+7018 A → O link is supported by BTG's official notice effective 2026-09-07; no
+other Small Cap links are inferred.
+
+`/series-continuity/admin/fi/{run}` GET/PUT and POST `.../preview` reuse the existing
+classification editor authentication. Whole-fund version checks and an advisory
+transaction lock protect concurrent edits; the audit records the server-resolved
+editor and complete before/after definitions, including removals. Validation
+rejects cycles, branching/merging, backwards/future dates, overlapping positive
+NAV histories, currency changes, invalid NAV and missing transition bases beyond
+seven days. Candidate suggestions use adjacent reporting dates only and cannot
+confirm a link. Public GET `/series-continuity/fi/{run}` exposes evidence/definitions
+without editor identities or audit records.
+
+SQL helpers `fi_series_segments`, `fi_nav_history`, `fi_series_distributions` and
+`fi_linked_returns` traverse dated predecessors and divide prior NAV/distributions
+by cumulative conversion ratios. Patrimonio is never rescaled. Distributions use
+exact historical series/ticker mappings, deduplicate normalized ticker identities,
+respect ex-dates and match native currency. No missing ticker mapping is guessed.
+
+`v_rentabilidad_fi_continuous` overlays linked series on the existing daily return
+MV; unchanged series retain the original path. All FI return consumers, including
+MCP, rankings, industry and detail, use this view. Exact missing period bases remain
+null. Ranking rows include `series_history` metadata. `v_fi_nav_canonical` and
+`v_nnm_daily_fi_continuous` provide a single identity per chain for administrator
+and ranking NNM, retaining original money amounts and existing coverage checks.
+No new worker job or full MV rebuild is required when an editor saves a link.
+Admin audit revisions invalidate workspace process caches across workers.
+
+FI `/return-series` defaults to `linked=true`; false uses only the requested raw
+series. Both modes use the same dividend accounting, include ex-dates without a
+NAV observation, and require a valid base on/before the requested start within
+seven days. Points include `source_serie`; currency discontinuities do not bridge.
+Confirmed predecessor names are hidden from the current fund-detail series picker;
+the raw `/nav` endpoint remains available for their original observations.
+
+Apply the migration before deploying these API changes. Validation:
+`RUN_WORKSPACE_DB_TESTS=1 PYTHONPATH=. .venv/bin/pytest -q tests/test_series_continuity.py`
+plus FI return, source/daily NNM, calendar-window and classification-admin regressions.
+Multi-step conversions, distribution scaling, unchanged raw data, zero artificial
+NNM, stale edits and removal/audit are tested with rollback-isolated local fixtures.
+
+### FM fund flow workspace
+
+`fund_flows.py` exposes `/industry-workspace/fund-flows/fm/{run}` for the fund-detail
+Flujos view. Native currency, rolling `period` (1D/1W/1M/3M/6M/1A/3A/5A/YTD), or
+inclusive `from_date` + `to_date` produce one cached response with every series,
+fund total, adjacent equal-length previous period, daily/weekly/monthly chart
+buckets, and calendar-month/YTD totals through the selected cutoff. Presets use
+calendar month/year subtraction plus one day, anchored to the latest fund cartola.
+The available history starts in 2020; unavailable prior periods remain partial.
+
+Series use validated paired nonnegative finite reported aportes/rescates in
+`cartola_diaria`. Fund totals subtract confirmed target-fund migrations separately;
+never allocate those adjustments to a series. Missing values remain null, genuine
+zeros remain zero. Ratios use a positive opening NAV from one snapshot date within
+seven days before the range. Missing calendar days or invalid flow observations
+suppress full-period ratios and previous-period differences; cumulative ratios
+stop at the first incomplete bucket. Coverage counts reported rows/dates, not
+proof that all possible series were filed. Series transfers are not necessarily
+external subscriptions/redemptions.
+
+Category peers use the exact current effective classification tuple, active FM
+with reported daily facts, same currency and dates, and exclude the selected fund.
+Existing `mv_nnm_daily_fm` facts supply peers; boundary NAV comes from indexed daily
+cartola queries. The category ratio and cumulative curve use one fixed cohort
+with complete daily coverage and positive opening NAV. Monthly/YTD absolute
+category NNM includes every active peer with NAV in the cutoff year, regardless
+of opening-NAV availability; it excludes this fund and reconciles disjoint months.
+The existing daily facts supply the calendar in one additional grouped query,
+with confirmed migrations, reported-row and fund-day coverage. Missing months
+remain null, never zero. This comparison replaces the frontend peer-ranking panel. No FX, average of fund percentages,
+new table, migration or job. Cache follows the shared classification/data-minute
+epoch. Deploy the API before the frontend. Tests: `tests/test_fund_flows.py`, with
+`RUN_WORKSPACE_DB_TESTS=1` for read-only PostgreSQL category/accounting fixtures.
+
+FI NNM rankings materialize the currency/date-filtered daily continuity facts
+once, aggregate the requested windows, then join eligible funds at the end.
+Do not move the eligibility join back into the FI observation CTE: PostgreSQL can
+choose a nested-loop scan of every fund against the full continuity result and
+hit the 20-second API timeout. The final join still excludes inactive funds and
+supplies current classifications. FM's indexed daily-fact query is unchanged.
+Regression coverage includes inactive FI, other currencies, nulls, gaps and
+calendar-window reconciliation in the ranking/calendar tests.
+
+Fund-flow date coverage uses the registry's `fecha_inicio_operaciones`: only days
+on/after confirmed inception are expected. Category monthly/YTD denominators sum
+per-fund expected days and exclude not-yet-started funds from the period count.
+Responses expose `pre_inception_days` and category `started_funds` so clients can
+explain adjustments. Missing official dates keep the full window; an earlier
+historical observation conflicting with the registry date disables the adjustment.
+The first downloaded date alone never proves inception (including new series).
+Complete observed cash flows since inception do not invent opening NAV, full-window
+ratios, or like-for-like previous-period differences. Tests cover midmonth starts,
+pre-inception months, unknown/conflicting dates, invalid rows and post-start gaps.

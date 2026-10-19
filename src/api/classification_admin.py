@@ -166,5 +166,5 @@ def update(kind: Kind,run: str,edit: Edit,editor: Editor):
 def classification_cache_epoch():
     # Shared DB revision makes edits invalidate every API worker's process cache.
     with SessionLocal() as session:
-        revision=session.execute(text('SELECT COALESCE(MAX(id),0) FROM classification_audit')).scalar_one()
+        revision=session.execute(text('SELECT (SELECT COALESCE(MAX(id),0) FROM classification_audit)+(SELECT COALESCE(MAX(id),0) FROM fi_series_link_audit)')).scalar_one()
     return (int(monotonic()//60),revision)

@@ -69,7 +69,7 @@ def test_long_windows_read_daily_facts_and_live_classifications(monkeypatch,kind
     assert m.flow_data(kind,'USD',start,end)==[]
     assert len(calls)==1
     sql,p=calls[0]
-    assert f'mv_nnm_daily_{kind}' in sql and f'categoria_{kind}_effective' in sql
+    assert ('v_nnm_daily_fi_continuous' if kind=='fi' else 'mv_nnm_daily_fm') in sql and f'categoria_{kind}_effective' in sql
     assert 'cartola_diaria' not in sql and 'valores_cuota_fi' not in sql
     assert p['start']==start and p['end']==end and p['currency']=='USD'
     if kind=='fm':
@@ -172,3 +172,30 @@ def test_nnm_progressive_windows_use_identical_explicit_cutoff(monkeypatch,windo
     assert {p['key'] for p in result['periods']}==expected
     assert len(calls)==2 and all(c[1]==date(2026,9,24) for c in calls)
     assert all({p for p,_ in c[2]}==expected for c in calls)
+
+
+def test_fi_returns_include_active_non_rescatables_with_same_series_currency_join(monkeypatch):
+    calls=[]
+    monkeypatch.setattr(api,'rows',lambda sql,p:calls.append((sql,p)) or [])
+    m.load_returns.cache_clear()
+    m.load_returns('fi','CLP',0)
+    sql,params=calls[0]
+    assert 'f.vigente IS TRUE' in sql
+    assert 'rescatable' not in sql
+    assert 'v_rentabilidad_fi_continuous' in sql
+    assert 'n.fecha=r.fecha_calculo' in sql and 'n.serie IS NOT DISTINCT FROM r.serie' in sql
+    assert params['currency']=='CLP'
+
+
+def test_fi_multi_period_facts_are_evaluated_once_before_eligibility_join(monkeypatch):
+    calls=[]
+    monkeypatch.setattr(api,'rows',lambda sql,p:calls.append((sql,p)) or [])
+    end=date(2026,10,18)
+    windows=[w for w in ts.flow_windows(end) if w['key']!='5A']
+    m.flow_data('fi','CLP',min(w['start'] for w in windows),end,[(w['key'],w['start']) for w in windows])
+    sql,params=calls[0]
+    observations=sql.split('observations AS MATERIALIZED (',1)[1].split('), windowed AS',1)[0]
+    assert 'JOIN eligible' not in observations
+    assert 'd.currency=:currency AND d.fecha BETWEEN :start AND :end' in observations
+    assert 'FROM totals t JOIN eligible f USING(run_fondo)' in sql
+    assert params['start']==date(2025,10,19)

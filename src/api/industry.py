@@ -149,7 +149,7 @@ def _snapshot_cte(include_returns: bool = True, include_ytd: bool = True) -> str
                NULL::numeric, NULL::numeric, fl.nnm_month, fl.nnm_ytd
         FROM fondos_inversion f LEFT JOIN fi_aum a USING (run_fondo)
         LEFT JOIN fi_series s USING (run_fondo, currency)
-        {'LEFT JOIN mv_rentabilidad_fi r ON r.run_fondo = s.run_fondo AND r.serie IS NOT DISTINCT FROM s.serie' if include_returns else ''}
+        {'LEFT JOIN v_rentabilidad_fi_continuous r ON r.run_fondo = s.run_fondo AND r.serie IS NOT DISTINCT FROM s.serie' if include_returns else ''}
         LEFT JOIN fi_cat c ON c.run_fondo = f.run_fondo
         LEFT JOIN fi_flows fl ON fl.run_fondo = a.run_fondo AND fl.currency = a.currency
         WHERE :fund_type != 'fm'
