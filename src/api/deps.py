@@ -15,7 +15,7 @@ def _pagination(
 
 def _cache_1h(response: Response, request: Request) -> None:
     classification_paths=("/industry", "/categories", "/rentability")
-    uses_classification=request.url.path.startswith(classification_paths) or re.fullmatch(r"/(mutual-funds|investment-funds)(/[^/]+)?/?",request.url.path) is not None
+    uses_classification=request.url.path.endswith("/return-series") or request.url.path.startswith(classification_paths) or re.fullmatch(r"/(mutual-funds|investment-funds)(/[^/]+)?/?",request.url.path) is not None
     response.headers["Cache-Control"] = ("no-cache" if uses_classification else "public, max-age=3600, s-maxage=3600")
 
 

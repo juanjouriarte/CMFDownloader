@@ -68,12 +68,28 @@ def positions_sql(run=None,kind=None,period=None):
 
 ENRICH="""SELECT p.*, COALESCE(f.nombre_fondo,fi.razon_social) fund_name,
 COALESCE(f.razon_social_administradora,fi.administrador) admin, COALESCE(e.razon_social,p.issuer_name,p.issuer_rut,'Sin emisor identificado') issuer,
-COALESCE(rc.name,p.instrument_type) instrument_name, COALESCE(country.name,p.country_code,'Sin país') country FROM p
+COALESCE(rc.name,p.instrument_type) instrument_name, COALESCE(country.name,p.country_code,'Sin país') country,
+held.name underlying_fund_name, held.run underlying_fund_run, held.kind underlying_fund_kind FROM p
 LEFT JOIN fondo_mutuo f ON p.kind='fm' AND f.run_fondo=p.run
 LEFT JOIN fondos_inversion fi ON p.kind='fi' AND fi.run_fondo=p.run
 LEFT JOIN emisores e ON p.issuer_rut=e.rut
 LEFT JOIN ref_codes rc ON rc.domain='instrument' AND rc.code=p.instrument_type
-LEFT JOIN ref_codes country ON country.domain='country' AND country.code=p.country_code"""
+LEFT JOIN ref_codes country ON country.domain='country' AND country.code=p.country_code
+LEFT JOIN (
+    SELECT regexp_replace(upper(trim(nemotecnico)), '[[:space:]-]', '', 'g') ticker,
+           min(kind) kind, min(run) run, min(name) name
+    FROM (
+        SELECT n.nemotecnico, 'fm' kind, n.run_fondo run,
+               COALESCE(NULLIF(trim(f.nombre_fondo),''), NULLIF(trim(n.nombre_fondo),'')) name
+        FROM nemotecnicos n LEFT JOIN fondo_mutuo f ON f.run_fondo=n.run_fondo
+        UNION ALL
+        SELECT n.nemotecnico, 'fi' kind, n.run_fondo run,
+               COALESCE(NULLIF(trim(f.razon_social),''), NULLIF(trim(n.nombre_fondo),'')) name
+        FROM nemotecnicos_fi n LEFT JOIN fondos_inversion f ON f.run_fondo=n.run_fondo
+    ) quota_names
+    GROUP BY 1 HAVING COUNT(DISTINCT (kind,run))=1
+) held ON held.ticker=regexp_replace(upper(trim(p.identifier)), '[[:space:]-]', '', 'g')
+    AND held.ticker<>'' AND p.instrument_type LIKE 'CF%'"""
 
 @router.get('/portfolio/{kind}/{run}')
 def portfolio(kind:Literal['fm','fi'],run:str,period:date|None=None):
@@ -92,9 +108,11 @@ def instruments(search:str=Query('',max_length=150),identifier:str|None=None,ins
     if identifier:
         return rows(sql+"SELECT * FROM enriched WHERE identifier=:identifier AND instrument_type IS NOT DISTINCT FROM :instrument_type AND issuer=:issuer ORDER BY weight DESC NULLS LAST",params)
     return rows(sql+"""SELECT identifier,instrument_type,issuer, MAX(instrument_name) instrument_name,
+    MAX(underlying_fund_name) underlying_fund_name,
+    MAX(underlying_fund_run) underlying_fund_run, MAX(underlying_fund_kind) underlying_fund_kind,
     COUNT(DISTINCT (kind,run)) funds, MIN(periodo) oldest, MAX(periodo) newest
     FROM enriched WHERE NULLIF(TRIM(identifier),'') IS NOT NULL AND identifier NOT IN ('NaN','0')
-    AND (identifier ILIKE :search OR issuer ILIKE :search)
+    AND (identifier ILIKE :search OR issuer ILIKE :search OR underlying_fund_name ILIKE :search)
     GROUP BY identifier,instrument_type,issuer ORDER BY funds DESC,identifier LIMIT 100""",params)
 
 @router.get('/owners')
@@ -398,3 +416,12 @@ router.include_router(portfolio_history_router)
 
 from .instrument_history import router as instrument_history_router
 router.include_router(instrument_history_router)
+
+from .ownership import router as ownership_router
+router.include_router(ownership_router)
+
+from .ownership_analysis import router as ownership_analysis_router
+router.include_router(ownership_analysis_router)
+
+from .fund_flows import router as fund_flows_router
+router.include_router(fund_flows_router)

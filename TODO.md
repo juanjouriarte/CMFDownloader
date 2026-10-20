@@ -55,6 +55,26 @@ Ran manually against local dev DB — no CMF page-structure breakage found:
 
 ## Production (deferred until local work is done)
 
+- [ ] **Deploy the Insiders data pipeline after local validation.** Apply the new
+  `insider_*` table migrations, load both CMF VI/NV lists from January 2020,
+  verify `/insiders/coverage`, and restart the worker to register the daily
+  08:45 job. Deploy the Insiders explorer API before the frontend tab; validate
+  exact-RUT aportantes links and date filters on the remote database.
+
+- [ ] **Repeat the validated local data repair on the remote server.**
+  Deploy the FI NAV job's rolling three-calendar-month window (including older
+  gaps within that window) and the idempotent monthly TAC replacement fix.
+  Back up the remote database, then rerun the data jobs from **2026-07-01**:
+  FM/FI NAV, portfolios, TAC, dividends, identities, classifications and FI
+  aportantes/cuotas. Also repair FI NAV for June 2026, rebuild June's FM
+  classifications and reload May 2026 TAC to replace duplicate/stale imports.
+  Use a server-specific runner: `scripts/reload_local_data.py`
+  deliberately rejects remote databases. Refresh NNM, industry, returns and
+  administrator summaries; verify daily NAV coverage, TAC duplicate counts and
+  source availability for quarterly FI reports. Restart the remote worker so
+  scheduled jobs use the new code, and verify the next scheduled execution.
+  This is pending remote work; the current repairs are local only.
+
 - [ ] `financial-cmf.ddns.net` is not resolving via DNS at all right now (direct IP to
       146.181.34.54:80/443 works fine — nginx itself is healthy).
 - [ ] App VM (146.181.34.54) containers (web/worker/mcp) are all up and `/health` returns
@@ -65,3 +85,10 @@ Ran manually against local dev DB — no CMF page-structure breakage found:
       before Postgres can be inspected there.
 - User says this is a known issue — not chasing it until local work (bug fixes + new
   endpoints) is done.
+
+- [ ] **Review BTG Small Cap's earlier series history before adding more links.**
+  Local RUN 7018 series A has a reporting gap from 2025-04-09 to 2026-08-20.
+  The documented A → O rename on 2026-09-07 is implemented; it does not resolve
+  that older gap. Verify CMF/BTG documents and source observations for any earlier
+  transitions (including U), without inferring a link from similar NAV alone.
+  Keep affected exact-date 1A/YTD returns unavailable until their bases are established.

@@ -29,6 +29,7 @@ import src.db.models.categoria_fm  # noqa: F401
 import src.db.models.ref_codes  # noqa: F401
 import src.db.models.classification_overrides  # noqa: F401
 import src.db.models.fm_flow_adjustments  # noqa: F401
+import src.db.models.insiders  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", DATABASE_URL)

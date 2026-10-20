@@ -131,7 +131,7 @@ def rentability_fi(
         )
         SELECT r.run_fondo, r.serie, f.razon_social, r.administrador, r.valor_actual,
                r.fecha_calculo, r.r_1d, r.r_1w, r.r_1m, r.r_1y, r.r_5y, r.r_ytd
-        FROM mv_rentabilidad_fi r
+        FROM v_rentabilidad_fi_continuous r
         LEFT JOIN fondos_inversion f ON f.run_fondo = r.run_fondo
         LEFT JOIN latest_cat c ON c.run_fondo = r.run_fondo
         {where}

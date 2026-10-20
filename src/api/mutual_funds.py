@@ -347,14 +347,20 @@ def get_fund_nav(
 
 
 @router.get("/{run}/tac", response_model=list[TACInfo])
-def get_fund_tac(run: str, _: CacheHook) -> list[TACInfo]:
-    """TAC history for a mutual fund — last 24 months, descending."""
+def get_fund_tac(run: str, _: CacheHook, full_history: bool = False) -> list[TACInfo]:
+    """All series; last 24 reports by default, full stored history on request."""
+    period_filter = "" if full_history else """
+          AND periodo IN (
+              SELECT DISTINCT periodo FROM tac WHERE run_fondo = :run
+              ORDER BY periodo DESC LIMIT 24
+          )
+    """
     sql = text("""
         SELECT periodo, serie, tac_total, tac_rem_fija, tac_rem_var, tac_gastos_op
         FROM tac
         WHERE run_fondo = :run
+    """ + period_filter + """
         ORDER BY periodo DESC, serie
-        LIMIT 24
     """)
     with SessionLocal() as session:
         rows = session.execute(sql, {"run": run}).mappings().all()

@@ -153,7 +153,7 @@ def search_funds(
                 r.valor_actual                          AS valor_cuota_actual,
                 r.fecha_calculo
             FROM fondos_inversion fi
-            LEFT JOIN mv_rentabilidad_fi r ON r.run_fondo = fi.run_fondo
+            LEFT JOIN v_rentabilidad_fi_continuous r ON r.run_fondo = fi.run_fondo
             WHERE (fi.razon_social ILIKE :q OR fi.administrador ILIKE :q)
               {vigente_fi} {type_filter_fi}
         ) combined
@@ -226,7 +226,7 @@ def compare_funds(
                 r.valor_actual, r.fecha_calculo,
                 r.r_1d, r.r_1w, r.r_1m, r.r_1y, r.r_5y, r.r_ytd,
                 vc.patrimonio_neto AS aum_clp
-            FROM mv_rentabilidad_fi r
+            FROM v_rentabilidad_fi_continuous r
             LEFT JOIN fondos_inversion f ON f.run_fondo = r.run_fondo
             LEFT JOIN LATERAL (
                 SELECT patrimonio_neto FROM valores_cuota_fi
@@ -292,7 +292,7 @@ def top_funds_by_return(
                            r.run_fondo, r.serie, f.razon_social AS nombre, r.administrador,
                            r.valor_actual, r.fecha_calculo,
                            r.r_1d, r.r_1w, r.r_1m, r.r_1y, r.r_5y, r.r_ytd
-                    FROM mv_rentabilidad_fi r
+                    FROM v_rentabilidad_fi_continuous r
                     LEFT JOIN fondos_inversion f ON f.run_fondo = r.run_fondo
                     WHERE r.{sort_by} IS NOT NULL {admin_filter}
                     ORDER BY r.run_fondo, r.{sort_by} DESC NULLS LAST
@@ -918,7 +918,7 @@ def get_fund_full_picture(
                    r.serie, r.valor_actual, r.fecha_calculo,
                    r.r_1d, r.r_1w, r.r_1m, r.r_1y, r.r_5y, r.r_ytd
             FROM fondos_inversion fi
-            LEFT JOIN mv_rentabilidad_fi r ON r.run_fondo = fi.run_fondo
+            LEFT JOIN v_rentabilidad_fi_continuous r ON r.run_fondo = fi.run_fondo
             WHERE fi.run_fondo = :run
         """, {"run": run_fondo})
         result["identity"] = rows
@@ -1185,7 +1185,7 @@ def get_administrator_funds(admin: str, vigente: bool = True) -> dict:
         LEFT JOIN (
             SELECT DISTINCT ON (run_fondo) run_fondo, serie, valor_actual, fecha_calculo,
                    r_1d, r_1w, r_1m, r_1y, r_5y, r_ytd
-            FROM mv_rentabilidad_fi
+            FROM v_rentabilidad_fi_continuous
             ORDER BY run_fondo, r_1y DESC NULLS LAST
         ) r ON r.run_fondo = fi.run_fondo
         LEFT JOIN LATERAL (
@@ -1484,7 +1484,7 @@ def market_overview() -> dict:
     # Top 5 FI funds by 1Y return
     result["top_fi_funds_1y"] = _rows("""
         SELECT r.run_fondo, f.razon_social AS nombre, r.administrador, r.r_1y, r.r_ytd
-        FROM mv_rentabilidad_fi r
+        FROM v_rentabilidad_fi_continuous r
         LEFT JOIN fondos_inversion f ON f.run_fondo = r.run_fondo
         WHERE r.r_1y IS NOT NULL
         ORDER BY r.r_1y DESC NULLS LAST

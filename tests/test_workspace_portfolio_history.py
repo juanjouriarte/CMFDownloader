@@ -123,6 +123,9 @@ def test_loader_batches_dates_and_includes_opening_baseline(monkeypatch, kind, m
     assert 'run_fondo=:run' in calls[1][0]
     assert ('cantidad_unidades' if kind == 'fm' else 'cant_unidades') in calls[1][0]
     assert 'c.tipo_unidades quantity_unit' in calls[1][0]
+    assert ('c.tir::text' if kind == 'fm' else 'c.tir_val_par_precio::text') in calls[1][0]
+    assert 'c.fecha_vencimiento maturity_date' in calls[1][0]
+    assert 'c.base_tasa rate_base' in calls[1][0]
     m.load_history.cache_clear()
 
 
@@ -133,3 +136,16 @@ def test_loader_rejects_unreported_period(monkeypatch):
     with pytest.raises(m.HTTPException) as exc:
         m.load_history('fm', '1', D[1], 12, 0)
     assert exc.value.status_code == 422
+
+
+def test_underlying_fund_name_does_not_change_identity_or_history():
+    original = position(quantity=100, quantity_unit='CUOTAS', fund_name='Owning Fund')
+    named = dict(original, underlying_fund_name='Held Fund', underlying_fund_run='42',
+                 underlying_fund_kind='fi')
+    assert m.identity(original) == m.identity(named)
+    old = m.build_history([original], D, D)['instruments'][0]
+    new = m.build_history([named], D, D)['instruments'][0]
+    assert new['underlying_fund_name'] == 'Held Fund'
+    assert new['fund_name'] == 'Owning Fund'
+    for field in ['id', 'issuer_id', 'weights', 'quantities', 'present', 'report_dates']:
+        assert new[field] == old[field]

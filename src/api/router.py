@@ -12,6 +12,9 @@ from .industry import router as industry_router
 from .ref_codes import router as ref_codes_router
 from .emisores import router as emisores_router
 from .bolsa import router as bolsa_router
+from .insiders import router as insiders_router
+from .fund_distributions import router as fund_distributions_router
+from .insiders_explorer import router as insiders_explorer_router
 from .industry_workspace.router import router as workspace_router
 
 router = APIRouter()
@@ -25,6 +28,9 @@ router.include_router(industry_router)
 router.include_router(ref_codes_router)
 router.include_router(emisores_router)
 router.include_router(bolsa_router)
+router.include_router(insiders_router)
+router.include_router(fund_distributions_router)
+router.include_router(insiders_explorer_router)
 
 router.include_router(workspace_router)
 
@@ -33,3 +39,6 @@ router.include_router(classification_admin_router)
 
 from .shared_rankings import router as shared_rankings_router
 router.include_router(shared_rankings_router)
+
+from .series_continuity import router as series_continuity_router
+router.include_router(series_continuity_router)
