@@ -70,11 +70,17 @@ Ran manually against local dev DB — no CMF page-structure breakage found:
   partial recent coverage; FI portfolios remain June because September returned
   no holdings. The two known isolated historical FM NAV gaps remain.
   Evidence: ignored `output/data-refresh-20261026/` reports.
-- [ ] **Deploy the remaining local application changes separately.** The database
-  now has migration `a3b4c5d6e7f8`, including insurance and fund-deposit tables,
-  but this database replacement did not deploy code. Include both new migration
-  files before running a future Alembic upgrade, plus the FM 14-day NAV lookback
-  and CAPTCHA fallback fixes. Verify the next scheduled jobs after deployment.
+- [x] **Deploy the remaining application changes (2026-10-26).** Backend PR #48
+  deployed migrations through `a3b4c5d6e7f8`, insurance/fund-deposit APIs and jobs,
+  FI detail returns, FM's 14-day NAV lookback and CAPTCHA fallback. Dashboard
+  PR #4 is published at `https://btg-dashboard-psi.vercel.app`. The backend's
+  ten live API checks passed, and the new jobs are registered at 08:35/08:55.
+- [ ] **Verify the next scheduled executions** of `fund_deposits`,
+  `insurance_portfolios` and the updated FM NAV job.
+- [ ] **Improve insurance summary performance on the production VM.** The first
+  September summary with currency breakdowns took 39.47 seconds; the fixed-income
+  issuer matrix took 13.93 seconds. Both returned HTTP 200. Reduce repeated scans
+  while preserving filters, coverage and the CLP valuation contract.
 
 - [ ] `financial-cmf.ddns.net` is not resolving via DNS at all right now (direct IP to
       146.181.34.54:80/443 works fine — nginx itself is healthy).
@@ -96,7 +102,8 @@ Ran manually against local dev DB — no CMF page-structure breakage found:
 
 Scope: local CSVID public exports for August/September 2026, 33 insurers and
 12 file families per month. Insurance tables/data were restored to production on
-2026-10-26; the insurance application code and UI still await deployment.
+2026-10-26; the insurance application code and UI were subsequently deployed via
+backend PR #48 and dashboard PR #4 on the same date.
 These are reported positions, not necessarily distinct instruments or loans.
 
 The local Seguros view, four persistence tables, and daily worker job are now
