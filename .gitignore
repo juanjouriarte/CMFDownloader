@@ -14,6 +14,10 @@ downloads/
 output/industry-concept/
 output/data-audit/
 output/local-refresh/
+output/insurance-pilot/
 
 # Private local administrator access keys.
 .local/
+
+# Local database refresh reports and preserved editor state.
+output/data-refresh-*/

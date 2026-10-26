@@ -127,3 +127,46 @@ def test_edit_version_audit_remove_and_validation(db):
     assert audit[1]['actor']=='test-editor'
     session.execute(text("UPDATE valores_cuota_fi SET moneda='PROM' WHERE run_fondo=:run AND serie='O'"),dict(run=run))
     with pytest.raises(HTTPException):m.validate_observations(session,run,[link()])
+
+
+def test_detail_returns_use_each_series_latest_valid_date_and_keep_rankings_separate(db):
+    from src.api.fi_detail_returns import latest_series_returns
+    session, run = db
+    # A fund need not exist in the shared-date ranking to have detail returns.
+    assert not session.execute(text('SELECT 1 FROM mv_rentabilidad_fi WHERE run_fondo=:run'),dict(run=run)).first()
+    result = {r['serie']: r for r in latest_series_returns(session, run)}
+    assert result['B']['fecha_calculo'] == date(2026,1,2)
+    assert result['A']['fecha_calculo'] == date(2026,1,3)
+    assert result['O']['fecha_calculo'] == date(2026,1,6)
+    assert result['O']['r_1d'] == Decimal('1.8182')
+    assert result['O']['r_1y'] is None
+    # Invalid and future observations cannot displace the last usable endpoint.
+    for day, price, currency, aum in [('2099-01-01','999','$$',1000),
+        ('2026-01-07','NaN','$$',1000),('2026-01-08','99',None,1000),
+        ('2026-01-09','99','$$',-1),('2026-01-10','0','$$',1000)]:
+        session.execute(text("""INSERT INTO valores_cuota_fi(run_fondo,serie,fecha,valor_libro,moneda,patrimonio_neto)
+            VALUES(:run,'O',:day,:price,:currency,:aum)"""),dict(run=run,day=day,price=price,currency=currency,aum=aum))
+    result = {r['serie']: r for r in latest_series_returns(session, run)}
+    assert result['O']['fecha_calculo'] == date(2026,1,6)
+    assert result['O']['r_1d'] == Decimal('1.8182')
+    assert not session.execute(text('SELECT 1 FROM mv_rentabilidad_fi WHERE run_fondo=:run'),dict(run=run)).first()
+
+
+def test_detail_returns_honor_confirmed_chain_and_missing_currency(db, monkeypatch):
+    from contextlib import contextmanager
+    from src.api import investment_funds as fi
+    session, run = db
+    apply_chain(session, run)
+    @contextmanager
+    def same_session(): yield session
+    monkeypatch.setattr(fi, 'SessionLocal', same_session)
+    detail = fi.get_investment_fund(run, None)
+    assert [r.serie for r in detail.rentability] == ['O']
+    r = detail.rentability[0]
+    assert r.fecha_calculo == date(2026,1,6)
+    assert r.r_ytd == 22  # converted predecessor prices and distributions
+    assert r.r_1w == 22
+    session.execute(text("UPDATE valores_cuota_fi SET moneda=NULL WHERE run_fondo=:run AND serie='A'"),dict(run=run))
+    r = fi.get_investment_fund(run,None).rentability[0]
+    assert r.r_1d == 1.8182
+    assert r.r_1w is None and r.r_ytd is None

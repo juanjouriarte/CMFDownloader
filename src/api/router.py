@@ -42,3 +42,9 @@ router.include_router(shared_rankings_router)
 
 from .series_continuity import router as series_continuity_router
 router.include_router(series_continuity_router)
+
+from .fund_deposits import router as fund_deposits_router
+router.include_router(fund_deposits_router)
+
+from .insurance import router as insurance_router
+router.include_router(insurance_router)

@@ -229,17 +229,8 @@ def get_investment_fund(run: str, _: CacheHook) -> FundFIDetail:
             {"run": run},
         ).mappings().all()
 
-        rent_rows = session.execute(
-            text("""
-                SELECT r.run_fondo, r.serie, f.razon_social, r.administrador,
-                       r.valor_actual, r.fecha_calculo,
-                       r.r_1d, r.r_1w, r.r_1m, r.r_1y, r.r_5y, r.r_ytd
-                FROM v_rentabilidad_fi_continuous r
-                LEFT JOIN fondos_inversion f ON f.run_fondo = r.run_fondo
-                WHERE r.run_fondo = :run
-            """),
-            {"run": run},
-        ).mappings().all()
+        from .fi_detail_returns import latest_series_returns
+        rent_rows = latest_series_returns(session, run)
 
         cat_row = session.execute(
             text("""
