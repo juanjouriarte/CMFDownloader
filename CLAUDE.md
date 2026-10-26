@@ -6,6 +6,15 @@ This is the canonical project instructions file for coding agents working in thi
 
 Daily ETL pipeline that downloads public datasets from the Chilean CMF (Comisión para el Mercado Financiero) and Bolsa de Santiago, loads them into PostgreSQL, and exposes a public read API.
 
+## Dashboard UI work
+
+For changes to the sibling `../BTGDashboard`, read its `CLAUDE.md`, including
+“UI consistency rules for AI contributors”. Industria → Evolución de patrimonio
+is the agreed visual reference for calendars, period presets, selectors and
+charts. Reuse its shared controls (daily/monthly `EvolutionPeriodPicker`, return
+presets and searchable selectors); keep financial calculations separate from
+styling. Apply this to the requested view, not an unsolicited app-wide redesign.
+
 ## Stack
 
 - **Language**: Python 3.11
@@ -32,7 +41,7 @@ Two Oracle Cloud Always Free VMs (VM.Standard.E2.1.Micro — 1 OCPU, 1 GB RAM ea
 ### SSH access
 ```bash
 ssh -i ~/.ssh/oracle_cmf.key ubuntu@146.181.34.54   # app VM
-ssh -i ~/.ssh/oracle_cmf.key ubuntu@146.181.47.236  # db VM
+ssh -i "$HOME/Downloads/ssh-key-2026-06-08 (2).key" ubuntu@146.181.47.236  # db VM
 ```
 
 ### Deploy (automatic via GitHub Actions)
@@ -264,6 +273,16 @@ latest stored NAV: that date cannot establish completeness of prior dates or
 series. Explicit NAV backfills also revisit the entire requested range without
 requiring `force=True`. An empty recent-range response cannot mark an inactive
 fund permanently empty; that requires a full-history request.
+
+FM daily NAV rechecks at least 14 days, including previously stored dates, to
+capture delayed reports. A recent maximum date must not skip incomplete earlier
+days; older stored dates still trigger a full catch-up. Regression coverage:
+`tests/test_fm_nav_downloader.py`.
+
+The CAPTCHA reader supports `CMF_CAPTCHA_MODEL` (default `gemma-4-31b-it`) and
+`CMF_CAPTCHA_FALLBACK_MODEL` (default `gemini-3.1-flash-lite`; empty disables it).
+After bounded primary retries, one fallback attempt prevents a provider outage
+from blocking the imports. Test via `tests/test_captcha.py`; never log keys.
 
 For a local-only fund data reload, use
 `PYTHONPATH=. .venv/bin/python scripts/reload_local_data.py --since YYYY-MM-DD`.
@@ -1275,3 +1294,308 @@ The first downloaded date alone never proves inception (including new series).
 Complete observed cash flows since inception do not invent opening NAV, full-window
 ratios, or like-for-like previous-period differences. Tests cover midmonth starts,
 pre-inception months, unknown/conflicting dates, invalid rows and post-start gaps.
+
+### CMF fund-deposit registry (Nuevos Fondos)
+
+`src/etl/fundDeposits` downloads the full CMF `deposito_fondos_mutuos.php`
+registry daily at 08:35 America/Santiago using tracked job `fund_deposits`.
+Migration `f2a3b4c5d6e7` adds `fund_deposits`, `fund_deposit_imports` and
+`fund_deposit_revisions`. Initial and daily runs fetch the full registry, including
+historical and inactive funds; no NAV requirement or 2020 cutoff applies.
+Use `PYTHONPATH=. .venv/bin/python -m src.etl.fundDeposits.downloader` for a
+local-only manual run (`--file PATH` accepts a previously fetched full response).
+
+The parser validates all 19 column headers, complete HTML/table boundaries,
+identities, dates, types and document URL hosts. CMF renders two identical tables;
+these must agree and are imported once. The identity is (registration, RUN),
+since registration alone is not unique in the source. Blank fund names remain
+blank, with the UI showing the RUN instead. Empty document placeholders are
+ignored; nonempty references without links are preserved with null URLs. Legacy
+SVS document paths are normalized to official HTTPS CMF URLs and their exact
+source URLs are retained. Deposit date is not an inferred fund-inception date.
+
+Imports use an advisory lock and one transaction. Current data is upserted;
+changed definitions/documents are retained as timestamped observed revisions.
+Unchanged imports do not create revisions. Missing source entries are retained
+with `source_present=false`, never inferred liquidated. Empty, malformed,
+conflicting mirrored tables, or a snapshot losing over 20% of previous source
+rows fail the job without replacing the last good snapshot. Import provenance
+includes source URL, SHA-256, retrieval time and inserted/updated counts.
+
+Read APIs: `/industry-workspace/new-funds` supports exact multi-administrator,
+FM/FIR/FNR, status, search and inclusive dates on deposit or modification, with
+stable newest-first pagination and filtered totals. `/new-funds/directory`
+provides admin options, source date bounds, latest successful import and schedule.
+Both query stored data; no on-demand CMF scraping. Test with
+`RUN_WORKSPACE_DB_TESTS=1 PYTHONPATH=. .venv/bin/pytest -q tests/test_fund_deposits.py`.
+DB tests use transaction-scoped temporary tables, leaving existing registry data
+untouched. Deploy migration and import before exposing the frontend tab.
+
+### Insurance investment portfolios
+
+`src/etl/insurance` provides a Circular 1835 archive client and strict
+parsers for all 12 families present in the public pilot: I debt, A shares/FI,
+F FM, B property, X foreign investments, O other investments, P derivatives/repos,
+C control, D descriptors, T payment schedules, E eligible cash flows, G collateral.
+The original inspection-only pilot remains available. Run
+`PYTHONPATH=. .venv/bin/python -m src.etl.insurance.pilot --download --local-reference`
+to fetch the latest two published months with the existing `src/captcha.py`
+helper. Omit `--download` to revalidate staged files without CMF/Gemini calls.
+`--local-reference` enforces a local DB host and read-only transactions; labels
+are looked up by exact identifiers. `--group CSVID` is the default; CSGEN uses
+the same transport but requires its own live validation before rollout.
+
+ZIPs, hashes, source URLs, retrieval times, JSON validation reports, fund holdings,
+administrator/insurer totals, and monthly changes remain under ignored
+`output/insurance-pilot/`. These pilot artifacts remain reproducible and are not
+deleted by the persistent loader. Test with
+`PYTHONPATH=. .venv/bin/pytest -q tests/test_insurance_pilot.py tests/test_insurance_public_families.py tests/test_insurance_workspace.py`.
+Set `RUN_WORKSPACE_DB_TESTS=1` for transactional local integration fixtures.
+
+Migration `a3b4c5d6e7f8` adds `insurance_archives` (original compressed ZIP bytes,
+SHA, retrieval time and source URL), `insurance_imports` (active monthly snapshot
+and report), `insurance_files` (including quarantines and reconciliation evidence),
+and `insurance_records` (typed searchable fields plus every accepted raw field).
+The initial local import is August and September 2026 CSVID only. Import explicit
+staged ZIPs using `python -m src.etl.insurance.jobs --archive PATH` (repeatable).
+The manual CLI rejects nonlocal DB hosts; scheduled workers use their configured DB.
+
+`loader.py` validates complete insurer/family coverage, serializes concurrent imports
+with an advisory lock, and activates replacements atomically. An unchanged archive
+hash and parser version only update the last-check timestamp. Revisions retain old
+archives/reports/file metadata but replace old parsed rows. A decline exceeding 20%
+of accepted records stops replacement for review. Failed imports preserve the last
+active snapshot. Bad files stay excluded; field-level syndicated-loan warnings are
+retained without correcting reported participation, borrower identity or yield.
+
+Tracked job `insurance_portfolios` runs daily at 08:55 America/Santiago in the
+separate worker. It fetches the latest two published months, never earlier than
+August 2026, using the existing CAPTCHA helper. Successful imports remove only
+the job's staging download after the original archive is stored in PostgreSQL.
+CSGEN remains blocked until independently validated against live source files.
+
+Read API `/industry-workspace/insurance` provides `/directory`, `/summary`,
+`/records`, `/records/{id}`, and `/coverage`. Filters include month, insurer RUT,
+reported administrator RUT, asset class, instrument denomination, family, search,
+and holdings/contracts/support section. Records are paginated and allowlisted for
+sorting; row detail loads on demand. Coverage describes source files for the month
+and insurer, independently of instrument/AGF filters. Personal mortgage-debtor
+identifiers are omitted from public detail responses.
+
+`/summary?include_breakdowns=true` additionally groups accepted primary holdings
+by asset/currency and by month/currency for the dashboard's default Seguros
+Panorama. Both reconcile to the corresponding CLP summary and honor the same
+filters. Missing denomination stays a separate null bucket. These optional
+breakdowns do not sum original-currency notionals or include complementary rows.
+`metrics.unvalued_records` counts primary positions without a final valuation.
+Instrument denomination is distinct from the source's final value in M$: the
+parser multiplies that value by 1,000 once to persist CLP.
+
+`/portfolio-heatmap` powers the unified Cartera matrix. Without `asset_class`,
+columns are asset classes; with it, columns are instruments (24 per page, maximum
+60). Filters include insurer, AGF, denomination, text and exact instrument type.
+`insurance_portfolio.py` aggregates primary positions once per insurer/instrument,
+returns all insurers, and keeps totals and heat scale over the full filtered
+selection, independently of pagination. Source records remain accessible via detail.
+Fondos uses its existing classification/RUN-specific endpoints inside Cartera.
+
+`/portfolio-history` requires one insurer, supports the same 1–60 month range,
+and returns 100 instruments per page (maximum 200). SQL selects identities before
+building monthly points, including one baseline month; sorting by name, current
+position, or a month in the selected value/delta/deltaPct mode applies to the whole
+result. CSV is a frontend current-page export. No NAV lookup runs here.
+Usable families required for comparison: I/X debt, A/X equities, B/X property,
+O other assets, X subsidiaries; all relevant families for the all-class summary.
+Validated files are usable, with approved count recovery also usable for A/F.
+Missing or partial sources cannot produce zero holdings or fabricated exits.
+
+Instrument identity uses exact identifier, type, issuer, series, denomination and
+country. MHA/MHB mortgages, CLEAS, CS, DPL/DPC, OIE and BR identifiers are also
+scoped by insurer; property uses insurer/municipality/city/roll, and O records use
+insurer/type/identifier/asset code/currency. These conservative keys do not infer
+cross-insurer relationships for local assets. Missing/placeholder identifiers
+remain separate records, with no historical delta or inferred zero. No fuzzy
+names or personal borrower identifiers are used to establish continuity.
+
+`/fund-heatmap` aggregates accepted primary fund holdings by insurer, fund,
+reported AGF and denomination, summing series/subportfolios once. It joins
+`categoria_fm_effective` / `categoria_fi_effective` by exact `(kind, RUN)`,
+choosing the latest classification up to today, including manual overrides.
+This is explicitly **current** classification applied to a historical holding,
+not an as-of insurer taxonomy. Never join only on RUN, name or similar ticker.
+Private/foreign/unmatched funds remain unclassified and inside the observed
+fund total. No active-fund or NAV requirement is imposed. Insurers with no
+accepted fund positions remain in the directory with unavailable amounts,
+not inferred zero investment. A/F/X file-quality flags accompany insurer rows.
+The endpoint reads existing snapshots; no extra ETL or materialized copy is needed.
+
+`/fund-history` provides an insurer/AGF/category-filtered monthly fund matrix,
+with 1–60 month windows or explicit `from_month` and ending `period`. It batches
+the selected snapshots plus one previous month for deltas. Fund identities
+aggregate all selected insurer/series/subportfolio rows once; fund NAV is not
+multiplied by the number of insurers. Leading pre-import months are omitted
+from columns with explicit requested/loaded-month counts; internal gaps stay null.
+Baseline-only funds remain visible for observed exits in a one-month window.
+The dashboard now requests `include_fund_metrics=false` for this position-only
+matrix, skipping NAV and Aportantes lookups. The default remains true for existing
+API consumers requiring fund AUM/ownership; position and delta logic is identical.
+
+`insurance_history.py` checks the insurer cohort observed for each fund. Both
+domestic (F for FM, A for FI/FIP) and X files must be usable before absence
+becomes zero or a consecutive-month delta is calculated. A/F approved count
+recoveries are usable with warnings; X must be validated. Missing/quarantined
+sources cannot generate an exit. Deltas describe reported valuation changes,
+not flows, trading or returns.
+
+Fund AUM uses actual NAV at that month-end, with the monthly industry view as
+a dated fallback when an exact-close NAV is unavailable. It remains in its native
+currency; multiple denominations stay separate. Ownership first uses same-date
+CMF Aportantes percentages where all selected holders match and no AGF/currency
+filter narrows the position. Otherwise it may estimate the selected holders'
+share from summed units × the exact series NAV divided by whole-fund NAV,
+requiring one common native currency and the same closing date. This works
+without an FX rate for USD funds. A comparable CLP valuation/NAV ratio is a
+fallback when series units cannot be matched. Estimates carry explicit sources.
+Missing/stale/mixed-currency/nonpositive/incomplete bases and results outside
+0–100% stay unavailable with reasons, never clamped. No fuzzy series matching,
+current FX, or portfolio-implied AUM is used.
+
+The dashboard's **Seguros** tab uses these endpoints independently of the fund NAV
+universe. Values are CMF-reported CLP, displayed in MM CLP; denomination is not a
+request to convert valuations. PROM maps to USD; CMF USD stays `USD_SEGURO`.
+Derivative currency filters match either reported swap leg. Observed totals exclude
+complementary holdings, contracts and auxiliary records, and are not certified AUM.
+Optional complementary detail never changes those totals. Monthly valuation
+comparisons retain each month's accepted coverage and are not labelled flows,
+trades or investment returns.
+
+Use the consolidated `Anexos_Tecnicos_Circular_N1835.pdf` in CMF's
+`/sitio/seil/software-manual/sgsci/` directory. The individual PDFs linked from
+`SGSCI_circ_1835.doc` have obsolete field offsets. Current public exports use
+`<family>YYYYMM<V|G>.<insurer RUT>`, UTF-8, fixed character widths, and implied
+numeric decimals. Widths: I=970, A=572, F=361, C=138, B=506, X=611, O=510,
+P=587, D=108, T=80, E=178, G=300. X has detail types 2–5 and trailer 6;
+P has detail types 2–6 and trailer 7. Explicit detail filler must be blank.
+`extended_layouts.py` defines all fields for the additional families. Do not count
+UTF-8 bytes as character positions or trim entire records. Older history needs
+explicit versioned layouts before the proposed January 2020 backfill; dates
+before December 2024 are rejected rather than silently using current offsets.
+Live validation covers August/September 2026 CSVID. X type 4 was not observed;
+the sole X type 5 source has nonblank filler and remains quarantined. Their
+layouts have synthetic specification tests, not accepted real-source fixtures.
+R (loans) and V (rental/mortgage arrears) are in the manual but absent from these
+public archives; no data is inferred for them.
+
+Validate header/filename/request identity and month, full record widths, numeric
+fields and closing record counts. Never silently reassign an insurer or a period.
+The parser stays strict by default; inspection mode permits only a numeric
+trailer-count mismatch, retaining original counts/hashes and validating every
+other field. `insurance/reconciliation.py` may recover the F11 (CFI/CFIP/CFIPOIND)
+or F31 (CFM) category only when its positive final-value sum matches the separate
+C control exactly. Unknown instrument variants, duplicate detail rows, missing
+controls, negative values, or identity/date conflicts cannot recover a category.
+No tolerance, rewriting of source records, or empty 0=0 match is used.
+
+Recovered holdings have `count_warning_reconciled` quality; their file status is
+`accepted_with_warning`, limited to the verified fund rows. A count-defective C
+file is only `partially_reconciled`: unmatched control rows remain excluded.
+Other defects and uncorroborated count mismatches remain quarantined. A control
+file may itself have a count warning, but its category value must independently
+agree with the separate detail file; this is evidence for warning-labelled use,
+not certification of each series/quantity or the whole portfolio. JSON evidence
+includes both files/hashes, exact values/residuals and accepted/excluded row counts.
+`count-mismatch-review.csv` summarizes the review. Warnings propagate into
+holdings, administrator totals and monthly changes; comparisons may use a
+recovered fund category, never the excluded categories.
+
+`records-<group>-<period>.jsonl.gz` exports every accepted parsed field with
+file/archive/row hashes, insurer, period, record role, asset class and overlap flags.
+Decimals are serialized as strings. `parser-coverage.csv` summarizes acceptance
+per family/month. Count-only defects in new families stay quarantined; existing
+A/F/C recovery rules are unchanged. An accepted layout is structural validation,
+not certification of its financial content or overall portfolio completeness.
+
+FM reconciliation
+compares accepted F holdings with control F31 in CLP and exposes exact residuals;
+this does not certify the entire portfolio. X fund buckets are also compared
+with reported H61–H65 controls, with exact differences and missing controls
+reported explicitly, without expanding count recovery. Final values in
+I/A/F/B/X/O/C are M$ (thousands of CLP); retain original fields and units.
+X debt purchase value is CLP, while its amortized/fair/impairment values are M$.
+E cash-flow buckets are UF; T coupon amounts are percentages. P retains
+separate assets/liabilities, notionals and currencies; G retains collateral
+direction and original-currency/M$ amounts. Never promote these auxiliary or
+derivative notionals to `final_value_clp` or sum them as insurer AUM.
+Missing/rejected files cannot become zero holdings or inferred exits in monthly
+comparisons. Quantity changes and valuation changes remain separate; neither is
+labelled net flows or confirmed trading.
+
+Preserve insurer RUT, the reported administrator RUT, public fund RUN, private
+fund RUT, series, denomination, insurance plan/reserve backing, subportfolio,
+source file/line and hashes. Administrator analysis must group by reported RUT;
+current fund directories supply names, not an inferred historic administrator.
+Public FI/FMs link to existing funds by (kind, RUN); private funds stay distinct.
+Future filters should support AGF -> insurers -> funds/series and insurer -> AGFs.
+Pilot AGF totals are observed holdings in accepted A/F/X files, not complete
+insurance money at an AGF. X Chilean funds link by exact RUN and reported AGF;
+overseas funds/ETFs remain distinct and are never matched by a similar name.
+Both domestic and supplied foreign files must be usable in both periods before
+inferring a fund exit. Do not add these positions to industry fund AUM.
+Family final-value sums are explicitly non-additive diagnostics. `overlap_role`
+flags OIND/OIED summaries vs details, leasing property vs receivables, and repo
+underlyings vs contracts. Controls, descriptors, schedules and collateral are
+auxiliary. Full portfolio aggregation still requires cross-file reconciliation;
+no grand total is produced by the parser.
+
+Insurance follow-ups and the 2026-10-20 source/storage audit are recorded in
+`TODO.md` under "Insurance portfolios". CS/CSOIND syndicated loans are in I,
+not the absent R loan family. Their structural acceptance does not imply usable
+debtor identity or participation: the audit found omitted identities and
+out-of-range percentages. The I00 checks and PostgreSQL size prototype were
+one-off local audits, not new reconciliation rules. The persistent loader flags
+the known syndicated-field defects; their financial reconciliation remains a TODO.
+
+Insurance matrix grouping and fund investor drill-down:
+`/insurance/portfolio-heatmap` supports `group_by=issuer` (exact reported issuer
+RUT, with instrument identity fallback) and `issuer=RUT` for instrument columns.
+Issuer drill-down keeps full filtered asset-class totals for insurer percentages;
+`/portfolio-history` also accepts the issuer filter. No issuer identity is inferred
+from a name or a private borrower field.
+`/fund-history?include_investors=true` adds nested insurer monthly points using
+`insurance_investors.add_investors` and the same `build_history` coverage rules.
+The dashboard disables NAV lookups with `include_fund_metrics=false`. Weights use
+that insurer's selected fund holdings, not industry or fund NAV. Missing-valued
+positions suppress the denominator; partial source coverage prevents unsupported
+deltas. Existing clients omit the flag and retain their original response size.
+The directory's AGF picker lists only administrators represented in accepted
+primary fund holdings for the selected month, excluding auxiliary/non-fund entries.
+
+### Audited SURA envelope recovery
+
+`insurance/envelope_recovery.py` narrowly handles RUT 96549050, CSVID August and
+September 2026. A/C/F/O/X source files contain only details, with no identification
+or trailer. Strict I and B headers must agree, and five positive buckets
+(A00/B20/D20/E10/X10) must match C exactly before any recovery. Every recovered
+A/F/O/X row must then belong to a known bucket whose positive total matches C;
+unknown types, duplicates, malformed fields, mismatches and missing buckets fail
+closed. No header/trailer is fabricated: source lines begin at 1, declared count
+is NULL, original hashes/bytes remain intact. Rows carry
+`envelope_warning_reconciled`; holdings files are `accepted_with_warning`, C is
+`partially_reconciled` with only matched categories (J00 stays excluded).
+This corroborates identity and totals, not each quantity/series or cash flows.
+Future months/insurers require a separate audit. Parser version `public-1835-v3`
+forces existing local snapshots to be reprocessed. History accepts recovered X/O
+families only when marked `accepted_with_warning`; partial controls never imply
+complete holdings. Original source regression fixtures and mutation tests are in
+`tests/test_insurance_envelope_recovery.py`.
+
+### FI detail return dates
+
+`GET /investment-funds/{run}` reads `fi_detail_returns.latest_series_returns`:
+each non-superseded series uses its own latest valid NAV on/before today and
+returns that actual `fecha_calculo`. It reuses `fi_linked_returns` for confirmed
+conversions, distributions, exact period baselines and currency continuity.
+Missing/changed currency blocks affected periods; fund registry currency is not
+substituted into historical NAV. Invalid/future endpoints are excluded. Fund
+rankings still read the shared-date materialized view and are not changed by
+this detail fallback. No source data or materialized-view refresh is needed.

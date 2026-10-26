@@ -104,6 +104,8 @@ def register_jobs(scheduler: BaseScheduler) -> None:
     from src.etl.mutualFunds.flow_adjustments import run as detect_fm_migrations
     from src.etl.cmf.ref_codes import run as refresh_ref_codes
     from src.etl.insiders.downloader import InsidersDownloader
+    from src.etl.fundDeposits.downloader import FundDepositsDownloader
+    from src.etl.insurance.jobs import InsurancePortfoliosDownloader
     from src.reports.mf_nnm_email import run as send_mf_nnm_reports
 
 
@@ -146,6 +148,16 @@ def register_jobs(scheduler: BaseScheduler) -> None:
     scheduler.add_job(
         _job("mf_rentabilidad", _refresh_rentabilidad_fm),
         "cron", hour=9, minute=15, id="mf_rentabilidad",
+    )
+    scheduler.add_job(
+        _job("fund_deposits", lambda: FundDepositsDownloader().run()),
+        "cron", hour=8, minute=35, id="fund_deposits",
+        max_instances=1, coalesce=True, misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _job("insurance_portfolios", lambda: InsurancePortfoliosDownloader().run()),
+        "cron", hour=8, minute=55, id="insurance_portfolios",
+        max_instances=1, coalesce=True, misfire_grace_time=3600,
     )
     scheduler.add_job(
         _job("insiders_transactions", lambda: InsidersDownloader().run()),

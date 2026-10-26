@@ -61,28 +61,27 @@ Ran manually against local dev DB — no CMF page-structure breakage found:
   08:45 job. Deploy the Insiders explorer API before the frontend tab; validate
   exact-RUT aportantes links and date filters on the remote database.
 
-- [ ] **Repeat the validated local data repair on the remote server.**
-  Deploy the FI NAV job's rolling three-calendar-month window (including older
-  gaps within that window) and the idempotent monthly TAC replacement fix.
-  Back up the remote database, then rerun the data jobs from **2026-07-01**:
-  FM/FI NAV, portfolios, TAC, dividends, identities, classifications and FI
-  aportantes/cuotas. Also repair FI NAV for June 2026, rebuild June's FM
-  classifications and reload May 2026 TAC to replace duplicate/stale imports.
-  Use a server-specific runner: `scripts/reload_local_data.py`
-  deliberately rejects remote databases. Refresh NNM, industry, returns and
-  administrator summaries; verify daily NAV coverage, TAC duplicate counts and
-  source availability for quarterly FI reports. Restart the remote worker so
-  scheduled jobs use the new code, and verify the next scheduled execution.
-  This is pending remote work; the current repairs are local only.
+- [x] **Replace the remote database with the refreshed local snapshot (2026-10-26).**
+  Recreated `cmf` directly at the user's explicit request, without backing up or
+  retaining the old server database. All 47 table counts matched the snapshot;
+  all seven materialized views were rebuilt. Public readiness, Industria, returns,
+  NNM, ranking-library and Insiders API checks passed; web, MCP and worker resumed.
+  Temporary server import archives were removed. NAV reaches October 25 with
+  partial recent coverage; FI portfolios remain June because September returned
+  no holdings. The two known isolated historical FM NAV gaps remain.
+  Evidence: ignored `output/data-refresh-20261026/` reports.
+- [ ] **Deploy the remaining local application changes separately.** The database
+  now has migration `a3b4c5d6e7f8`, including insurance and fund-deposit tables,
+  but this database replacement did not deploy code. Include both new migration
+  files before running a future Alembic upgrade, plus the FM 14-day NAV lookback
+  and CAPTCHA fallback fixes. Verify the next scheduled jobs after deployment.
 
 - [ ] `financial-cmf.ddns.net` is not resolving via DNS at all right now (direct IP to
       146.181.34.54:80/443 works fine — nginx itself is healthy).
-- [ ] App VM (146.181.34.54) containers (web/worker/mcp) are all up and `/health` returns
-      200 internally, but the app VM cannot reach the DB VM on `10.0.0.42:5433`
-      (connection refused).
-- [ ] `~/.ssh/oracle_cmf.key` is not authorized on the DB VM (146.181.47.236) — got
-      `Permission denied (publickey)`, though port 22 is open. Need the correct key/method
-      before Postgres can be inspected there.
+- [x] App-to-database connectivity verified on 2026-10-26; public `/ready` reports
+      the database available, and database-backed API checks pass.
+- [x] Database VM SSH access verified on 2026-10-26 using
+      `~/Downloads/ssh-key-2026-06-08 (2).key` with user `ubuntu`.
 - User says this is a known issue — not chasing it until local work (bug fixes + new
   endpoints) is done.
 
@@ -92,3 +91,183 @@ Ran manually against local dev DB — no CMF page-structure breakage found:
   that older gap. Verify CMF/BTG documents and source observations for any earlier
   transitions (including U), without inferring a link from similar NAV alone.
   Keep affected exact-date 1A/YTD returns unavailable until their bases are established.
+
+## Insurance portfolios — follow-up audit (2026-10-20)
+
+Scope: local CSVID public exports for August/September 2026, 33 insurers and
+12 file families per month. Insurance tables/data were restored to production on
+2026-10-26; the insurance application code and UI still await deployment.
+These are reported positions, not necessarily distinct instruments or loans.
+
+The local Seguros view, four persistence tables, and daily worker job are now
+implemented using these two months only for the initial load. Source-level issues
+below remain unresolved. Missing debtor/lead identities, unusable participation
+and zero syndicated yields now carry field-level warnings in the loader and UI.
+Measured local storage after loading both months: approximately 702 MiB for
+records/indexes, 27 MiB for retained ZIPs, and 1 MiB for import/file metadata
+(about 365 MiB per month on average; revisions, WAL and backups are additional).
+
+| Coverage | August 2026 | September 2026 |
+|---|---:|---:|
+| Accepted records, all families | 159,058 | 170,592 |
+| Entire files quarantined | 17 | 14 |
+| Additional partially usable control files | 4 | 3 |
+| Additional fund files accepted with a count warning | 2 | 2 |
+| Syndicated-loan positions (`CS` + `CSOIND`) | 594 + 2 | 612 + 2 |
+| Insurers reporting syndicated loans | 11 | 11 |
+| Syndicated totals matching usable `I00` controls | 9 / 11 | 10 / 11 |
+
+Passing structural validation does not certify each financial field. The
+syndicated-loan checks below were an additional audit, not a new validation rule
+in the loader. Do not label all accepted records as financially reconciled.
+
+### Syndicated loans — before using debtor/participation analytics
+
+- [ ] **Investigate absent debtor identity.** Every accepted CS/CSOIND position
+  has a zero `syndicated_debtor_rut` and blank `syndicated_debtor_name` in both
+  months. Determine whether the public export suppresses these fields or the
+  source reporting omits them. Do not invent identities or silently replace
+  debtor RUT with the issuer/lead bank RUT. If nemotécnico-based identification
+  is considered later, validate its documented construction and exact mapping.
+
+- [ ] **Review participation percentages outside the usable range.**
+  In `i202609v.96571890` (Confuturo), source lines 2632–2637 contain
+  239.70%, 239.70%, 239.70%, 239.70%, 122.92%, and 641.19%.
+  These are the actual five-character source values at columns 705–709,
+  decoded using the specified two decimal places; they are not a UI calculation.
+  Penta Vida's two CSOIND positions report 0.00% in each month:
+  `i202608v.96812960` lines 7108–7109 and `i202609v.96812960` lines 7048–7049.
+  Establish explicit field-level quality flags before charts, concentration,
+  weighted participation or loan-size calculations. Do not clamp to 100% or
+  change decimal scaling without evidence.
+
+- [ ] **Review other incomplete syndicated fields.** Lead bank RUT/name are
+  missing in three August and two September positions. Purchase yield is
+  reported as zero in seven positions each month; establish applicability
+  before interpreting zero as a real yield. All observed syndicated maturity
+  dates parsed as valid calendar dates.
+
+- [ ] **Make syndicated `I00` reconciliation repeatable in the pipeline.**
+  This audit found exact agreement for every available usable insurer/control
+  pair: nine in August, ten in September, with no residual differences.
+  August Principal (`96588080`) cannot be checked because its C file reports
+  the wrong month. Zurich (`99185000`) cannot be checked in either month because
+  only F11/F31 in its count-defective C files have been approved for use.
+  The observed `I00` reconciliation includes both CS and CSOIND; omitting
+  Penta's CSOIND leaves CLP 6,822,328,000 / 6,990,580,000 residuals respectively.
+  A matching aggregate does not validate debtor identity or participation.
+  CSOIND also has an O-file representation: avoid counting both in total AUM.
+
+### Quarantined source files — investigate without relaxing validation globally
+
+- [ ] **Identity and reporting-month conflicts.**
+  `c202608v.96588080` (Principal) reports June in its header.
+  `f202608v.99588060` and `f202609v.99588060` (Chubb Vida filenames)
+  contain another entity's header RUT (`99225000`).
+  `p202609v.99025000` also has a header/request mismatch.
+  Confirm against re-downloads or independent CMF evidence; never silently
+  reassign the entity or month.
+
+- [ ] **Missing or invalid identification/trailer records.**
+  Sura (`96549050`) August/September 2026 A/F/O/X holdings recovered with
+  warnings after five I/B identity-anchor controls plus exact per-category
+  reconciliation. C is partial: J00 has no matching detail and stays excluded.
+  Missing headers/trailers are preserved, not repaired. Investigate source
+  revisions and audit later months before extending this limited recovery.
+  BUPA (`76282191`) G files begin with record type 4 instead of 1 in both
+  months. Zurich `g202609v.99185000` is missing its closing trailer.
+  Investigate source revisions and whether a documented export variation exists.
+
+- [ ] **Unreconciled closing counts.** Remaining count-only quarantines:
+
+  | Month | Files |
+  |---|---|
+  | August | `c202608v.99588060`, `e202608v.99588060`, `g202608v.96588080`, `o202608v.96588080`, `o202608v.99185000`, `o202608v.99588060` |
+  | September | `c202609v.77205281`, `e202609v.99588060`, `g202609v.96571890`, `o202609v.76263414` |
+
+  The Chubb E files contain only header/trailer but declare one record.
+  Distinguish empty-file count defects from missing investment detail.
+  Recover additional categories only after independent reconciliation; retain
+  warnings, original bytes/hashes and declared/actual counts.
+
+- [ ] **Malformed fields, blank records and layout ambiguity.**
+  SAVE `b202608v.76034737` line 2 has depreciation `00000-14635`, which is not
+  a valid numeric representation under the current layout.
+  `t202608v.96812960` contains zero-length records among 80-character records.
+  Consorcio `x202608v.99012000` line 566 and `x202609v.99012000` line 569
+  contain `SINO` in the foreign-subsidiary record's reserved filler.
+  Determine whether the latter is a source error or a layout variant before
+  accepting it. One bad detail currently quarantines its entire file, including
+  otherwise parseable positions; consider evidence-backed partial recovery
+  with explicit coverage, not blanket whitespace/padding cleanup.
+
+- [ ] **Review the remaining portions of partially recovered files.**
+  A total of 124 fund positions were recovered by exact F11 reconciliation
+  (SAVE August 4, Zurich August 5, Zurich September 5, BICE September 110).
+  Their warnings remain. Non-fund rows and unmatched categories in the seven
+  partially reconciled C files are still excluded. Do not treat partial
+  reconciliation as approval of the whole file.
+
+### Completeness and aggregation before DB/UI rollout
+
+- [ ] **Validate CSGEN against real general-insurer downloads.** Current live
+  checks cover life insurers only; shared layouts and synthetic group checks
+  are not a substitute for validating general-insurer source files.
+- [ ] **Add versioned historical layouts.** Current parsing rejects periods
+  before December 2024. January 2020 onward is not yet a validated backfill.
+- [ ] **Resolve unobserved layouts and missing source families.** X type 4
+  (foreign property) is absent from both months; X type 5 has no accepted live
+  example because the only source fails filler validation. Both have synthetic
+  specification tests. R loans and V rental/mortgage arrears appear in the
+  manual but not these public ZIPs; determine availability without assuming
+  their economic balances are zero. Syndicated CS loans are already in I and
+  are a separate case from the absent R family.
+- [ ] **Complete cross-file reconciliation and a non-duplicating AUM model.**
+  Resolve OIND/OIED summaries versus detail, leased properties versus leasing
+  receivables, repo contracts versus underlyings, and collateral. Keep controls,
+  cash-flow schedules, descriptors and derivative notionals separate from AUM.
+  Existing overlap flags document the relationships but do not implement a
+  fully reconciled insurer grand total.
+- [ ] **Define semantic field-quality checks.** Keep structural acceptance,
+  financial control agreement and individual field usability separate in the
+  database/API. Preserve reported zero, missing and invalid values distinctly.
+- [ ] **Review download reliability.** The earlier pilot encountered transient
+  HTTP 500 failures from the CAPTCHA model. Preserve bounded retries and report
+  failed downloads; do not mark a missing monthly archive as an empty portfolio.
+
+### Monthly storage — measured prototype, not the final schema
+
+Measured locally on 2026-10-20 with disposable PostgreSQL TEMP tables, one month
+at a time, rolled back/removed afterward. The prototype used core typed columns
+plus JSONB for remaining parsed fields, and three B-tree indexes (ID,
+filing/source line, family/instrument/currency). File metadata was represented
+by a filing ID; source ZIPs were kept outside PostgreSQL.
+Sizes below are decimal MB (1 MB = 1,000,000 bytes).
+
+| Storage | August | September |
+|---|---:|---:|
+| Accepted records | 159,058 | 170,592 |
+| Downloaded source ZIP | 13.69 MB | 13.76 MB |
+| Compressed parsed JSONL | 38.76 MB | 39.65 MB |
+| Uncompressed parsed JSONL | 454.95 MB | 463.66 MB |
+| PostgreSQL table, TOAST and auxiliary storage | 319.04 MB | 323.10 MB |
+| Three indexes | 8.34 MB | 8.95 MB |
+| PostgreSQL total | **327.38 MB** | **332.05 MB** |
+
+- [ ] **Benchmark the final schema before backfilling.** At the prototype's
+  scale, one year of current-volume CSVID snapshots is about 4 GB, before
+  revisions, backups, WAL, additional indexes or CSGEN. Use roughly 0.5 GB/month
+  (6 GB/year) as initial database planning headroom, not a final capacity promise.
+  Compare typed family tables versus a large JSONB payload; normalize repeated
+  identities/provenance and keep source archives outside the database.
+  A daily polling job must not append another copy of an unchanged monthly ZIP.
+
+Audit artifacts (local, gitignored; figures and actionable cases are preserved
+above so this TODO remains useful without the artifacts):
+
+- [Parser report](output/insurance-pilot/report.json)
+- [Family coverage](output/insurance-pilot/parser-coverage.csv)
+- [Count-recovery evidence](output/insurance-pilot/count-mismatch-review.csv)
+- [Syndicated-loan audit](output/insurance-pilot/syndicated-audit.json)
+- [Participation source evidence](output/insurance-pilot/syndicated-participation-issues.json)
+- [PostgreSQL size measurements](output/insurance-pilot/storage-probe.json)
