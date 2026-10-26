@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import random
 import time
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from sqlalchemy import func, select
@@ -18,6 +18,7 @@ from src.etl.mutualFunds.loaders.cartola import load_cartola
 MAX_RETRIES = 7
 MIN_FILE_BYTES = 200
 BACKFILL_START = date(2019, 12, 31)
+LOOKBACK_DAYS = 14
 
 
 def _year_ranges(from_date: date, to_date: date) -> list[tuple[date, date]]:
@@ -45,13 +46,10 @@ class CartolaDownloader(BaseDownloader):
         super().__init__(output_dir, force)
 
     def run(self) -> DownloadResult:
-        """Incremental: downloads from the last date in DB to today."""
-        from_date = self._last_date_in_db() or BACKFILL_START
+        """Recheck recent days: a maximum date does not establish complete reporting."""
         to_date = date.today()
-
-        if from_date >= to_date:
-            self.logger.info("Cartola already up to date (last: %s)", from_date)
-            return DownloadResult(skipped=1)
+        last = self._last_date_in_db()
+        from_date = max(BACKFILL_START, min(last, to_date - timedelta(days=LOOKBACK_DAYS))) if last else BACKFILL_START
 
         return self._download_ranges(_year_ranges(from_date, to_date))
 
