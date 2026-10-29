@@ -12,9 +12,11 @@ logging.basicConfig(
 from apscheduler.schedulers.blocking import BlockingScheduler
 
 from src.scheduler import register_jobs
+from src.job_runner import register_queue
 
 scheduler = BlockingScheduler(timezone="America/Santiago")
 register_jobs(scheduler)
+register_queue(scheduler)
 
 if __name__ == "__main__":
     logging.getLogger(__name__).info("Worker started — timezone: America/Santiago")

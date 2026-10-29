@@ -3,29 +3,38 @@ from __future__ import annotations
 import logging
 import traceback
 from datetime import datetime, timezone
+from sqlalchemy import text
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.schedulers.base import BaseScheduler
 
 from src.db.engine import SessionLocal
 from src.db.models.job_runs import JobRun
+from src.job_control import job_lock, request_id, JobBusy
 
 logger = logging.getLogger(__name__)
 
 
 def _run_tracked(job_id: str, fn):
+    with job_lock(job_id):
+        return _execute_tracked(job_id, fn)
+
+
+def _execute_tracked(job_id: str, fn):
     started_at = datetime.now(timezone.utc)
     run_id: int | None = None
     try:
         with SessionLocal() as s:
-            run = JobRun(job_id=job_id, started_at=started_at, status="running")
+            s.execute(text("""UPDATE job_runs SET status='interrupted',finished_at=now(),
+                error_detail='WorkerInterrupted' WHERE job_id=:job AND status='running'"""), {'job':job_id})
+            run = JobRun(job_id=job_id, started_at=started_at, status="running", request_id=request_id.get())
             s.add(run)
             s.commit()
             s.refresh(run)
             run_id = run.id
         result = fn()
-        _finish(run_id, "success",
-                rows_upserted=getattr(result, "rows_upserted", None),
+        _finish(run_id, "partial" if getattr(result, "errors", 0) else "success",
+                rows_upserted=getattr(result, "rows_upserted", result if type(result) is int else None),
                 errors=getattr(result, "errors", None))
         return result
     except Exception:
@@ -112,8 +121,15 @@ def register_jobs(scheduler: BaseScheduler) -> None:
     def _job(job_id: str, fn):
         def wrapper():
             logger.info("Starting: %s", job_id)
-            result = _run_tracked(job_id, fn)
+            try:
+                result = _run_tracked(job_id, fn)
+            except JobBusy:
+                if request_id.get() is not None:
+                    raise
+                logger.info("Already running: %s; duplicate cron invocation skipped", job_id)
+                return
             logger.info("Done: %s — %s", job_id, result)
+            return result
         wrapper.__name__ = job_id
         return wrapper
 
