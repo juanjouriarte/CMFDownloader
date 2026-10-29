@@ -23,3 +23,4 @@ class JobRun(Base):
     rows_upserted: Mapped[int | None] = mapped_column(Integer, nullable=True)
     errors: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    request_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

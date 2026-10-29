@@ -1599,3 +1599,39 @@ Missing/changed currency blocks affected periods; fund registry currency is not
 substituted into historical NAV. Invalid/future endpoints are excluded. Fund
 rankings still read the shared-date materialized view and are not changed by
 this detail fallback. No source data or materialized-view refresh is needed.
+
+## Administrator job runner
+
+`/job-runner` is authenticated with the same named `CLASSIFICATION_ADMIN_KEYS`
+credentials as classification editing (fails closed; responses are private).
+`GET /jobs` returns the fixed 26-job data catalog, latest results, queue and
+worker heartbeat; `GET /jobs/{id}/runs` returns sanitized history. `POST /requests`
+accepts only `{ "job_id": "<allowlisted id or all>" }`. The API writes to
+`job_requests`; it never starts an ETL in its own request or background task.
+`DELETE /requests/{id}` cancels queued requests only. No arbitrary functions,
+date backfills, credentials, or email jobs can be submitted.
+
+Migration `b4c5d6e7f8a9` adds the durable queue, heartbeat and `job_runs.request_id`.
+`worker.py` registers a five-second queue poll alongside the existing cron jobs.
+A single background consumer executes requests in order; dependencies follow
+NAV, portfolio, identity and dividend imports. The four NNM/monthly refreshes
+already nested inside NAV jobs are shown in the catalog, not duplicated in the
+all-data plan (22 explicit steps / 26 tracked jobs). Browser disconnection does
+not cancel work. Latest successful imports may still have older source dates.
+
+PostgreSQL advisory locks protect the consumer and each tracked job across
+processes, including cron. Enqueue serializes overlapping requests; same-job cron
+collisions are skipped while an existing run owns the lock. Abandoned queue runs
+are marked interrupted when a replacement consumer acquires the lock; they are
+not silently replayed. Downloader results with nonzero errors are marked partial.
+The API does not expose tracebacks or SQL. It records the named editor on requests.
+
+Local manual-only consumer (does not start cron jobs or send reports):
+`PYTHONPATH=. .venv/bin/python -m src.job_runner`.
+Apply migrations and restart the local API before testing the frontend tab.
+Validation: `pytest tests/test_job_runner.py tests/test_industry_refresh.py`;
+`RUN_JOB_RUNNER_DB_TESTS=1 pytest tests/test_job_runner.py` runs concurrency,
+cancellation and crash-recovery checks in an isolated temporary local schema,
+without executing downloads. Deploy migration, API and worker together before
+publishing the frontend. The existing scheduled email job is unchanged and is
+never available through Descargador.

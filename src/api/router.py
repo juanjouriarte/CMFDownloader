@@ -18,6 +18,8 @@ from .insiders_explorer import router as insiders_explorer_router
 from .industry_workspace.router import router as workspace_router
 
 router = APIRouter()
+from .job_runner import router as job_runner_router
+router.include_router(job_runner_router)
 router.include_router(mutual_funds_router)
 router.include_router(fi_router)
 router.include_router(rentability_router)
