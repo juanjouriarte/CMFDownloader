@@ -18,6 +18,10 @@ from .insiders_explorer import router as insiders_explorer_router
 from .industry_workspace.router import router as workspace_router
 
 router = APIRouter()
+from .fx import router as fx_router
+router.include_router(fx_router)
+from .reported_equity import router as reported_equity_router
+router.include_router(reported_equity_router)
 from .job_runner import router as job_runner_router
 router.include_router(job_runner_router)
 router.include_router(mutual_funds_router)

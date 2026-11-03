@@ -1,5 +1,6 @@
 """Fixed allowlist for the downloader UI; never accept callable names from clients."""
 JOBS = [
+    ('fx_daily','Tipos de cambio · Banco Central','Referencias','Diario','Histórico desde 2020 y actualización diaria de monedas y UF. Requiere acceso BDE.'),
     ('ref_codes_refresh','Códigos CMF','Referencias','Diario','Monedas, países e instrumentos.'),
     ('bonds_tickers','Nemotécnicos de bonos','Referencias','Diario','Identificadores de instrumentos de deuda.'),
     ('fm_identity','Registro de fondos mutuos','Fondos mutuos','Diario','Fondos, nombres y administradoras.'),
@@ -17,6 +18,7 @@ JOBS = [
     ('dividends','Dividendos','Registros','Diario','Distribuciones publicadas por la Bolsa; recalcula rentabilidades FI.'),
     ('fi_shareholders','Aportantes y cuotas FI','Fondos de inversión','Mensual','Revisa los dos últimos trimestres cerrados.'),
     ('fi_portfolios','Carteras FI','Fondos de inversión','Mensual','Busca el último trimestre cerrado y actualiza clasificaciones.'),
+    ('fi_reported_equity','Patrimonio trimestral FI','Fondos de inversión','Diario','EEFF de todos los FI no rescatables vigentes sin NAV diario, con o sin cartera; revisa los dos últimos trimestres cerrados.'),
     ('mf_categories','Categorías FM','Cálculos','Mensual','Clasifica carteras; respeta categorías manuales.'),
     ('fi_categories','Categorías FI','Cálculos','Mensual','Clasifica carteras; respeta categorías manuales.'),
     ('fm_flow_adjustments','Ajustes de flujos FM','Cálculos','Diario','Detecta migraciones internas entre fondos.'),
@@ -34,7 +36,7 @@ AFTER = {'mf_daily_nav':['mf_rentabilidad'], 'fi_daily_nav':['fi_rentabilidad'],
          'mf_portfolios':['mf_categories'], 'fi_portfolios':['fi_categories'],
          'fm_identity':['administradores'], 'fi_identity':['administradores'],
          'dividends':['fi_rentabilidad']}
-ALL_PLAN = [j[0] for j in JOBS[:22]]
+ALL_PLAN = [j[0] for j in JOBS if j[0] not in {child for children in AUTO.values() for child in children}]
 
 
 def plan_for(job_id):

@@ -40,14 +40,14 @@ def test_requires_admin_on_every_endpoint(client,monkeypatch):
 
 
 def test_allowlist_dependencies_and_no_email(client):
-    assert len(CATALOG)==26
+    assert len(CATALOG)==28
     assert 'mf_nnm_email_report' not in CATALOG
     for bad in ['mf_nnm_email_report','os.system','job_runner_poll']:
         with pytest.raises(ValueError):plan_for(bad)
     assert plan_for('mf_daily_nav')==['mf_daily_nav','mf_rentabilidad']
     assert affected_jobs(plan_for('mf_daily_nav'))=={'mf_daily_nav','mf_rentabilidad','fm_nnm_daily','fm_industry_monthly'}
     plan=plan_for('all')
-    assert len(plan)==22 and len(affected_jobs(plan))==26
+    assert len(plan)==24 and len(affected_jobs(plan))==28
     for first,second in [('fi_daily_nav','fi_rentabilidad'),('dividends','fi_rentabilidad'),('mf_portfolios','mf_categories'),('fi_portfolios','fi_categories')]:
         assert plan.index(first)<plan.index(second)
     assert set(runner.job_functions())==set(CATALOG)

@@ -37,7 +37,7 @@ def administrators(currency: str = Query('CLP', pattern='^(?:[A-Z]{3}|UF)$'),
 
 
 @router.get('/funds')
-def funds():
+def funds(include_reported: bool = False):
     parts=[]
     for kind,table,name in [('fm','fondo_mutuo','nombre_fondo'),('fi','fondos_inversion','razon_social')]:
         parts.append(f"""SELECT '{kind}' kind, f.run_fondo run, f.{name} name, f.{'razon_social_administradora' if kind=='fm' else 'administrador'} admin,
@@ -47,7 +47,12 @@ def funds():
         WHERE aum IS NOT NULL ORDER BY run_fondo,currency,month DESC) m
         JOIN {table} f USING(run_fondo) LEFT JOIN (SELECT DISTINCT ON(run_fondo) * FROM categoria_{kind}_effective WHERE periodo<=CURRENT_DATE ORDER BY run_fondo,periodo DESC) c USING(run_fondo)
         WHERE m.latest_data_date=m.latest_fund_date AND {"f.fecha_termino_operaciones IS NULL" if kind=='fm' else 'f.vigente IS TRUE'}""")
-    return rows(' UNION ALL '.join(parts)+' ORDER BY currency, aum DESC NULLS LAST')
+    result = rows(' UNION ALL '.join(parts)+' ORDER BY currency, aum DESC NULLS LAST')
+    if include_reported:
+        from src.api.reported_equity import reported_fund_directory
+        nav_runs = {r['run'] for r in result if r['kind']=='fi'}
+        result.extend(r for r in reported_fund_directory() if r['run'] not in nav_runs)
+    return result
 
 # Identity is the reported identifier + instrument type + issuer identifier/name.
 SOURCES=[('fm','cartera_naci','nemotecnico','rut_emisor',"NULL::text",'porcentaje_activos_fondo'),
