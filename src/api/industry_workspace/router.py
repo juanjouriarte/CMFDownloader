@@ -122,7 +122,8 @@ def instruments(search:str=Query('',max_length=150),identifier:str|None=None,ins
 
 @router.get('/owners')
 def owners(period:date|None=None,search:str=Query('',max_length=150),rut:str|None=None,run:str|None=None):
-    periods=rows('SELECT DISTINCT periodo FROM aportantes_fi WHERE periodo<=CURRENT_DATE ORDER BY periodo DESC')
+    periods=rows('''SELECT DISTINCT periodo FROM aportantes_fi WHERE periodo<=CURRENT_DATE
+      AND (:run IS NULL OR run_fondo=:run) ORDER BY periodo DESC''',dict(run=run))
     selected=period or (periods[0]['periodo'] if periods else None)
     params={'period':selected,'search':'%'+search+'%','rut':rut,'run':run}
     base="""FROM aportantes_fi a LEFT JOIN fondos_inversion f USING(run_fondo)
@@ -430,3 +431,6 @@ router.include_router(ownership_analysis_router)
 
 from .fund_flows import router as fund_flows_router
 router.include_router(fund_flows_router)
+
+from .fund_ownership import router as fund_ownership_router
+router.include_router(fund_ownership_router)

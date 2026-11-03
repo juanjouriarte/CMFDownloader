@@ -1788,3 +1788,17 @@ History includes only actual closes through today, without interpolation or FX.
 It separately reports Panorama inclusion, reference date, selected report date
 and exclusion reason using the existing 185-day/current-eligibility rules.
 The endpoint returns 404 for unknown funds. No new scraper or table is needed.
+
+### Fund ownership history
+
+`GET /industry-workspace/fund-ownership/{run}` returns all stored FI aportante
+quarters through today, aligned weights, changes in percentage points, cell
+states and per-quarter coverage. The quarter axis includes missing reports.
+RUT aliases use the ownership analysis normalizer; missing/invalid IDs remain
+local to one report. Valid duplicate RUT positions in a filing are summed.
+Missing weights, absent holders and missing reports never become zero. Changes
+require valid percentages at consecutive quarter ends; report totals above
+100.01% suppress comparisons. NAV is not required. Unknown FI returns 404.
+`/industry-workspace/owners?run=...` now selects available periods for that fund,
+rather than using the industry-wide latest quarter. Tests:
+`pytest tests/test_fund_ownership.py tests/test_ownership_analysis.py`.
