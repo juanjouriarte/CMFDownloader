@@ -44,3 +44,62 @@ def test_rut_aliases_link_but_zero_and_foreign_placeholders_do_not():
     linked=next(r for r in result['rows'] if r['rut']=='1111111')
     assert linked['changes']==[None,2]
     assert len(result['rows'])==3
+
+
+def test_comparer_defaults_to_latest_common_quarter_without_mixing_dates():
+    from src.api.industry_workspace.fund_ownership import comparison_period
+    funds=[dict(run='1'),dict(run='2')]
+    available=[dict(run='1',periodo=date(2026,6,30)),dict(run='1',periodo=date(2026,9,30)),dict(run='2',periodo=date(2026,6,30))]
+    assert comparison_period(funds,available)[0]==date(2026,6,30)
+    assert comparison_period(funds,available,date(2026,9,30))[0]==date(2026,9,30)
+    assert comparison_period(funds,[])[0] is None
+
+
+def test_fund_matrix_preserves_shared_ruts_unknowns_and_missing_fund_reports():
+    from src.api.industry_workspace.fund_ownership import ownership_comparison
+    funds=[dict(run='1',name='One'),dict(run='2',name='Two'),dict(run='3',name='Missing')]
+    records=[dict(row(3,'111',20),run='1'),dict(row(6,'111',25),run='1'),
+             dict(row(6,'111',15),run='2'),dict(row(6,None,5,2),run='1'),dict(row(6,None,7,2),run='2')]
+    result=ownership_comparison(funds,records,date(2026,6,30))
+    assert len(result['rows'])==3
+    common=next(r for r in result['rows'] if r['rut']=='111')
+    assert common['funds']==2
+    assert [c['weight'] for c in common['cells']]==[25,15,None]
+    assert [c['change'] for c in common['cells']]==[5,None,None]
+    assert common['cells'][2]['state']=='no_report'
+    assert all(r['funds']==1 for r in result['rows'] if r['rut'] is None)
+    assert result['funds'][2]['reported'] is False
+
+
+def test_matrix_does_not_turn_an_unlisted_holder_into_zero_or_count_it_as_shared():
+    from src.api.industry_workspace.fund_ownership import ownership_comparison
+    funds=[dict(run='1'),dict(run='2')]
+    records=[dict(row(3,'111',20),run='1'),dict(row(6,'222',30),run='1'),dict(row(6,'111',0),run='2')]
+    result=ownership_comparison(funds,records,date(2026,6,30))
+    owner=next(r for r in result['rows'] if r['rut']=='111')
+    assert owner['funds']==1 and owner['cells'][0]['state']=='not_listed'
+    assert owner['cells'][0]['weight'] is None and owner['cells'][0]['change'] is None
+    assert owner['cells'][1]['weight']==0
+
+
+def test_comparer_has_no_common_date_and_invalid_filing_is_not_valued():
+    from src.api.industry_workspace.fund_ownership import comparison_period, ownership_comparison
+    funds=[dict(run='1'),dict(run='2')]
+    available=[dict(run='1',periodo=date(2026,3,31)),dict(run='2',periodo=date(2026,6,30))]
+    selected,_,common=comparison_period(funds,available)
+    assert selected==date(2026,6,30) and common==[]
+    records=[dict(row(6,'111',70),run='1'),dict(row(6,'222',50,2),run='1'),dict(row(6,'111',10),run='2')]
+    result=ownership_comparison(funds,records,selected)
+    assert result['funds'][0]['invalid_total']
+    owner=next(r for r in result['rows'] if r['rut']=='111')
+    assert owner['cells'][0]['weight'] is None and owner['cells'][0]['state']=='invalid_report'
+    assert owner['cells'][1]['weight']==10
+
+
+def test_comparer_rejects_malformed_runs_and_nonquarter_dates():
+    import pytest
+    from fastapi import HTTPException
+    from src.api.industry_workspace.fund_ownership import compare_fund_ownership
+    for runs,period in [('',None),('123,abc',None),('123',date(2026,1,31)),('123',date(2026,6,29))]:
+        with pytest.raises(HTTPException) as exc:compare_fund_ownership(runs,period)
+        assert exc.value.status_code==422

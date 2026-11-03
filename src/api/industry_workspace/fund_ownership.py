@@ -73,3 +73,88 @@ def fund_ownership(run: str):
     records=rows('''SELECT periodo,rank,rut,COALESCE(nombre_canonical,nombre) name,pct_propiedad weight
       FROM aportantes_fi WHERE run_fondo=:run AND periodo<=CURRENT_DATE ORDER BY periodo,rank''',dict(run=run))
     return dict(run=run,name=fund[0]['name'],**ownership_history(records))
+
+
+@router.get('/ownership-funds')
+def ownership_funds():
+    from .router import rows
+    return rows('''SELECT 'fi' kind,f.run_fondo run,f.razon_social name,f.administrador admin,
+      f.vigente active,c.nombre_cat category,c.tipo category_type,c.grupo category_group,
+      p.first_date,p.last_date,p.periods
+      FROM fondos_inversion f JOIN (
+        SELECT run_fondo,min(periodo) first_date,max(periodo) last_date,count(DISTINCT periodo) periods
+        FROM aportantes_fi WHERE periodo<=CURRENT_DATE GROUP BY run_fondo
+      ) p USING(run_fondo)
+      LEFT JOIN LATERAL (SELECT nombre_cat,tipo,grupo FROM categoria_fi_effective c
+        WHERE c.run_fondo=f.run_fondo AND periodo<=CURRENT_DATE ORDER BY periodo DESC LIMIT 1) c ON true
+      ORDER BY f.razon_social''')
+
+
+def comparison_period(funds, available, requested=None):
+    periods={f['run']:{r['periodo'] for r in available if r['run']==f['run']} for f in funds}
+    union=set().union(*periods.values())
+    common=set.intersection(*periods.values()) if periods else set()
+    selected=requested or (max(common) if common else max(union) if union else None)
+    return selected,sorted(union,reverse=True),sorted(common,reverse=True)
+
+
+def ownership_comparison(funds, records, period):
+    if period is None:
+        return dict(funds=[dict(f,reported=False,previous_reported=False,holders=0,
+                               invalid_total=False,reported_weight=None) for f in funds],
+                    rows=[],previous_period=None)
+    previous=quarter_dates(date(period.year-1,1,1),period)[-2]
+    matrix={};columns=[]
+    for index,fund in enumerate(funds):
+        run=fund['run']
+        source=[r for r in records if r['run']==run and r['periodo'] in (previous,period)]
+        history=ownership_history(source)
+        mapping={d:i for i,d in enumerate(history['dates'])}
+        current=mapping.get(period);old=mapping.get(previous)
+        coverage=history['coverage'][current] if current is not None else dict(reported=False,holders=0,invalid_total=False,reported_weight=None)
+        old_coverage=history['coverage'][old] if old is not None else dict(reported=False,invalid_total=False)
+        columns.append(dict(fund,**{k:v for k,v in coverage.items() if k!='period'},previous_reported=old_coverage['reported']))
+        current_ids={rut_key(r.get('rut')) for r in source if r['periodo']==period and rut_key(r.get('rut'))}
+        for holder in history['rows']:
+            identity=holder['id'] if holder['rut'] else run+':'+holder['id']
+            row=matrix.setdefault(identity,dict(id=identity,rut=holder['rut'],name=holder['name'],cells=[None]*len(funds)))
+            state=holder['states'][current] if current is not None else 'no_report'
+            present=(holder['rut'] in current_ids) if holder['rut'] else (current is not None and period.isoformat() in holder['id'])
+            row['cells'][index]=dict(weight=holder['weights'][current] if current is not None else None,
+                previous=holder['weights'][old] if old is not None else None,
+                change=holder['changes'][current] if current is not None else None,state=state,present=present)
+    for row in matrix.values():
+        for i,cell in enumerate(row['cells']):
+            if cell is None:
+                state='no_report' if not columns[i]['reported'] else 'invalid_report' if columns[i]['invalid_total'] else 'not_listed'
+                row['cells'][i]=dict(weight=None,previous=None,change=None,state=state,present=False)
+        row['funds']=sum(c['present'] for c in row['cells'])
+    return dict(funds=columns,previous_period=previous,rows=sorted(matrix.values(),key=lambda r:(-r['funds'],r['name'])))
+
+
+@router.get('/fund-ownership-comparison')
+def compare_fund_ownership(runs: str, period: date | None = None):
+    import re
+    from .router import rows
+    requested=list(dict.fromkeys(runs.split(',')))
+    if not requested or len(runs)>6000 or any(not re.fullmatch(r'\d{1,10}',r) for r in requested):
+        raise HTTPException(422,'Seleccione RUN de fondos válidos.')
+    if period and (period>date.today() or period.month not in (3,6,9,12) or period.day!=monthrange(period.year,period.month)[1]):
+        raise HTTPException(422,'Seleccione un cierre trimestral publicado.')
+    found=rows('''SELECT run_fondo run,razon_social name,administrador admin
+      FROM fondos_inversion WHERE run_fondo=ANY(:runs)''',dict(runs=requested))
+    by_run={f['run']:f for f in found}
+    if any(r not in by_run for r in requested):raise HTTPException(404,'Investment fund not found')
+    funds=[by_run[r] for r in requested]
+    available=rows('''SELECT DISTINCT run_fondo run,periodo FROM aportantes_fi
+      WHERE run_fondo=ANY(:runs) AND periodo<=CURRENT_DATE''',dict(runs=requested))
+    selected,periods,common=comparison_period(funds,available,period)
+    records=[]
+    if selected:
+        previous=quarter_dates(date(selected.year-1,1,1),selected)[-2]
+        records=rows('''SELECT run_fondo run,periodo,rank,rut,COALESCE(nombre_canonical,nombre) name,pct_propiedad weight
+          FROM aportantes_fi WHERE run_fondo=ANY(:runs) AND periodo IN (:period,:previous)
+          ORDER BY periodo,run_fondo,rank''',dict(runs=requested,period=selected,previous=previous))
+    return dict(period=selected,periods=periods,common_periods=common,
+                default_basis='selected' if period else 'latest_common' if common else 'latest_available',
+                **ownership_comparison(funds,records,selected))

@@ -1802,3 +1802,17 @@ require valid percentages at consecutive quarter ends; report totals above
 `/industry-workspace/owners?run=...` now selects available periods for that fund,
 rather than using the industry-wide latest quarter. Tests:
 `pytest tests/test_fund_ownership.py tests/test_ownership_analysis.py`.
+
+Main Aportantes fund comparison uses `GET /industry-workspace/ownership-funds`
+for the full FI universe with ownership filings (including inactive and no-NAV
+funds). `GET /industry-workspace/fund-ownership-comparison?runs=...&period=...`
+aligns selected funds on a single quarter. Without a requested period it chooses
+the latest quarter present for every fund; if none exists, the latest available
+quarter is returned with explicit missing-report coverage. No fund-specific
+fallback dates are substituted. Only the selected and immediately preceding
+quarter are read for the matrix. Percentages and pp changes retain the same
+validation as the single-fund history. Rows join by normalized RUT; unidentified
+holders stay local to their fund/report and never count as shared identities.
+Shared counts measure reported presence, including a reported zero, and do not
+sum ownership percentages across funds. The API returns column coverage,
+previous values, cell states and the available/common quarter lists.
