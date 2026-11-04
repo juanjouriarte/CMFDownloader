@@ -89,6 +89,7 @@ def build_analysis(data, selected, currency, kind, category=None):
         comparable = old is not None and old['admin'] == f['admin']
         fund_rows.append(dict(kind=f['kind'], run=f['run_fondo'], name=f['fund_name'], admin=f['admin'],
             category=f['category'], aum=float(f['aum']), date=f['latest_data_date'],
+            native_currency=f.get('native_currency', f.get('currency', currency)),
             previous_aum=float(old['aum']) if comparable else None,
             change=float(f['aum'] - old['aum']) if comparable else None,
             status='comparable' if comparable else 'without_base'))
@@ -96,6 +97,7 @@ def build_analysis(data, selected, currency, kind, category=None):
         if (old['kind'], old['run_fondo']) not in current_keys:
             fund_rows.append(dict(kind=old['kind'], run=old['run_fondo'], name=old['fund_name'], admin=old['admin'],
                 category=old['category'], aum=None, date=None, previous_aum=float(old['aum']),
+                native_currency=old.get('native_currency', old.get('currency', currency)),
                 change=None, status='not_reported'))
     category_totals = defaultdict(float)
     for f in current_funds:
@@ -131,14 +133,18 @@ def load_analysis(currency, kind, period, category, cache_bucket):
     ) + ') p ORDER BY month DESC', {'currency': currency})]
     selected = period or (periods[0] if periods else date.today().replace(day=1))
     data = monthly_data(currency, kind, month_shift(selected, -12), selected, active_only=True)
-    return dict(**build_analysis(data, selected, currency, kind, category), periods=periods)
+    return dict(**build_analysis(data, selected, currency, kind, category), periods=periods, mode='native')
 
 
 @router.get('/analysis')
 def administrator_analysis(currency: str=Query('CLP', pattern='^(?:[A-Z]{3}|UF)$'),
-        kind: Literal['all','fm','fi']='all', period: date|None=None, category: str|None=None):
+        kind: Literal['all','fm','fi']='all', period: date|None=None, category: str|None=None,
+        consolidated: bool=False):
     if period:
         period = period.replace(day=1)
         if period > date.today() or period < date(2020,1,1):
             raise HTTPException(422, 'Seleccione un mes entre 2020 y el actual.')
+    if consolidated:
+        from .administrator_fx import load_analysis as converted_analysis
+        return converted_analysis(kind, period, category, classification_cache_epoch())
     return load_analysis(currency, kind, period, category, classification_cache_epoch())

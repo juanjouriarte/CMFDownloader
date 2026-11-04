@@ -1639,6 +1639,25 @@ never available through Descargador.
 
 ## Historical FX and consolidated Panorama
 
+Administradoras `/industry-workspace/administrators/analysis` and `/history`
+also accept `consolidated=true`. `administrator_fx.py` converts the existing
+active NAV universe to CLP; it does not add quarterly EEFF funds. Monthly ranking
+dates are chosen across all currencies before FX lookup. A fund's old currency
+is dropped when its monthly reporting currency changes, and simultaneous currency
+positions convert before deduplication by kind/RUN. Rankings, strategy shares,
+concentration and exact-month changes all use converted amounts. Missing FX in
+the common monthly snapshot suppresses that month's complete ranking/total and
+comparisons; coverage and per-currency rate dates remain available.
+
+Daily history converts each observation date using the same backward-only
+seven-day limit and stored `fx_daily`. Long ranges use monthly summaries and an
+exact daily boundary for custom end dates. Missing own FX suppresses AUM; missing
+market FX suppresses shares. No rates are fetched from BDE on page load. Native
+queries retain their existing behavior; NNM retains its independent native
+currency selection. Fund rows expose `native_currency` for drill-downs. Tests:
+`tests/test_administrator_fx.py`, `tests/test_workspace_administrators.py`,
+`tests/test_workspace_timeseries.py`. No additional migration or job is needed.
+
 `src/etl/fx/catalog.py` contains the verified BDE daily series catalog (61 series:
 USD observed, UF and 59 foreign-currency/SDR parities). Metadata source is the
 Banco Central API catalogue spreadsheet. Legacy BDE symbols are mapped explicitly

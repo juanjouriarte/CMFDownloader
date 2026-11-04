@@ -230,7 +230,7 @@ def monthly_data(currency, kind, start, end, category=None, active_only=False):
         FROM mv_industry_monthly_{k} m JOIN {table} f USING(run_fondo)
         LEFT JOIN (SELECT DISTINCT ON(run_fondo) run_fondo,nombre_cat FROM categoria_{k}_effective
           WHERE periodo<=CURRENT_DATE ORDER BY run_fondo,periodo DESC) c USING(run_fondo)
-        WHERE m.currency=:currency AND m.month BETWEEN :start AND :end
+        WHERE (:currency IS NULL OR m.currency=:currency) AND m.month BETWEEN :start AND :end
           AND m.aum IS NOT NULL AND m.aum::text NOT IN ('NaN','Infinity','-Infinity')
           {'AND f.fecha_termino_operaciones IS NULL' if active_only and k=='fm' else 'AND f.vigente IS TRUE' if active_only else ''}
           AND m.aum>=0 AND (:category IS NULL OR COALESCE(c.nombre_cat,'Sin clasificación')=:category)""")

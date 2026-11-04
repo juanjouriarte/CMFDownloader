@@ -82,8 +82,11 @@ def administrator_history(admin: str=Query(min_length=1,max_length=300),
         from_date: date=Query(), to_date: date=Query(),
         currency: str=Query('CLP',pattern='^(?:[A-Z]{3}|UF)$'),
         kind: Literal['all','fm','fi']='all', category: str|None=None,
-        metric: Literal['aum','share']='aum'):
+        metric: Literal['aum','share']='aum', consolidated: bool=False):
     validate_range(from_date,to_date)
+    if consolidated:
+        from .administrator_fx import load_history as converted_history
+        return converted_history(kind,admin,from_date,to_date,category,metric,classification_cache_epoch())
     return load_history(currency,kind,admin,from_date,to_date,category,metric,classification_cache_epoch())
 
 
