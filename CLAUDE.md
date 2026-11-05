@@ -1658,6 +1658,19 @@ currency selection. Fund rows expose `native_currency` for drill-downs. Tests:
 `tests/test_administrator_fx.py`, `tests/test_workspace_administrators.py`,
 `tests/test_workspace_timeseries.py`. No additional migration or job is needed.
 
+Administradoras analysis also accepts `date_mode=day&as_of=YYYY-MM-DD` or
+`date_mode=month_end&period=YYYY-MM-01` via `administrator_dates.py`. Exact-day
+snapshots read existing daily NAV for 13 same-day monthly dates (short months
+clamp to their last day); no previous-day substitution. Expected filing counts
+and coverage percentages are unknown for this exact-day extract, not 100%.
+Month-end explicitly selects the latest reported common date in the month,
+not the most-covered earlier date; actual dates and coverage remain visible.
+Both modes retain current active-fund/category attribution and native/CLP modes.
+FX uses each snapshot's actual date and the existing seven-day limit. Legacy
+calls without date options retain their prior snapshot behavior. Calendar bounds
+come from stored monthly data; this feature does not download data or need a
+migration. Tests: `tests/test_administrator_dates.py`.
+
 `src/etl/fx/catalog.py` contains the verified BDE daily series catalog (61 series:
 USD observed, UF and 59 foreign-currency/SDR parities). Metadata source is the
 Banco Central API catalogue spreadsheet. Legacy BDE symbols are mapped explicitly

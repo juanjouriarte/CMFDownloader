@@ -139,11 +139,23 @@ def load_analysis(currency, kind, period, category, cache_bucket):
 @router.get('/analysis')
 def administrator_analysis(currency: str=Query('CLP', pattern='^(?:[A-Z]{3}|UF)$'),
         kind: Literal['all','fm','fi']='all', period: date|None=None, category: str|None=None,
-        consolidated: bool=False):
+        consolidated: bool=False, as_of: date|None=None,
+        date_mode: Literal['day','month_end']|None=None):
+    if as_of is not None:
+        if as_of < date(2020,1,1) or as_of > date.today():
+            raise HTTPException(422, 'Seleccione una fecha entre 2020 y hoy.')
+        if period is not None or date_mode == 'month_end':
+            raise HTTPException(422, 'Seleccione una fecha exacta o un mes de cierre, no ambos.')
+        date_mode = 'day'
+    if date_mode == 'day' and as_of is None:
+        raise HTTPException(422, 'La fecha exacta es obligatoria.')
     if period:
         period = period.replace(day=1)
         if period > date.today() or period < date(2020,1,1):
             raise HTTPException(422, 'Seleccione un mes entre 2020 y el actual.')
+    if date_mode:
+        from .administrator_dates import load_analysis as dated_analysis
+        return dated_analysis(currency,kind,period,as_of,date_mode,category,consolidated,classification_cache_epoch())
     if consolidated:
         from .administrator_fx import load_analysis as converted_analysis
         return converted_analysis(kind, period, category, classification_cache_epoch())
