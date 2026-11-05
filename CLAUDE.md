@@ -1611,6 +1611,16 @@ accepts only `{ "job_id": "<allowlisted id or all>" }`. The API writes to
 `DELETE /requests/{id}` cancels queued requests only. No arbitrary functions,
 date backfills, credentials, or email jobs can be submitted.
 
+`GET /job-runner/runs` provides the authenticated execution log from existing
+`job_runs`: `job_id`, `status` (all/incidents/error/partial/interrupted/success/running),
+`days` (0 = all history), `request_id`, `limit` and `offset`. It returns paginated
+rows, a filtered total and status counts for the chosen job/time/request scope.
+Only data jobs in the catalog are included. Legacy success-with-errors is partial;
+running rows without a held job lock display as interrupted, without mutating
+history. Each run exposes safe fixed error guidance and allowlisted exception
+names; never raw error_detail, SQL, URLs or tracebacks. No schema change is needed.
+Tests cover auth, redaction, filters, pagination and active/abandoned lock states.
+
 Migration `b4c5d6e7f8a9` adds the durable queue, heartbeat and `job_runs.request_id`.
 `worker.py` registers a five-second queue poll alongside the existing cron jobs.
 A single background consumer executes requests in order; dependencies follow

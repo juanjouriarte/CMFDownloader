@@ -30,7 +30,7 @@ def client(monkeypatch):
 
 
 def test_requires_admin_on_every_endpoint(client,monkeypatch):
-    for method,path,kwargs in [('get','/jobs',{}),('get','/jobs/administradores/runs',{}),
+    for method,path,kwargs in [('get','/jobs',{}),('get','/runs',{}),('get','/jobs/administradores/runs',{}),
                               ('post','/requests',{'json':{'job_id':'all'}}),('delete','/requests/1',{})]:
         response=getattr(client,method)('/job-runner'+path,**kwargs)
         assert response.status_code==401
@@ -164,3 +164,62 @@ def test_offline_cancel_and_interrupted_recovery(db,client):
         s.execute(text("UPDATE job_runner_heartbeat SET seen_at=now()-interval '2 minutes'"));s.commit()
     with db() as s,pytest.raises(HTTPException) as caught:api.enqueue(s,'administradores','editor')
     assert caught.value.status_code==503
+
+
+def test_error_guidance_never_returns_raw_details():
+    for detail in ('Traceback\nrequests.exceptions.ReadTimeout: api_key=secret https://private',
+                   'secret-token-without-exception', 'Traceback\nUnknownSecretError: password=secret'):
+        run=api.public_run(dict(status='error',error_detail=detail,errors=None))
+        assert 'secret' not in str(run).lower() and 'https://' not in str(run)
+        assert 'error_detail' not in run and run['suggested_action']
+    interrupted=api.public_run(dict(status='interrupted',errors=None))
+    assert 'interrumpió' in interrupted['error_summary']
+    partial=api.public_run(dict(status='partial',errors=4))
+    assert '4 errores' in partial['message']
+
+
+def test_log_validation(client):
+    auth={'Authorization':'Bearer test-key'}
+    for params in ({'status':'bogus'},{'days':-1},{'limit':101},{'offset':-1},{'request_id':0}):
+        assert client.get('/job-runner/runs',headers=auth,params=params).status_code==422
+    assert client.get('/job-runner/runs?job_id=unknown',headers=auth).status_code==404
+
+
+def test_execution_log_filters_pagination_and_abandoned_runs(db,client):
+    request=submit(db)
+    with db() as s:
+        s.execute(text("""INSERT INTO job_runs(job_id,started_at,finished_at,status,errors,rows_upserted)
+            SELECT 'administradores',now()-n*interval '1 hour',now()-n*interval '1 hour'+interval '1 minute','success',0,7
+            FROM generate_series(1,30) n"""))
+        for job,status,errors,detail in [('fi_daily_nav','error',None,'Traceback\nReadTimeout: password=secret'),
+                                      ('mf_daily_nav','success',2,None),('fi_identity','running',None,None),
+                                      ('mf_nnm_email_report','error',None,'secret')]:
+            s.execute(text("""INSERT INTO job_runs(job_id,started_at,status,errors,error_detail,request_id)
+                VALUES(:job,now(),:status,:errors,:detail,:request)"""),
+                dict(job=job,status=status,errors=errors,detail=detail,request=request['id']))
+        s.commit()
+    auth={'Authorization':'Bearer test-key'}
+    def get(**params):
+        r=client.get('/job-runner/runs',headers=auth,params=params)
+        assert r.status_code==200,r.text
+        assert r.headers['cache-control']=='no-store'
+        return r.json()
+    result=get(limit=25)
+    assert result['total']==33 and len(result['rows'])==25
+    second=get(limit=25,offset=25)
+    assert len(second['rows'])==8
+    assert not {r['id'] for r in result['rows']} & {r['id'] for r in second['rows']}
+    incidents=get(status='incidents')
+    assert incidents['total']==3
+    assert {r['status'] for r in incidents['rows']}=={'error','partial','interrupted'}
+    assert all(r['requested_by']=='editor' for r in incidents['rows'])
+    assert 'secret' not in str(incidents) and 'error_detail' not in str(incidents)
+    assert get(job_id='administradores')['total']==30
+    assert get(request_id=request['id'])['total']==3
+    assert get(status='partial')['total']==1
+    assert get(days=1)['total']<33
+    assert get(status='success')['total']==30  # Legacy success with errors is partial.
+    with control.job_lock('fi_identity'):
+        assert get(status='running')['total']==1
+    with db() as s:
+        assert s.execute(text("SELECT status FROM job_runs WHERE job_id='fi_identity'")).scalar()=='running'
