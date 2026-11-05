@@ -1641,7 +1641,8 @@ never available through Descargador.
 
 Administradoras `/industry-workspace/administrators/analysis` and `/history`
 also accept `consolidated=true`. `administrator_fx.py` converts the existing
-active NAV universe to CLP; it does not add quarterly EEFF funds. Monthly ranking
+active NAV universe to CLP for legacy/NAV-only calls. Expanded source modes use
+`administrator_equity.py` as described below. Monthly ranking
 dates are chosen across all currencies before FX lookup. A fund's old currency
 is dropped when its monthly reporting currency changes, and simultaneous currency
 positions convert before deduplication by kind/RUN. Rankings, strategy shares,
@@ -1670,6 +1671,24 @@ FX uses each snapshot's actual date and the existing seven-day limit. Legacy
 calls without date options retain their prior snapshot behavior. Calendar bounds
 come from stored monthly data; this feature does not download data or need a
 migration. Tests: `tests/test_administrator_dates.py`.
+
+Administradoras `/analysis`, `/history` and `/currencies` also accept
+`aum_source=nav|all|quarterly_report` (default `nav` for compatibility). The UI
+opts into `all`. `administrator_equity.py` uses the same current active FINR /
+no-valid-historical-NAV eligibility and validated net equity as Panorama. Latest
+reports are selected before currency/value filtering, must close on/before the
+snapshot, and may be carried up to 185 days. Never fill missing NAV series or
+infer equity from portfolios. Historical eligibility/classification is current;
+report closing dates are known, publication dates are not.
+
+Expanded analysis retains NAV's common date, supplements eligible FI once,
+and converts EEFF at each actual report date. Internal analysis cuts are distinct
+from `valuation_date`; fund outputs/CSV retain real valuation and prior valuation
+dates plus `aum_source`. Missing FX suppresses complete rankings and comparisons.
+Responses disclose NAV/EEFF counts/amounts, report dates and excluded reports.
+Expanded history uses monthly cuts plus the exact selected endpoint; stored
+quarterly equity is not daily NAV or a flow estimate. NNM stays NAV-only. No new
+migration, scraper or download is needed. Tests: `tests/test_administrator_equity.py`.
 
 `src/etl/fx/catalog.py` contains the verified BDE daily series catalog (61 series:
 USD observed, UF and 59 foreign-currency/SDR parities). Metadata source is the

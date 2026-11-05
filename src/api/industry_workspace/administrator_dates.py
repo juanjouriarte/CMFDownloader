@@ -1,7 +1,7 @@
 """Exact-day and latest-reported-month-end administrator snapshots."""
 from calendar import monthrange
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 from functools import lru_cache
 
 from src.fx import Rates
@@ -77,7 +77,7 @@ def build_dated_analysis(raw, selected, currency, kind, category, mode, requeste
 
 
 @lru_cache(maxsize=32)
-def load_analysis(currency, kind, period, as_of, mode, category, consolidated, bucket):
+def load_analysis(currency, kind, period, as_of, mode, category, consolidated, bucket, aum_source="nav"):
     from .router import monthly_data, rows
     native = None if consolidated else currency
     tables = [f'mv_industry_monthly_{k}' for k in ('fm','fi') if kind in ('all',k)]
@@ -88,14 +88,31 @@ def load_analysis(currency, kind, period, as_of, mode, category, consolidated, b
     )+') source GROUP BY month ORDER BY month DESC', dict(currency=native))
     periods = [r['month'] for r in calendar]
     latest = max((r['latest_date'] for r in calendar), default=None)
+    if aum_source != 'nav' and kind != 'fm':
+        from .administrator_equity import report_data
+        from src.api.fx import month_ends
+        _,stored_reports=report_data(date(2020,1,1),date.today(),kind)
+        report_dates=[r['periodo'] for r in stored_reports if native is None or r['currency']==native]
+        if report_dates:
+            latest=max([*report_dates,*([latest] if latest else [])])
+            periods=sorted(set(periods)|{m for m,_ in month_ends(min(report_dates),latest)},reverse=True)
     if mode == 'day':
         selected, requested = as_of.replace(day=1), as_of
-        raw = daily_data(native,kind,comparison_dates(as_of))
+        raw = daily_data(native,kind,comparison_dates(as_of)) if aum_source != "quarterly_report" else []
     else:
         selected = period or (periods[0] if periods else date.today().replace(day=1))
         requested = min(selected.replace(day=monthrange(selected.year,selected.month)[1]),date.today())
-        raw = monthly_data(native,kind,max(date(2020,1,1),month_shift(selected,-12)),selected,active_only=True)
+        raw = monthly_data(native,kind,max(date(2020,1,1),month_shift(selected,-12)),selected,active_only=True) if aum_source != "quarterly_report" else []
         raw = [r for r in raw if r['latest_data_date'] <= requested]
+    if aum_source != 'nav':
+        from .administrator_equity import report_data, analyze
+        from src.api.fx import month_ends
+        start=max(date(2020,1,1),month_shift(selected,-12))
+        candidates,reports=report_data(start,requested,kind)
+        cutoffs=comparison_dates(as_of) if mode=='day' else dict(month_ends(start,requested))
+        book=Rates.load(start-timedelta(days=185),requested) if consolidated else None
+        result=analyze(raw,candidates,reports,cutoffs,selected,currency,kind,category,mode,requested,aum_source,book)
+        return dict(result,periods=periods,latest_date=max(latest or requested,requested),min_date=date(2020,1,1))
     book = Rates.load(min((r['latest_data_date'] for r in raw),default=None),requested) if consolidated else None
     result = build_dated_analysis(raw,selected,currency,kind,category,mode,requested,book)
     return dict(result,periods=periods,latest_date=latest,min_date=date(2020,1,1))
