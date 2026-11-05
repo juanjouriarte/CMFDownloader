@@ -20,6 +20,8 @@ from .industry_workspace.router import router as workspace_router
 router = APIRouter()
 from .fx import router as fx_router
 router.include_router(fx_router)
+from .panorama_flows import router as panorama_flows_router
+router.include_router(panorama_flows_router)
 from .reported_equity import router as reported_equity_router
 router.include_router(reported_equity_router)
 from .job_runner import router as job_runner_router

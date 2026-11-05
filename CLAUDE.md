@@ -1877,3 +1877,19 @@ holders stay local to their fund/report and never count as shared identities.
 Shared counts measure reported presence, including a reported zero, and do not
 sum ownership percentages across funds. The API returns column coverage,
 previous values, cell states and the available/common quarter lists.
+
+### Panorama monthly Net New Money
+
+`GET /industry/panorama/flows` reads existing daily FM/FI NNM facts, with active
+fund, AGF and current effective category filters. `kind=fm|fi` keeps reported FM
+external flows (net of confirmed internal migrations) separate from NAV-implied FI
+estimates and approved series continuity. Date ranges start at a calendar month;
+missing months remain null. There is no EEFF-only flow estimate or new ETL table.
+Omitting `currency` converts each daily amount with stored backward-looking FX
+(maximum seven days); specifying currency preserves Ranking's native fact rules.
+Missing currency/FX leaves the full monthly `amount` null while `covered_amount`
+exposes only convertible observations. Clients must label that subtotal partial.
+Valid/observed counts describe calculation records, not completeness of filing
+dates. Cache invalidation follows the classification/data epoch. Verification:
+`pytest tests/test_panorama_flows.py tests/test_fx.py` and reconciliation with the
+existing monthly Ranking calculations.
