@@ -18,6 +18,8 @@ from .insiders_explorer import router as insiders_explorer_router
 from .industry_workspace.router import router as workspace_router
 
 router = APIRouter()
+from .category_analytics import router as category_analytics_router
+router.include_router(category_analytics_router)
 from .fx import router as fx_router
 router.include_router(fx_router)
 from .panorama_flows import router as panorama_flows_router
