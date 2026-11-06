@@ -116,6 +116,8 @@ def register_jobs(scheduler: BaseScheduler) -> None:
     from src.etl.fundDeposits.downloader import FundDepositsDownloader
     from src.etl.insurance.jobs import InsurancePortfoliosDownloader
     from src.reports.mf_nnm_email import run as send_mf_nnm_reports
+    from src.etl.fx.downloader import FXDownloader
+    from src.etl.investmentFunds.reported_equity import ReportedEquityDownloader
 
 
     def _job(job_id: str, fn):
@@ -132,6 +134,9 @@ def register_jobs(scheduler: BaseScheduler) -> None:
             return result
         wrapper.__name__ = job_id
         return wrapper
+
+    scheduler.add_job(_job('fx_daily', lambda: FXDownloader().run()),
+        'cron',hour=7,minute=30,id='fx_daily')
 
     scheduler.add_job(
         _job("ref_codes_refresh", refresh_ref_codes),
@@ -227,6 +232,10 @@ def register_jobs(scheduler: BaseScheduler) -> None:
     scheduler.add_job(
         _job("fi_categories", fi_categorize),
         "cron", day=5, hour=11, minute=0, id="fi_categories",
+    )
+    scheduler.add_job(
+        _job("fi_reported_equity", lambda: ReportedEquityDownloader().run()),
+        "cron", hour=11, minute=30, id="fi_reported_equity",
     )
 
 

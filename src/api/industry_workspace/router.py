@@ -37,7 +37,7 @@ def administrators(currency: str = Query('CLP', pattern='^(?:[A-Z]{3}|UF)$'),
 
 
 @router.get('/funds')
-def funds():
+def funds(include_reported: bool = False):
     parts=[]
     for kind,table,name in [('fm','fondo_mutuo','nombre_fondo'),('fi','fondos_inversion','razon_social')]:
         parts.append(f"""SELECT '{kind}' kind, f.run_fondo run, f.{name} name, f.{'razon_social_administradora' if kind=='fm' else 'administrador'} admin,
@@ -47,7 +47,12 @@ def funds():
         WHERE aum IS NOT NULL ORDER BY run_fondo,currency,month DESC) m
         JOIN {table} f USING(run_fondo) LEFT JOIN (SELECT DISTINCT ON(run_fondo) * FROM categoria_{kind}_effective WHERE periodo<=CURRENT_DATE ORDER BY run_fondo,periodo DESC) c USING(run_fondo)
         WHERE m.latest_data_date=m.latest_fund_date AND {"f.fecha_termino_operaciones IS NULL" if kind=='fm' else 'f.vigente IS TRUE'}""")
-    return rows(' UNION ALL '.join(parts)+' ORDER BY currency, aum DESC NULLS LAST')
+    result = rows(' UNION ALL '.join(parts)+' ORDER BY currency, aum DESC NULLS LAST')
+    if include_reported:
+        from src.api.reported_equity import reported_fund_directory
+        nav_runs = {r['run'] for r in result if r['kind']=='fi'}
+        result.extend(r for r in reported_fund_directory() if r['run'] not in nav_runs)
+    return result
 
 # Identity is the reported identifier + instrument type + issuer identifier/name.
 SOURCES=[('fm','cartera_naci','nemotecnico','rut_emisor',"NULL::text",'porcentaje_activos_fondo'),
@@ -117,7 +122,8 @@ def instruments(search:str=Query('',max_length=150),identifier:str|None=None,ins
 
 @router.get('/owners')
 def owners(period:date|None=None,search:str=Query('',max_length=150),rut:str|None=None,run:str|None=None):
-    periods=rows('SELECT DISTINCT periodo FROM aportantes_fi WHERE periodo<=CURRENT_DATE ORDER BY periodo DESC')
+    periods=rows('''SELECT DISTINCT periodo FROM aportantes_fi WHERE periodo<=CURRENT_DATE
+      AND (:run IS NULL OR run_fondo=:run) ORDER BY periodo DESC''',dict(run=run))
     selected=period or (periods[0]['periodo'] if periods else None)
     params={'period':selected,'search':'%'+search+'%','rut':rut,'run':run}
     base="""FROM aportantes_fi a LEFT JOIN fondos_inversion f USING(run_fondo)
@@ -224,7 +230,7 @@ def monthly_data(currency, kind, start, end, category=None, active_only=False):
         FROM mv_industry_monthly_{k} m JOIN {table} f USING(run_fondo)
         LEFT JOIN (SELECT DISTINCT ON(run_fondo) run_fondo,nombre_cat FROM categoria_{k}_effective
           WHERE periodo<=CURRENT_DATE ORDER BY run_fondo,periodo DESC) c USING(run_fondo)
-        WHERE m.currency=:currency AND m.month BETWEEN :start AND :end
+        WHERE (:currency IS NULL OR m.currency=:currency) AND m.month BETWEEN :start AND :end
           AND m.aum IS NOT NULL AND m.aum::text NOT IN ('NaN','Infinity','-Infinity')
           {'AND f.fecha_termino_operaciones IS NULL' if active_only and k=='fm' else 'AND f.vigente IS TRUE' if active_only else ''}
           AND m.aum>=0 AND (:category IS NULL OR COALESCE(c.nombre_cat,'Sin clasificación')=:category)""")
@@ -425,3 +431,6 @@ router.include_router(ownership_analysis_router)
 
 from .fund_flows import router as fund_flows_router
 router.include_router(fund_flows_router)
+
+from .fund_ownership import router as fund_ownership_router
+router.include_router(fund_ownership_router)

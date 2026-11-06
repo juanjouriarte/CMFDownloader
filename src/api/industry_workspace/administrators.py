@@ -42,11 +42,22 @@ def load_currencies(admin, kind, period, category, cache_bucket):
 
 @router.get('/currencies')
 def administrator_currencies(admin: str, period: date,
-        kind: Literal['all','fm','fi']='all', category: str|None=None):
+        kind: Literal['all','fm','fi']='all', category: str|None=None,
+        aum_source: Literal['nav','all','quarterly_report']='nav'):
     period = period.replace(day=1)
     if period > date.today() or period < date(2020, 1, 1):
         raise HTTPException(422, 'Seleccione un mes entre 2020 y el actual.')
-    return load_currencies(admin, kind, period, category, classification_cache_epoch())
+    result=dict(load_currencies(admin, kind, period, category, classification_cache_epoch()))
+    if aum_source != 'nav':
+        from .administrator_equity import report_data
+        from src.api.reported_equity import select_reports
+        from calendar import monthrange
+        cutoff=min(date.today(),period.replace(day=monthrange(period.year,period.month)[1]))
+        candidates,reports=report_data(period,cutoff,kind)
+        latest={r['run_fondo']:r for r in reports}
+        included,_=select_reports([r for r in candidates if r['admin']==admin and (not category or r['category']==category)],latest,cutoff)
+        result['currencies']=sorted(set((result['currencies'] if aum_source=='all' else [])+[r['currency'] for r in included if r['currency']]))
+    return result
 
 
 def month_shift(value, offset):
@@ -88,7 +99,10 @@ def build_analysis(data, selected, currency, kind, category=None):
         # Changes between funds in the same administrator; no synthetic zero base.
         comparable = old is not None and old['admin'] == f['admin']
         fund_rows.append(dict(kind=f['kind'], run=f['run_fondo'], name=f['fund_name'], admin=f['admin'],
-            category=f['category'], aum=float(f['aum']), date=f['latest_data_date'],
+            category=f['category'], aum=float(f['aum']), date=f.get('valuation_date',f['latest_data_date']),
+            aum_source=f.get('aum_source','nav'),source_url=f.get('source_url'),
+            previous_date=old.get('valuation_date',old['latest_data_date']) if old else None,
+            native_currency=f.get('native_currency', f.get('currency', currency)),
             previous_aum=float(old['aum']) if comparable else None,
             change=float(f['aum'] - old['aum']) if comparable else None,
             status='comparable' if comparable else 'without_base'))
@@ -96,6 +110,8 @@ def build_analysis(data, selected, currency, kind, category=None):
         if (old['kind'], old['run_fondo']) not in current_keys:
             fund_rows.append(dict(kind=old['kind'], run=old['run_fondo'], name=old['fund_name'], admin=old['admin'],
                 category=old['category'], aum=None, date=None, previous_aum=float(old['aum']),
+                native_currency=old.get('native_currency', old.get('currency', currency)),
+                aum_source=old.get('aum_source','nav'),previous_date=old.get('valuation_date',old['latest_data_date']),
                 change=None, status='not_reported'))
     category_totals = defaultdict(float)
     for f in current_funds:
@@ -131,14 +147,31 @@ def load_analysis(currency, kind, period, category, cache_bucket):
     ) + ') p ORDER BY month DESC', {'currency': currency})]
     selected = period or (periods[0] if periods else date.today().replace(day=1))
     data = monthly_data(currency, kind, month_shift(selected, -12), selected, active_only=True)
-    return dict(**build_analysis(data, selected, currency, kind, category), periods=periods)
+    return dict(**build_analysis(data, selected, currency, kind, category), periods=periods, mode='native')
 
 
 @router.get('/analysis')
 def administrator_analysis(currency: str=Query('CLP', pattern='^(?:[A-Z]{3}|UF)$'),
-        kind: Literal['all','fm','fi']='all', period: date|None=None, category: str|None=None):
+        kind: Literal['all','fm','fi']='all', period: date|None=None, category: str|None=None,
+        consolidated: bool=False, as_of: date|None=None,
+        date_mode: Literal['day','month_end']|None=None,
+        aum_source: Literal['nav','all','quarterly_report']='nav'):
+    if as_of is not None:
+        if as_of < date(2020,1,1) or as_of > date.today():
+            raise HTTPException(422, 'Seleccione una fecha entre 2020 y hoy.')
+        if period is not None or date_mode == 'month_end':
+            raise HTTPException(422, 'Seleccione una fecha exacta o un mes de cierre, no ambos.')
+        date_mode = 'day'
+    if date_mode == 'day' and as_of is None:
+        raise HTTPException(422, 'La fecha exacta es obligatoria.')
     if period:
         period = period.replace(day=1)
         if period > date.today() or period < date(2020,1,1):
             raise HTTPException(422, 'Seleccione un mes entre 2020 y el actual.')
+    if date_mode or aum_source != 'nav':
+        from .administrator_dates import load_analysis as dated_analysis
+        return dated_analysis(currency,kind,period,as_of,date_mode or "month_end",category,consolidated,classification_cache_epoch(),aum_source)
+    if consolidated:
+        from .administrator_fx import load_analysis as converted_analysis
+        return converted_analysis(kind, period, category, classification_cache_epoch())
     return load_analysis(currency, kind, period, category, classification_cache_epoch())

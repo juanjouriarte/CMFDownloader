@@ -1604,19 +1604,29 @@ this detail fallback. No source data or materialized-view refresh is needed.
 
 `/job-runner` is authenticated with the same named `CLASSIFICATION_ADMIN_KEYS`
 credentials as classification editing (fails closed; responses are private).
-`GET /jobs` returns the fixed 26-job data catalog, latest results, queue and
+`GET /jobs` returns the fixed 28-job data catalog, latest results, queue and
 worker heartbeat; `GET /jobs/{id}/runs` returns sanitized history. `POST /requests`
 accepts only `{ "job_id": "<allowlisted id or all>" }`. The API writes to
 `job_requests`; it never starts an ETL in its own request or background task.
 `DELETE /requests/{id}` cancels queued requests only. No arbitrary functions,
 date backfills, credentials, or email jobs can be submitted.
 
+`GET /job-runner/runs` provides the authenticated execution log from existing
+`job_runs`: `job_id`, `status` (all/incidents/error/partial/interrupted/success/running),
+`days` (0 = all history), `request_id`, `limit` and `offset`. It returns paginated
+rows, a filtered total and status counts for the chosen job/time/request scope.
+Only data jobs in the catalog are included. Legacy success-with-errors is partial;
+running rows without a held job lock display as interrupted, without mutating
+history. Each run exposes safe fixed error guidance and allowlisted exception
+names; never raw error_detail, SQL, URLs or tracebacks. No schema change is needed.
+Tests cover auth, redaction, filters, pagination and active/abandoned lock states.
+
 Migration `b4c5d6e7f8a9` adds the durable queue, heartbeat and `job_runs.request_id`.
 `worker.py` registers a five-second queue poll alongside the existing cron jobs.
 A single background consumer executes requests in order; dependencies follow
 NAV, portfolio, identity and dividend imports. The four NNM/monthly refreshes
 already nested inside NAV jobs are shown in the catalog, not duplicated in the
-all-data plan (22 explicit steps / 26 tracked jobs). Browser disconnection does
+all-data plan (24 explicit steps / 28 tracked jobs). Browser disconnection does
 not cancel work. Latest successful imports may still have older source dates.
 
 PostgreSQL advisory locks protect the consumer and each tracked job across
@@ -1635,3 +1645,251 @@ cancellation and crash-recovery checks in an isolated temporary local schema,
 without executing downloads. Deploy migration, API and worker together before
 publishing the frontend. The existing scheduled email job is unchanged and is
 never available through Descargador.
+
+
+## Historical FX and consolidated Panorama
+
+Administradoras `/industry-workspace/administrators/analysis` and `/history`
+also accept `consolidated=true`. `administrator_fx.py` converts the existing
+active NAV universe to CLP for legacy/NAV-only calls. Expanded source modes use
+`administrator_equity.py` as described below. Monthly ranking
+dates are chosen across all currencies before FX lookup. A fund's old currency
+is dropped when its monthly reporting currency changes, and simultaneous currency
+positions convert before deduplication by kind/RUN. Rankings, strategy shares,
+concentration and exact-month changes all use converted amounts. Missing FX in
+the common monthly snapshot suppresses that month's complete ranking/total and
+comparisons; coverage and per-currency rate dates remain available.
+
+Daily history converts each observation date using the same backward-only
+seven-day limit and stored `fx_daily`. Long ranges use monthly summaries and an
+exact daily boundary for custom end dates. Missing own FX suppresses AUM; missing
+market FX suppresses shares. No rates are fetched from BDE on page load. Native
+queries retain their existing behavior; NNM retains its independent native
+currency selection. Fund rows expose `native_currency` for drill-downs. Tests:
+`tests/test_administrator_fx.py`, `tests/test_workspace_administrators.py`,
+`tests/test_workspace_timeseries.py`. No additional migration or job is needed.
+
+Administradoras analysis also accepts `date_mode=day&as_of=YYYY-MM-DD` or
+`date_mode=month_end&period=YYYY-MM-01` via `administrator_dates.py`. Exact-day
+snapshots read existing daily NAV for 13 same-day monthly dates (short months
+clamp to their last day); no previous-day substitution. Expected filing counts
+and coverage percentages are unknown for this exact-day extract, not 100%.
+Month-end explicitly selects the latest reported common date in the month,
+not the most-covered earlier date; actual dates and coverage remain visible.
+Both modes retain current active-fund/category attribution and native/CLP modes.
+FX uses each snapshot's actual date and the existing seven-day limit. Legacy
+calls without date options retain their prior snapshot behavior. Calendar bounds
+come from stored monthly data; this feature does not download data or need a
+migration. Tests: `tests/test_administrator_dates.py`.
+
+Administradoras `/analysis`, `/history` and `/currencies` also accept
+`aum_source=nav|all|quarterly_report` (default `nav` for compatibility). The UI
+opts into `all`. `administrator_equity.py` uses the same current active FINR /
+no-valid-historical-NAV eligibility and validated net equity as Panorama. Latest
+reports are selected before currency/value filtering, must close on/before the
+snapshot, and may be carried up to 185 days. Never fill missing NAV series or
+infer equity from portfolios. Historical eligibility/classification is current;
+report closing dates are known, publication dates are not.
+
+Expanded analysis retains NAV's common date, supplements eligible FI once,
+and converts EEFF at each actual report date. Internal analysis cuts are distinct
+from `valuation_date`; fund outputs/CSV retain real valuation and prior valuation
+dates plus `aum_source`. Missing FX suppresses complete rankings and comparisons.
+Responses disclose NAV/EEFF counts/amounts, report dates and excluded reports.
+Expanded history uses monthly cuts plus the exact selected endpoint; stored
+quarterly equity is not daily NAV or a flow estimate. NNM stays NAV-only. No new
+migration, scraper or download is needed. Tests: `tests/test_administrator_equity.py`.
+
+`src/etl/fx/catalog.py` contains the verified BDE daily series catalog (61 series:
+USD observed, UF and 59 foreign-currency/SDR parities). Metadata source is the
+Banco Central API catalogue spreadsheet. Legacy BDE symbols are mapped explicitly
+(BSP→BSD, BOL→BOB, RUR→RUB, DEG→XDR); VEB is retained as the published series code
+and is not treated as VES. No arbitrary currency-name or redenomination inference.
+
+Migration `c5d6e7f8a9b0` creates `fx_series`, `fx_observations` and `fx_daily`.
+Observations retain source status, exact decimal value, reference date and fetch
+time. `fx_daily` derives CLP per currency unit from USD/CLP divided by currency/USD
+parities on the SAME date. This avoids rounding COP/CLP to two decimals. UF and
+USD use their direct CLP values. Nonpositive/invalid data fails validation; ND
+is stored as missing, not zero. No fund NAV values are changed.
+
+The worker needs `BCCH_API_TOKEN` (BDE API token); Docker passes it only to worker.
+Configure it locally in the ignored `.env` without exposing the value in logs or
+chat. `fx_daily` runs at 07:30 Santiago and is in Descargador / Ejecutar todo.
+First run imports from 2019-12-25 (prior-business-day context for 2020); subsequent
+runs overlap the last 14 days per series. A failed series retains its checkpoint.
+Upserts are idempotent, imports are sequential and throttled, authenticated URLs
+and source error bodies are never emitted. Missing credentials fail clearly.
+Enable the API in the BDE account and manage token expiry there.
+
+Public read endpoints: `/fx/coverage`, `/fx/rates?currency=USD&from_date=2020-01-01`,
+`/industry/consolidated`, `/industry/consolidated/evolution`. They read our DB,
+never BDE on page load. `src/fx.py` selects the latest preceding reference rate,
+maximum seven calendar days old, never a future observation. Missing/unknown
+currency or stale rates suppress the complete total and shares; covered subtotal
+and missing-fund counts are disclosed separately. Fund counts deduplicate kind/RUN.
+
+Daily NAV eligibility remains vigente, non-null patrimonio at the existing per-kind
+reference date, with optional kind/AGF/category filters. Consolidated snapshot totals
+also include validated quarterly FI equity by default (see below); native endpoints
+and historical NAV series retain their original eligibility.
+FM external flows translate each daily observation and signed migration adjustment
+at that date's FX, not the month-end rate. History uses each fund's actual monthly
+closing NAV date, retaining inactive funds as native history does. Multiple currencies
+for a fund must share its last reporting date in the month to avoid counting both
+sides of a currency change. Cached monthly NAV summaries are used only when current;
+partial ranges or stale summaries use raw data. Missing FX produces chart gaps.
+Historical changes include FX effects and are not investment returns or flows.
+
+Local verification: `pytest tests/test_fx.py tests/test_job_runner.py tests/test_industry_refresh.py`.
+`RUN_FX_DB_TESTS=1 pytest tests/test_fx.py` validates crossings, missing data,
+import retries/upserts and monthly currency changes in an isolated local schema.
+Do not populate real FX tables with test values. Live import requires a valid BDE
+token; unit/integration fixtures do not establish that live authorization works.
+Deploy migration and worker configuration before frontend Consolidado CLP.
+
+
+### Quarterly patrimonio for FI without daily NAV
+
+Migration `d6e7f8a9b0c1` creates `fi_reported_equity`. The importer
+`src/etl/investmentFunds/reported_equity.py` reads the CMF fund IFRS tab
+(`entidad.php?pestania=29`) and follows its official financial-statement XML link.
+It stores current-context `TotalPatrimonioNeto`, assets, liabilities, functional
+currency, report date, source URL/hash and import time. Source amounts are in
+thousands and converted to native units exactly once. Portfolio value/weight
+implies total assets, not net equity; never substitute that estimate for NAV.
+When CMF explicitly blocks the XML download after bounded retries, the importer
+can use the public displayed balance sheet. This independently validates the
+visible RUT, current-column date, explicit currency/thousands scale, required
+accounts and balance reconciliation. Notes and comparative values are ignored.
+Invalid XML identities or financial values never trigger this fallback. HTML
+records retain a reproducible dated CMF page URL and its content hash; XML records
+retain the download URL/hash. Native CLP/USD/EUR HTML amounts have been checked
+against the corresponding XML values. No inferred equity or validation waiver.
+Legacy XML with undeclared Latin-1 text is decoded only when UTF-8 decoding fails
+and no encoding declaration is present. Declared encodings, XML structure,
+identity, dates and accounting checks are never overridden.
+
+`fi_reported_equity` runs daily at 11:30 Santiago and is in Descargador and the
+all-data plan. It targets ALL active non-rescatable FI with no finite nonnegative
+daily patrimonio observation through today; portfolios are not required. An old
+valid daily NAV or genuine zero NAV excludes a fund; future observations do not.
+It revisits both latest closed quarters, upserts corrections and retries temporary
+CMF access-block bodies. Missing reports and failed validation do not create zeros
+or change the daily NAV/cartera tables. The scheduled run revisits recent quarters;
+historical imports use an explicit interval:
+
+```
+PYTHONPATH=. .venv/bin/python scripts/backfill_fi_reported_equity.py --from-date 2019-12-31 --workers 4
+```
+
+This command enforces a local database, uses the same current eligible fund
+universe and strict statement validation, and never starts the scheduler. The
+2019-12-31 opening baseline precedes the January 2020 analytical history. It checks
+only closed quarter ends, skips stored reports and journals each fund/quarter in
+ignored `output/data-audit/fi-equity-history.jsonl`. Restarting retries errors and
+unattempted periods while skipping explicitly unavailable reports already checked;
+`--retry-missing` rechecks those absences. Use `--run` for targeted retries and
+`--to-date` to bound the import. Concurrency is limited to four workers. Missing
+reports may predate a fund's existence and are not converted into zero equity.
+
+`/industry/consolidated?include_reported_equity=true` supplements daily NAV with
+these reports using the same non-rescatable/no-daily-NAV eligibility. The latest
+validated report must be on/before the FI reference date, no older than 185 days,
+and have nonnegative equity. Negative reported equity is retained in storage but
+excluded from AUM. NAV always takes precedence for the entire fund. Current
+AGF/category filters apply to both sources. FX uses the report date, not today's
+rate. Totals/groupings include NAV/EEFF amounts and fund counts separately; the
+coverage response lists included funds, source links and exclusions. This combines
+different valuation dates and is not a simultaneous valuation of the industry.
+`aum_source=all|nav|quarterly_report` selects the combined, daily NAV or quarterly-only
+snapshot. Each selection recomputes totals, category/AGF shares, FX detail and flows
+from its own rows; quarterly-only has no FM flow observations. The older
+`include_reported_equity=false` still preserves NAV-only totals when `aum_source`
+is omitted.
+
+`/industry/panorama` is the shared snapshot endpoint for native currency and
+Consolidado CLP views. Optional `currency=CLP|USD|...` filters after quarterly
+currency enrichment and leaves amounts in native units, with no FX dependency.
+Omitting currency consolidates in CLP. Totals, counts, shares and exports use the
+selected `aum_source`. `options` contains the source/currency universe for AGF and
+category selectors; `category_type` and `category_group` disambiguate leaf names.
+Excluded reports with unknown currency remain explicitly disclosed in coverage.
+
+`/industry/panorama/evolution` (also available under `/industry/consolidated`)
+is NAV-only, including historical inactive funds. It preserves currency-change
+alignment before native currency filtering. `/industry/panorama/reported-evolution`
+defaults to actual stored EEFF closes for currently eligible active non-rescatable
+FI without NAV, applying the same currency and hierarchy filters. Its optional
+`basis=latest` selects each fund's latest report at each month-end (current month
+capped at the FI reference date), with the same 185-day age limit. Selection occurs
+before currency/validity filtering, so a newer currency change or invalid equity
+never revives an older report. Actual report dates are retained for FX; monthly
+rows disclose carried fund counts and closing dates. This supports one stacked
+FI chart combining NAV and latest reported equity. It is a closing-date history,
+not publication-date availability, monthly NAV, or inferred flows/returns.
+Currently active eligible funds define the quarterly historical cohort.
+
+Validate with `pytest tests/test_reported_equity.py tests/test_fx.py tests/test_job_runner.py`.
+`RUN_FX_DB_TESTS=1` adds local isolated-schema/temporary-table eligibility and FX
+checks. Public tables are never populated with synthetic test data.
+
+### Fund financial statements in research
+
+`GET /industry-workspace/funds?include_reported=true` adds active non-rescatable
+FI with stored financial statements and no usable daily NAV. Default `/funds`
+remains NAV-only for existing rankings and calculations. Directory additions carry
+`aum_source=quarterly_report`, native currency, equity and the actual closing date;
+NAV funds take precedence by RUN. Stale and negative-equity reports remain
+inspectable here rather than silently disappearing from research.
+
+`GET /investment-funds/{run}/financial-statements` returns stored quarterly assets,
+liabilities, equity, native currencies, CMF source URLs and download timestamps.
+History includes only actual closes through today, without interpolation or FX.
+It separately reports Panorama inclusion, reference date, selected report date
+and exclusion reason using the existing 185-day/current-eligibility rules.
+The endpoint returns 404 for unknown funds. No new scraper or table is needed.
+
+### Fund ownership history
+
+`GET /industry-workspace/fund-ownership/{run}` returns all stored FI aportante
+quarters through today, aligned weights, changes in percentage points, cell
+states and per-quarter coverage. The quarter axis includes missing reports.
+RUT aliases use the ownership analysis normalizer; missing/invalid IDs remain
+local to one report. Valid duplicate RUT positions in a filing are summed.
+Missing weights, absent holders and missing reports never become zero. Changes
+require valid percentages at consecutive quarter ends; report totals above
+100.01% suppress comparisons. NAV is not required. Unknown FI returns 404.
+`/industry-workspace/owners?run=...` now selects available periods for that fund,
+rather than using the industry-wide latest quarter. Tests:
+`pytest tests/test_fund_ownership.py tests/test_ownership_analysis.py`.
+
+Main Aportantes fund comparison uses `GET /industry-workspace/ownership-funds`
+for the full FI universe with ownership filings (including inactive and no-NAV
+funds). `GET /industry-workspace/fund-ownership-comparison?runs=...&period=...`
+aligns selected funds on a single quarter. Without a requested period it chooses
+the latest quarter present for every fund; if none exists, the latest available
+quarter is returned with explicit missing-report coverage. No fund-specific
+fallback dates are substituted. Only the selected and immediately preceding
+quarter are read for the matrix. Percentages and pp changes retain the same
+validation as the single-fund history. Rows join by normalized RUT; unidentified
+holders stay local to their fund/report and never count as shared identities.
+Shared counts measure reported presence, including a reported zero, and do not
+sum ownership percentages across funds. The API returns column coverage,
+previous values, cell states and the available/common quarter lists.
+
+### Panorama monthly Net New Money
+
+`GET /industry/panorama/flows` reads existing daily FM/FI NNM facts, with active
+fund, AGF and current effective category filters. `kind=fm|fi` keeps reported FM
+external flows (net of confirmed internal migrations) separate from NAV-implied FI
+estimates and approved series continuity. Date ranges start at a calendar month;
+missing months remain null. There is no EEFF-only flow estimate or new ETL table.
+Omitting `currency` converts each daily amount with stored backward-looking FX
+(maximum seven days); specifying currency preserves Ranking's native fact rules.
+Missing currency/FX leaves the full monthly `amount` null while `covered_amount`
+exposes only convertible observations. Clients must label that subtotal partial.
+Valid/observed counts describe calculation records, not completeness of filing
+dates. Cache invalidation follows the classification/data epoch. Verification:
+`pytest tests/test_panorama_flows.py tests/test_fx.py` and reconciliation with the
+existing monthly Ranking calculations.

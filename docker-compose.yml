@@ -34,6 +34,7 @@ services:
     command: python worker.py
     restart: always
     environment:
+      - BCCH_API_TOKEN=${BCCH_API_TOKEN:-}
       - DATABASE_URL=${DATABASE_URL}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - DOWNLOADS_DIR=${DOWNLOADS_DIR:-/app/downloads}

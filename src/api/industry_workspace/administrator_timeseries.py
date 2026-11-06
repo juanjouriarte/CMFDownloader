@@ -82,8 +82,15 @@ def administrator_history(admin: str=Query(min_length=1,max_length=300),
         from_date: date=Query(), to_date: date=Query(),
         currency: str=Query('CLP',pattern='^(?:[A-Z]{3}|UF)$'),
         kind: Literal['all','fm','fi']='all', category: str|None=None,
-        metric: Literal['aum','share']='aum'):
+        metric: Literal['aum','share']='aum', consolidated: bool=False,
+        aum_source: Literal['nav','all','quarterly_report']='nav'):
     validate_range(from_date,to_date)
+    if aum_source != 'nav':
+        from .administrator_equity import load_history as mixed_history
+        return mixed_history(currency,kind,admin,from_date,to_date,category,metric,consolidated,aum_source,classification_cache_epoch())
+    if consolidated:
+        from .administrator_fx import load_history as converted_history
+        return converted_history(kind,admin,from_date,to_date,category,metric,classification_cache_epoch())
     return load_history(currency,kind,admin,from_date,to_date,category,metric,classification_cache_epoch())
 
 
