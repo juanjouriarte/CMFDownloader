@@ -120,6 +120,18 @@ def instruments(search:str=Query('',max_length=150),identifier:str|None=None,ins
     AND (identifier ILIKE :search OR issuer ILIKE :search OR underlying_fund_name ILIKE :search)
     GROUP BY identifier,instrument_type,issuer ORDER BY funds DESC,identifier LIMIT 100""",params)
 
+@router.get('/issuer-holdings')
+def issuer_holdings(issuer: str = Query(..., min_length=1, max_length=500),
+                    issuer_id: str | None = Query(None, max_length=1000)):
+    from .issuer_holdings import issuer_filter, group_holders
+    predicate, values = issuer_filter(issuer, issuer_id)
+    # Deliberately no directory LIMIT: include every instrument of this issuer.
+    positions = rows('WITH p AS (' + positions_sql() + '), enriched AS (' + ENRICH + ') '
+                     + 'SELECT * FROM enriched WHERE ' + predicate
+                     + ' ORDER BY weight DESC NULLS LAST, identifier', values)
+    return {'issuer': issuer, 'holders': group_holders(positions)}
+
+
 @router.get('/owners')
 def owners(period:date|None=None,search:str=Query('',max_length=150),rut:str|None=None,run:str|None=None):
     periods=rows('''SELECT DISTINCT periodo FROM aportantes_fi WHERE periodo<=CURRENT_DATE

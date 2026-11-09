@@ -78,6 +78,7 @@ def test_loader_batches_all_holders_in_three_queries_and_binds_identity(monkeypa
                 else [report(D[-1]), report(D[-1], run='2')])
     monkeypatch.setattr(router, 'rows', read)
     m.load_history.cache_clear()
+
     result = m.load_history("BOND'", None, "Issuer'", 12, 0)
     assert len(calls) == 3
     assert len(result['groups'][0]['dates']) == 13
@@ -89,3 +90,65 @@ def test_loader_batches_all_holders_in_three_queries_and_binds_identity(monkeypa
     assert calls[2][1]['cartera_naci_runs'] == ['1', '2']
     assert 'run_fondo=ANY(:cartera_naci_runs)' in calls[2][0]
     m.load_history.cache_clear()
+
+
+def test_issuer_combines_security_weights_but_never_quantities():
+    records = [position(identifier='BOND A', currency_code='UF'),
+               position(identifier='BOND B', currency_code='PROM', weight=6)]
+    h = m.build_groups(records, [report(), report(D[1])], AXES, issuer_mode=True)[0]['rows'][0]
+    assert h['weights'] == [10, 0, None]
+    assert h['instrument_counts'] == [2, 0, None]
+    assert h['quantities'] == [None, None, None]
+    assert h['currency'] == 'ALL'
+
+
+def test_issuer_invalid_weights_and_different_source_dates_stay_unavailable():
+    records = [position(weight=None), position(D[1]),
+               position(date(2026, 2, 27), source='cartera_extr')]
+    reports = [report(), report(source='cartera_extr'), report(D[1]),
+               report(date(2026, 2, 27), source='cartera_extr'), report(D[2]), report(D[2], source='cartera_extr')]
+    h = m.build_groups(records, reports, AXES, issuer_mode=True)[0]['rows'][0]
+    assert h['weights'] == [None, None, 0]
+    assert h['report_dates'][1] == [date(2026, 2, 27), D[1]]
+
+
+def test_issuer_loader_matches_all_securities_with_bound_identity(monkeypatch):
+    router = importlib.import_module('src.api.industry_workspace.router')
+    calls = []
+    def read(sql, params):
+        calls.append((sql, dict(params)))
+        return ([{'kind': 'fm', 'periodo': D[-1]}] if len(calls) == 1
+                else [position(D[-1])] if len(calls) == 2 else [report(D[-1])])
+    monkeypatch.setattr(router, 'rows', read)
+    m.load_history.cache_clear()
+
+    result = m.load_history(None, None, 'Company', 12, 0, '["rut","89912300"]')
+    assert len(calls) == 3
+    assert calls[1][1]['rut'] == '89912300'
+    assert '89912300' not in calls[1][0]
+    assert '=:identifier' not in calls[1][0]
+    assert result['groups'][0]['rows'][0]['quantities'] == [None]*13
+    m.load_history.cache_clear()
+
+
+def test_issuer_children_reconcile_and_retain_exited_securities():
+    records = [position(identifier='A', issuer_rut='123', instrument_type='BE'),
+               position(identifier='B', issuer_rut='123', instrument_type='BE', weight=6),
+               position(D[1], identifier='B', issuer_rut='123', instrument_type='BE', weight=3)]
+    h = m.build_groups(records, [report(d) for d in D], AXES, issuer_mode=True)[0]['rows'][0]
+    children = {c['identifier']: c for c in h['instruments']}
+    assert children['A']['weights'] == [4, 0, 0]
+    assert children['B']['weights'] == [6, 3, 0]
+    assert h['weights'] == [sum(c['weights'][i] for c in children.values()) for i in range(3)]
+    assert children['A']['is_instrument'] is True
+    assert children['A']['id'] != h['id']
+
+
+def test_issuer_children_keep_security_identity_and_missing_reports():
+    records = [position(issuer_rut='123', instrument_type='BE'),
+               position(issuer_rut='123', instrument_type='BE', currency_code='PROM'),
+               position(issuer_rut='123', instrument_type='DP')]
+    h = m.build_groups(records, [report()], AXES, issuer_mode=True)[0]['rows'][0]
+    assert len(h['instruments']) == 3
+    assert len({c['id'] for c in h['instruments']}) == 3
+    assert all(c['weights'] == [4, None, None] for c in h['instruments'])

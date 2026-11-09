@@ -788,6 +788,30 @@ frontend always uses the denomination view (no legacy-view selector). Tests:
 
 ### Instrument holder history
 
+`/industry-workspace/issuer-holdings` returns all positions matching an issuer
+across the same latest-per-source snapshots used by the instrument directory,
+without its 100-instrument limit. `issuer` is the exact directory label; optional
+`issuer_id` accepts the portfolio identity JSON (RUT, or country/name for foreign
+issuers). Unknown identities are rejected; corporate relationships are not
+inferred. Holders are grouped by fund kind, RUN and reporting date. Weights are
+summed only within that group; any invalid weight makes the aggregate unavailable.
+Individual positions, report dates and administradoras remain in the response.
+Tests: `tests/test_workspace_issuer_holdings.py`.
+
+`/industry-workspace/issuer-history` accepts the same issuer identity and
+`months=3..60` (default 12), and reuses the instrument-history loader. It includes
+historical holders and all matching securities, with FM monthly / FI quarterly
+axes. Each row aggregates reported weights within a fund, across denominations
+(currency marker `ALL`); this is not an FX conversion or monetary aggregation.
+Quantities and their units are always null. Instrument counts accompany weights.
+Each fund also includes `instruments`, calculated from the same batched records
+and filing coverage without additional queries. Children retain canonical
+identifier/type/issuer/currency identity and historical exits, with aligned dates,
+weights and source gaps. Their weights reconcile to valid fund-level totals.
+Incomplete source coverage, invalid weights, or different filing dates across
+sources leave the weight unavailable. Observed absence is zero only with complete
+same-date source reports. Tests: `tests/test_workspace_instrument_history.py`.
+
 `/industry-workspace/instrument-history` takes exact `identifier`, nullable
 `instrument_type`, required `issuer` (including an explicit blank string) and
 `months=3..60` (default 12). It uses the same resolved issuer identity as the
