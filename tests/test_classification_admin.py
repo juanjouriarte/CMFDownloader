@@ -33,7 +33,8 @@ def test_admin_routes_fail_closed_and_resolve_actor_server_side(client,monkeypat
     assert client.get('/classification-admin/session',headers={'Authorization':'Bearer test-key'}).status_code==503
 
 
-def test_catalog_and_input_contract(client):
+def test_catalog_and_input_contract(client,monkeypatch):
+    monkeypatch.setattr(m,'all_category_options',lambda session,kind:m.category_options(kind))
     auth={'Authorization':'Bearer test-key'}
     fi=client.get('/classification-admin/catalog?kind=fi',headers=auth).json()
     fm=client.get('/classification-admin/catalog?kind=fm',headers=auth).json()
@@ -44,6 +45,51 @@ def test_catalog_and_input_contract(client):
                     dict(action='unlock',reason='Valid reason',expected_version=0,actor='spoofed')]:
         assert client.put('/classification-admin/funds/fi/123',headers=auth,json=payload).status_code==422
     assert client.get('/classification-admin/catalog?kind=invalid',headers=auth).status_code==422
+
+
+def test_new_category_requires_editor_and_valid_fields(client):
+    payload=dict(tipo='Deuda',grupo='Privada',name='Nueva estrategia',reason='Reviewed fund strategy')
+    assert client.post('/classification-admin/catalog?kind=fi',json=payload).status_code==401
+    for invalid in [dict(payload,tipo='  '),dict(payload,reason='short'),dict(payload,name='x'*161),dict(payload,actor='spoofed')]:
+        assert client.post('/classification-admin/catalog?kind=fi',headers={'Authorization':'Bearer test-key'},json=invalid).status_code==422
+
+
+@pytest.mark.parametrize('kind',['fm','fi'])
+def test_custom_category_creation_assignment_and_duplicate_protection(transaction,kind):
+    session=transaction
+    new=m.NewCategory(tipo='Deuda',grupo='  Grupo   prueba  ',name='Subcategoría de prueba',reason='Taxonomy integration test')
+    category=m.create_category(session,kind,new,'test-editor')
+    assert category['grupo']=='Grupo prueba'
+    assert category in m.all_category_options(session,kind)
+    assert not any(c['code']==category['code'] for c in m.all_category_options(session,'fm' if kind=='fi' else 'fi'))
+    duplicate=m.NewCategory(tipo='deuda',grupo='GRUPO PRUEBA',name='subcategoria de prueba',reason='Duplicate test reason')
+    with pytest.raises(HTTPException) as error:m.create_category(session,kind,duplicate,'other-editor')
+    assert error.value.status_code==409
+    builtin=m.category_options(kind)[0]
+    with pytest.raises(HTTPException) as error:m.create_category(session,kind,m.NewCategory(**{k:builtin[k] for k in ['tipo','grupo','name']},reason='Existing category test'),'test-editor')
+    assert error.value.status_code==409
+    run=session.execute(text(f'SELECT run_fondo FROM categoria_{kind} ORDER BY run_fondo LIMIT 1')).scalar_one()
+    before=m.fetch_fund(session,kind,run)
+    saved=m.apply_edit(session,kind,run,m.Edit(action='lock',code=category['code'],group=category['grupo'],reason='Apply new custom category',expected_version=before['version']),'test-editor')
+    assert saved['locked'] and saved['applied']==category
+    assert session.execute(text(f'SELECT categoria FROM categoria_{kind}_effective WHERE run_fondo=:run ORDER BY periodo DESC LIMIT 1'),dict(run=run)).scalar_one()==category['code']
+    row=session.execute(text('SELECT created_by,reason FROM classification_catalog_custom WHERE code=:code'),category).mappings().one()
+    assert row['created_by']=='test-editor' and row['reason']=='Taxonomy integration test'
+
+
+def test_category_creation_http_persists_and_public_catalog_exposes_empty_categories(client,transaction,monkeypatch):
+    from sqlalchemy.orm import Session
+    categories=import_module('src.api.categories')
+    monkeypatch.setattr(m,'SessionLocal',lambda:Session(bind=transaction.connection(),join_transaction_mode='create_savepoint'))
+    monkeypatch.setattr(categories,'SessionLocal',m.SessionLocal)
+    auth={'Authorization':'Bearer test-key'}
+    payload=dict(tipo='Deuda',grupo='Grupo HTTP prueba',name='Subcategoría HTTP prueba',reason='Create through authenticated API')
+    result=client.post('/classification-admin/catalog?kind=fi',headers=auth,json=payload)
+    assert result.status_code==201 and result.headers['cache-control']=='no-store'
+    assert result.json() in client.get('/classification-admin/catalog?kind=fi',headers=auth).json()
+    public=categories._catalog_for('categoria_fi_effective')
+    leaf=next(c for t in public for g in t['groups'] for c in g['categories'] if c['code']==result.json()['code'])
+    assert leaf['fund_count']==0
 
 
 @pytest.fixture

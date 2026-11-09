@@ -1914,3 +1914,19 @@ MoM/YoY use calendar month comparisons, including a loaded baseline year; histor
 includes prior-month AGF share changes for the first visible heatmap month.
 The small LRU stores aggregates and current contributors, not raw fund history,
 and follows the data/classification cache epoch. Tests: `tests/test_category_analytics.py`.
+
+### Editor-created classification paths
+
+Migration `e7f8a9b0c1d2` adds `classification_catalog_custom`. Authenticated
+`POST /classification-admin/catalog?kind=fm|fi` accepts `tipo`, `grupo`, `name`
+and an eight-character minimum reason. Generated codes fit the existing override
+schema; authors come from the editor key. Creation is serialized per fund kind
+and rejects duplicate paths, including built-ins, ignoring case and accents.
+`GET /classification-admin/catalog` combines built-in and database paths;
+the public `/categories/catalog` also includes unused custom paths with zero funds.
+Custom paths are only applied through the existing audited, versioned manual
+override; creation does not reclassify funds or change automatic classifiers.
+Fund-detail editing reuses these endpoints and the existing FI-only series-link
+preview/save endpoints. No NAV records are rewritten. Deploy the migration and API
+before the frontend category creator. Transactional regression coverage lives in
+`tests/test_classification_admin.py` and `tests/test_series_continuity.py`.

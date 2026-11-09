@@ -4,6 +4,8 @@ import hmac
 import json
 import os
 import re
+import unicodedata
+from uuid import uuid4
 from functools import lru_cache
 from time import monotonic
 from typing import Annotated, Literal
@@ -51,6 +53,55 @@ def category_options(kind):
                           else ['Nacional','Internacional','Mixto'])]
 
 
+def all_category_options(session, kind):
+    custom = [dict(row) for row in session.execute(text('''
+        SELECT code,name,tipo,grupo FROM classification_catalog_custom
+        WHERE kind=:kind ORDER BY tipo,grupo,name'''), dict(kind=kind)).mappings()]
+    return category_options(kind) + custom
+
+
+class NewCategory(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    tipo: str = Field(min_length=1, max_length=80)
+    grupo: str = Field(min_length=1, max_length=80)
+    name: str = Field(min_length=1, max_length=160)
+    reason: str = Field(min_length=8, max_length=1000)
+
+    @field_validator('tipo', 'grupo', 'name', 'reason')
+    @classmethod
+    def clean_text(cls, value, info):
+        value = ' '.join(unicodedata.normalize('NFKC', value).split())
+        if len(value) < (8 if info.field_name == 'reason' else 1):
+            raise ValueError('Completa el nombre y un motivo de al menos 8 caracteres.')
+        if any(unicodedata.category(c).startswith('C') for c in value):
+            raise ValueError('El texto contiene caracteres no permitidos.')
+        return value
+
+
+def category_identity(kind, category):
+    values = [kind, category['tipo'], category['grupo'], category['name']]
+    normalized = [''.join(c for c in unicodedata.normalize('NFKD', v.casefold())
+                          if not unicodedata.combining(c)) for v in values]
+    return hashlib.sha256(json.dumps(normalized, ensure_ascii=False).encode()).hexdigest()
+
+
+def create_category(session, kind, category, actor):
+    session.execute(text('SELECT pg_advisory_xact_lock(hashtext(:key))'),
+                    dict(key=f'classification-catalog:{kind}'))
+    values = category.model_dump()
+    identity = category_identity(kind, values)
+    existing = next((c for c in all_category_options(session, kind)
+                     if category_identity(kind, c) == identity), None)
+    if existing:
+        raise HTTPException(409, 'Esta categoría ya existe. Selecciónala en el catálogo.')
+    values['code'] = f'USR_{kind.upper()}_{uuid4().hex[:20]}'
+    session.execute(text('''INSERT INTO classification_catalog_custom
+        (kind,code,tipo,grupo,name,identity_key,reason,created_by)
+        VALUES (:kind,:code,:tipo,:grupo,:name,:identity,:reason,:actor)'''),
+        dict(kind=kind, identity=identity, actor=actor, **values))
+    return {key: values[key] for key in ('code', 'name', 'tipo', 'grupo')}
+
+
 def fund_sql(kind):
     table,name,admin,active=('fondo_mutuo','nombre_fondo','razon_social_administradora','fecha_termino_operaciones IS NULL') if kind=='fm' else ('fondos_inversion','razon_social','administrador','vigente IS TRUE')
     return f"""SELECT f.run_fondo run, f.{name} name, f.{admin} admin,
@@ -84,7 +135,17 @@ def session_info(editor: Editor):
 
 @router.get('/catalog')
 def catalog(editor: Editor,kind: Kind):
-    return category_options(kind)
+    with SessionLocal() as session:
+        return all_category_options(session, kind)
+
+
+@router.post('/catalog', status_code=201)
+def add_category(kind: Kind, category: NewCategory, editor: Editor):
+    with SessionLocal() as session:
+        session.execute(text("SET LOCAL statement_timeout='10s'"))
+        result = create_category(session, kind, category, editor)
+        session.commit()
+    return result
 
 
 @router.get('/funds')
@@ -136,7 +197,7 @@ def apply_edit(session,kind,run,edit,actor):
         raise HTTPException(409,'Otro editor cambió este fondo. Recarga antes de guardar.')
     if edit.action=='unlock' and not before['locked']:
         raise HTTPException(409,'Este fondo ya usa la clasificación automática.')
-    choice=next((c for c in category_options(kind) if c['code']==edit.code and c['grupo']==edit.group),None) if edit.action=='lock' else before['applied']
+    choice=next((c for c in all_category_options(session,kind) if c['code']==edit.code and c['grupo']==edit.group),None) if edit.action=='lock' else before['applied']
     if not choice:
         raise HTTPException(422,'Selecciona una categoría y grupo válidos para este tipo de fondo.')
     session.execute(text("""INSERT INTO classification_overrides
