@@ -798,6 +798,16 @@ summed only within that group; any invalid weight makes the aggregate unavailabl
 Individual positions, report dates and administradoras remain in the response.
 Tests: `tests/test_workspace_issuer_holdings.py`.
 
+`/industry-workspace/issuer-history` accepts the same issuer identity and
+`months=3..60` (default 12), and reuses the instrument-history loader. It includes
+historical holders and all matching securities, with FM monthly / FI quarterly
+axes. Each row aggregates reported weights within a fund, across denominations
+(currency marker `ALL`); this is not an FX conversion or monetary aggregation.
+Quantities and their units are always null. Instrument counts accompany weights.
+Incomplete source coverage, invalid weights, or different filing dates across
+sources leave the weight unavailable. Observed absence is zero only with complete
+same-date source reports. Tests: `tests/test_workspace_instrument_history.py`.
+
 `/industry-workspace/instrument-history` takes exact `identifier`, nullable
 `instrument_type`, required `issuer` (including an explicit blank string) and
 `months=3..60` (default 12). It uses the same resolved issuer identity as the
