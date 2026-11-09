@@ -154,23 +154,25 @@ def load_analysis(currency, kind, period, category, cache_bucket):
 def administrator_analysis(currency: str=Query('CLP', pattern='^(?:[A-Z]{3}|UF)$'),
         kind: Literal['all','fm','fi']='all', period: date|None=None, category: str|None=None,
         consolidated: bool=False, as_of: date|None=None,
-        date_mode: Literal['day','month_end']|None=None,
+        date_mode: Literal['latest','day','month_end']|None=None,
         aum_source: Literal['nav','all','quarterly_report']='nav'):
     if as_of is not None:
         if as_of < date(2020,1,1) or as_of > date.today():
             raise HTTPException(422, 'Seleccione una fecha entre 2020 y hoy.')
-        if period is not None or date_mode == 'month_end':
+        if period is not None or date_mode in ('month_end','latest'):
             raise HTTPException(422, 'Seleccione una fecha exacta o un mes de cierre, no ambos.')
         date_mode = 'day'
     if date_mode == 'day' and as_of is None:
         raise HTTPException(422, 'La fecha exacta es obligatoria.')
     if period:
+        if date_mode == 'latest':
+            raise HTTPException(422, 'El último corte disponible no admite un mes explícito.')
         period = period.replace(day=1)
         if period > date.today() or period < date(2020,1,1):
             raise HTTPException(422, 'Seleccione un mes entre 2020 y el actual.')
-    if date_mode or aum_source != 'nav':
+    if date_mode or aum_source != 'nav' or period is None:
         from .administrator_dates import load_analysis as dated_analysis
-        return dated_analysis(currency,kind,period,as_of,date_mode or "month_end",category,consolidated,classification_cache_epoch(),aum_source)
+        return dated_analysis(currency,kind,period,as_of,date_mode or ('month_end' if period else 'latest'),category,consolidated,classification_cache_epoch(),aum_source)
     if consolidated:
         from .administrator_fx import load_analysis as converted_analysis
         return converted_analysis(kind, period, category, classification_cache_epoch())
