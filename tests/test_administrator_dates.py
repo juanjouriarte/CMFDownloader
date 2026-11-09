@@ -63,8 +63,23 @@ def test_daily_source_restricts_to_exact_dates_currency_and_active_funds(monkeyp
 @pytest.mark.parametrize('query',[
     'date_mode=day', 'as_of=2019-12-31', 'as_of=2100-01-01',
     'as_of=2026-09-15&period=2026-09-01', 'as_of=2026-09-15&date_mode=month_end',
+    'as_of=2026-09-15&date_mode=latest', 'period=2026-09-01&date_mode=latest',
 ])
 def test_invalid_or_ambiguous_date_requests_rejected(query):
     app=FastAPI();app.include_router(api.router)
     with TestClient(app) as client:
         assert client.get('/industry-workspace/administrators/analysis?'+query).status_code==422
+
+
+def test_default_analysis_uses_panorama_latest_policy(monkeypatch):
+    from src.api.industry_workspace import administrator_dates
+    from src.api.industry_workspace import administrators
+    calls=[]
+    monkeypatch.setattr(administrators,'classification_cache_epoch',lambda:0)
+    monkeypatch.setattr(administrator_dates,'load_analysis',lambda *args:calls.append(args) or {})
+    app=FastAPI();app.include_router(api.router)
+    with TestClient(app) as client:
+        assert client.get('/industry-workspace/administrators/analysis').status_code==200
+        assert calls[-1][4]=='latest'
+        assert client.get('/industry-workspace/administrators/analysis?as_of=2026-09-15').status_code==200
+        assert calls[-1][4]=='day' and calls[-1][3]==date(2026,9,15)

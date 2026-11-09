@@ -29,7 +29,7 @@ def report_data(start, end, kind='all'):
     return candidates, reports
 
 
-def mixed_samples(raw, candidates, reports, cutoffs, source, currency, category=None, rates=None):
+def mixed_samples(raw, candidates, reports, cutoffs, source, currency, category=None, rates=None, snapshots=None):
     """latest_data_date is the analysis cut; valuation_date is the original NAV/EEFF date.
     Conversion always uses valuation_date. Never replace an invalid latest report.
     """
@@ -56,6 +56,16 @@ def mixed_samples(raw, candidates, reports, cutoffs, source, currency, category=
         admins={r['run_fondo']:r['admin'] for r in candidates}
         excluded = [dict(r,admin=admins[r['run_fondo']]) for r in excluded if currency is None or r.get('currency') in (None,currency)]
         sample = nav + [dict(r,month=month,fund_name=r['name'],valuation_date=r['data_date']) for r in selected]
+        if snapshots and month in snapshots:
+            # Latest mode supplies the exact Panorama universe and actual valuation
+            # dates. Do not discard a fund type if FM/FI reference dates differ.
+            snapshot = snapshots[month]
+            reference = snapshot['date']
+            sample = [r for r in snapshot['rows'] if (currency is None or r['currency']==currency)
+                      and (not category or r['category']==category)]
+            nav = [r for r in sample if r['aum_source']=='nav']
+            nav_date = max((r['valuation_date'] for r in nav),default=None)
+            excluded = snapshot['excluded']
         funds, fx, missing = {}, {}, set()
         for row in sample:
             key = (row['kind'],row['run_fondo'])
@@ -92,9 +102,9 @@ def mixed_samples(raw, candidates, reports, cutoffs, source, currency, category=
     return output, coverage
 
 
-def analyze(raw, candidates, reports, cutoffs, selected, currency, kind, category, mode, requested, source, rates=None):
+def analyze(raw, candidates, reports, cutoffs, selected, currency, kind, category, mode, requested, source, rates=None, snapshots=None):
     from .administrators import build_analysis
-    sample, coverage = mixed_samples(raw,candidates,reports,cutoffs,source,None if rates is not None else currency,category,rates)
+    sample, coverage = mixed_samples(raw,candidates,reports,cutoffs,source,None if rates is not None else currency,category,rates,snapshots)
     result = build_analysis(sample,selected,'CLP' if rates is not None else currency,kind,category)
     for snap in result['history']:
         snap.update(coverage.get(snap['month'],{}))
