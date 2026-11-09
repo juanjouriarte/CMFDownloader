@@ -804,6 +804,10 @@ historical holders and all matching securities, with FM monthly / FI quarterly
 axes. Each row aggregates reported weights within a fund, across denominations
 (currency marker `ALL`); this is not an FX conversion or monetary aggregation.
 Quantities and their units are always null. Instrument counts accompany weights.
+Each fund also includes `instruments`, calculated from the same batched records
+and filing coverage without additional queries. Children retain canonical
+identifier/type/issuer/currency identity and historical exits, with aligned dates,
+weights and source gaps. Their weights reconcile to valid fund-level totals.
 Incomplete source coverage, invalid weights, or different filing dates across
 sources leave the weight unavailable. Observed absence is zero only with complete
 same-date source reports. Tests: `tests/test_workspace_instrument_history.py`.

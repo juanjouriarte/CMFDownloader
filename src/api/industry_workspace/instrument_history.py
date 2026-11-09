@@ -8,13 +8,13 @@ from time import time
 from fastapi import APIRouter, Query
 
 from .currency_exposure import end_month, shift, normalize
-from .portfolio_history import clean, valid_weight
+from .portfolio_history import clean, valid_weight, identity
 
 router = APIRouter()
 NUMERIC = r'^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$'
 
 
-def build_groups(records, reports, axes, issuer_mode=False):
+def build_groups(records, reports, axes, issuer_mode=False, split_instruments=False):
     # Source filing presence comes from all positions in that fund's report,
     # including months in which the selected instrument is absent.
     filings = {(r['kind'], r['run'], r['source'], end_month(r['periodo'])): r['periodo'] for r in reports}
@@ -30,10 +30,16 @@ def build_groups(records, reports, axes, issuer_mode=False):
         # denominations. Quantities and monetary valuations are never combined.
         currency = 'ALL' if issuer_mode else normalize(p['currency_code'])
         key = (p['kind'], p['run'], currency, clean(p['currency_code']) if currency == 'UNKNOWN' else '')
+        if split_instruments:
+            key += (identity(p)[1],)
         h = holders.setdefault(key, dict(id=json.dumps(key), kind=p['kind'], run=p['run'],
             currency=currency, sources=set(), weights=[], quantities=[], quantity_units=[], present=[], report_dates=[], instrument_counts=[]))
         h.update(fund_name=p.get('fund_name') or p['run'], admin=p.get('admin') or 'Sin administradora',
                  identifier=p['identifier'])
+        if split_instruments:
+            h.update(is_instrument=True, currency=normalize(p['currency_code']),
+                     issuer=p.get('issuer'), instrument_type=p.get('instrument_type'),
+                     instrument_name=p.get('instrument_name'), underlying_fund_name=p.get('underlying_fund_name'))
         h['sources'].add(p['source'])
         values[key, period].append(p)
     for key, h in holders.items():
@@ -56,6 +62,13 @@ def build_groups(records, reports, axes, issuer_mode=False):
             h['present'].append(bool(positions))
             h['report_dates'].append(sorted({d for d in observed_dates if d}))
         h['sources'] = sorted(h['sources'])
+    if issuer_mode and not split_instruments:
+        children = defaultdict(list)
+        for group in build_groups(records, reports, axes, issuer_mode=True, split_instruments=True):
+            for child in group['rows']:
+                children[child['kind'], child['run']].append(child)
+        for h in holders.values():
+            h['instruments'] = children[h['kind'], h['run']]
     return [dict(kind=kind, period=dates[-1] if dates else None, dates=dates,
                  rows=sorted([h for h in holders.values() if h['kind'] == kind],
                              key=lambda h: (not h['present'][-1], -(h['weights'][-1] or 0), h['fund_name'], h['id'])))

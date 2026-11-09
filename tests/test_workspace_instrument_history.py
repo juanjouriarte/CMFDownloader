@@ -121,6 +121,7 @@ def test_issuer_loader_matches_all_securities_with_bound_identity(monkeypatch):
                 else [position(D[-1])] if len(calls) == 2 else [report(D[-1])])
     monkeypatch.setattr(router, 'rows', read)
     m.load_history.cache_clear()
+
     result = m.load_history(None, None, 'Company', 12, 0, '["rut","89912300"]')
     assert len(calls) == 3
     assert calls[1][1]['rut'] == '89912300'
@@ -128,3 +129,26 @@ def test_issuer_loader_matches_all_securities_with_bound_identity(monkeypatch):
     assert '=:identifier' not in calls[1][0]
     assert result['groups'][0]['rows'][0]['quantities'] == [None]*13
     m.load_history.cache_clear()
+
+
+def test_issuer_children_reconcile_and_retain_exited_securities():
+    records = [position(identifier='A', issuer_rut='123', instrument_type='BE'),
+               position(identifier='B', issuer_rut='123', instrument_type='BE', weight=6),
+               position(D[1], identifier='B', issuer_rut='123', instrument_type='BE', weight=3)]
+    h = m.build_groups(records, [report(d) for d in D], AXES, issuer_mode=True)[0]['rows'][0]
+    children = {c['identifier']: c for c in h['instruments']}
+    assert children['A']['weights'] == [4, 0, 0]
+    assert children['B']['weights'] == [6, 3, 0]
+    assert h['weights'] == [sum(c['weights'][i] for c in children.values()) for i in range(3)]
+    assert children['A']['is_instrument'] is True
+    assert children['A']['id'] != h['id']
+
+
+def test_issuer_children_keep_security_identity_and_missing_reports():
+    records = [position(issuer_rut='123', instrument_type='BE'),
+               position(issuer_rut='123', instrument_type='BE', currency_code='PROM'),
+               position(issuer_rut='123', instrument_type='DP')]
+    h = m.build_groups(records, [report()], AXES, issuer_mode=True)[0]['rows'][0]
+    assert len(h['instruments']) == 3
+    assert len({c['id'] for c in h['instruments']}) == 3
+    assert all(c['weights'] == [4, None, None] for c in h['instruments'])
