@@ -143,21 +143,28 @@ def categories_fm(
 
 
 def _catalog_for(table: str) -> list[dict]:
+    kind = 'fm' if table == 'categoria_fm_effective' else 'fi'
     sql = text(f"""
         WITH latest AS (
             SELECT DISTINCT ON (run_fondo)
                    run_fondo, tipo, grupo, categoria, nombre_cat
             FROM {table}
             ORDER BY run_fondo, periodo DESC
-        )
+        ), used AS (
         SELECT tipo, grupo, categoria AS code, nombre_cat AS name,
                COUNT(*) AS fund_count
         FROM latest
         GROUP BY tipo, grupo, categoria, nombre_cat
-        ORDER BY tipo, grupo, nombre_cat
+        )
+        SELECT * FROM used
+        UNION ALL
+        SELECT c.tipo,c.grupo,c.code,c.name,0 AS fund_count
+        FROM classification_catalog_custom c
+        WHERE c.kind=:kind AND NOT EXISTS (SELECT 1 FROM used u WHERE u.code=c.code AND u.grupo=c.grupo)
+        ORDER BY tipo, grupo, name
     """)
     with SessionLocal() as session:
-        rows = session.execute(sql).mappings().all()
+        rows = session.execute(sql, dict(kind=kind)).mappings().all()
     return _build_catalog(rows)
 
 
